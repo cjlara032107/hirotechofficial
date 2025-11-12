@@ -1,7 +1,8 @@
 import { prisma } from '@/lib/db';
 import { Prisma } from '@prisma/client';
 import { FacebookClient, FacebookApiError } from './client';
-import { analyzeConversation } from '@/lib/ai/google-ai-service';
+import { analyzeConversation, analyzeConversationWithStageRecommendation } from '@/lib/ai/google-ai-service';
+import { autoAssignContactToPipeline } from '@/lib/pipelines/auto-assign';
 
 interface BackgroundSyncResult {
   success: boolean;
@@ -61,6 +62,17 @@ export async function startBackgroundSync(facebookPageId: string): Promise<Backg
 }
 
 /**
+ * Check if sync job has been cancelled
+ */
+async function isJobCancelled(jobId: string): Promise<boolean> {
+  const job = await prisma.syncJob.findUnique({
+    where: { id: jobId },
+    select: { status: true },
+  });
+  return job?.status === 'CANCELLED';
+}
+
+/**
  * Executes the actual sync operation and updates the job status
  */
 async function executeBackgroundSync(jobId: string, facebookPageId: string): Promise<void> {
@@ -76,6 +88,13 @@ async function executeBackgroundSync(jobId: string, facebookPageId: string): Pro
 
     const page = await prisma.facebookPage.findUnique({
       where: { id: facebookPageId },
+      include: {
+        autoPipeline: {
+          include: {
+            stages: { orderBy: { order: 'asc' } }
+          }
+        }
+      }
     });
 
     if (!page) {
@@ -85,6 +104,12 @@ async function executeBackgroundSync(jobId: string, facebookPageId: string): Pro
     const client = new FacebookClient(page.pageAccessToken);
     let syncedCount = 0;
     let failedCount = 0;
+    
+    console.log(`[Background Sync ${jobId}] Auto-Pipeline Enabled:`, !!page.autoPipelineId);
+    if (page.autoPipelineId) {
+      console.log(`[Background Sync ${jobId}] Target Pipeline:`, page.autoPipeline?.name);
+      console.log(`[Background Sync ${jobId}] Mode:`, page.autoPipelineMode);
+    }
     let tokenExpired = false;
     const errors: Array<{ platform: string; id: string; error: string; code?: number }> = [];
 
@@ -97,6 +122,12 @@ async function executeBackgroundSync(jobId: string, facebookPageId: string): Pro
       console.log(`[Background Sync ${jobId}] Fetched ${messengerConvos.length} Messenger conversations`);
 
       for (const convo of messengerConvos) {
+        // Check if sync has been cancelled
+        if (await isJobCancelled(jobId)) {
+          console.log(`[Background Sync ${jobId}] Sync cancelled by user`);
+          return; // Exit gracefully
+        }
+
         for (const participant of convo.participants.data) {
           if (participant.id === page.pageId) continue; // Skip page itself
 
@@ -122,6 +153,7 @@ async function executeBackgroundSync(jobId: string, facebookPageId: string): Pro
 
             // Analyze conversation with AI if messages exist
             let aiContext: string | null = null;
+            let aiAnalysis = null;
             
             if (convo.messages?.data && convo.messages.data.length > 0) {
               try {
@@ -133,14 +165,30 @@ async function executeBackgroundSync(jobId: string, facebookPageId: string): Pro
                   }));
 
                 if (messagesToAnalyze.length > 0) {
-                  aiContext = await analyzeConversation(messagesToAnalyze);
+                  // If auto-pipeline is enabled, get full analysis
+                  if (page.autoPipelineId && page.autoPipeline) {
+                    aiAnalysis = await analyzeConversationWithStageRecommendation(
+                      messagesToAnalyze,
+                      page.autoPipeline.stages
+                    );
+                    aiContext = aiAnalysis?.summary || null;
+                  } else {
+                    // Otherwise just get summary
+                    aiContext = await analyzeConversation(messagesToAnalyze);
+                  }
+                  
+                  // Always add delay after analysis attempt (success or failure)
+                  // This ensures we don't hit rate limits on the next contact
+                  await new Promise(resolve => setTimeout(resolve, 1000));
                 }
               } catch (error) {
                 console.error(`[Background Sync ${jobId}] Failed to analyze conversation for ${participant.id}:`, error);
+                // Add delay even on error to prevent rapid-fire failures
+                await new Promise(resolve => setTimeout(resolve, 1000));
               }
             }
 
-            await prisma.contact.upsert({
+            const savedContact = await prisma.contact.upsert({
               where: {
                 messengerPSID_facebookPageId: {
                   messengerPSID: participant.id,
@@ -167,6 +215,17 @@ async function executeBackgroundSync(jobId: string, facebookPageId: string): Pro
                 aiContextUpdatedAt: aiContext ? new Date() : null,
               },
             });
+            
+            // Auto-assign to pipeline if enabled
+            if (aiAnalysis && page.autoPipelineId) {
+              await autoAssignContactToPipeline({
+                contactId: savedContact.id,
+                aiAnalysis,
+                pipelineId: page.autoPipelineId,
+                updateMode: page.autoPipelineMode,
+              });
+            }
+            
             syncedCount++;
 
             // Update job progress periodically
@@ -222,13 +281,19 @@ async function executeBackgroundSync(jobId: string, facebookPageId: string): Pro
         const igConvos = await client.getInstagramConversations(page.instagramAccountId);
         console.log(`[Background Sync ${jobId}] Fetched ${igConvos.length} Instagram conversations`);
 
-        for (const convo of igConvos) {
-          for (const participant of convo.participants.data) {
-            if (participant.id === page.instagramAccountId) continue;
+      for (const convo of igConvos) {
+        // Check if sync has been cancelled
+        if (await isJobCancelled(jobId)) {
+          console.log(`[Background Sync ${jobId}] Sync cancelled by user`);
+          return; // Exit gracefully
+        }
 
-            try {
-              let firstName = `IG User ${participant.id.slice(-6)}`;
-              let lastName: string | null = null;
+        for (const participant of convo.participants.data) {
+          if (participant.id === page.instagramAccountId) continue;
+
+          try {
+            let firstName = `IG User ${participant.id.slice(-6)}`;
+            let lastName: string | null = null;
 
             if (convo.messages?.data) {
               const userMessage = convo.messages.data.find(
@@ -249,6 +314,7 @@ async function executeBackgroundSync(jobId: string, facebookPageId: string): Pro
 
             // Analyze conversation with AI if messages exist
             let aiContext: string | null = null;
+            let aiAnalysis = null;
             
             if (convo.messages?.data && convo.messages.data.length > 0) {
               try {
@@ -260,10 +326,26 @@ async function executeBackgroundSync(jobId: string, facebookPageId: string): Pro
                   }));
 
                 if (messagesToAnalyze.length > 0) {
-                  aiContext = await analyzeConversation(messagesToAnalyze);
+                  // If auto-pipeline is enabled, get full analysis
+                  if (page.autoPipelineId && page.autoPipeline) {
+                    aiAnalysis = await analyzeConversationWithStageRecommendation(
+                      messagesToAnalyze,
+                      page.autoPipeline.stages
+                    );
+                    aiContext = aiAnalysis?.summary || null;
+                  } else {
+                    // Otherwise just get summary
+                    aiContext = await analyzeConversation(messagesToAnalyze);
+                  }
+                  
+                  // Always add delay after analysis attempt (success or failure)
+                  // This ensures we don't hit rate limits on the next contact
+                  await new Promise(resolve => setTimeout(resolve, 1000));
                 }
               } catch (error) {
                 console.error(`[Background Sync ${jobId}] Failed to analyze IG conversation for ${participant.id}:`, error);
+                // Add delay even on error to prevent rapid-fire failures
+                await new Promise(resolve => setTimeout(resolve, 1000));
               }
             }
 
@@ -276,8 +358,9 @@ async function executeBackgroundSync(jobId: string, facebookPageId: string): Pro
                 },
               });
 
+              let savedContact;
               if (existingContact) {
-                await prisma.contact.update({
+                savedContact = await prisma.contact.update({
                   where: { id: existingContact.id },
                   data: {
                     instagramSID: participant.id,
@@ -290,7 +373,7 @@ async function executeBackgroundSync(jobId: string, facebookPageId: string): Pro
                   },
                 });
               } else {
-                await prisma.contact.create({
+                savedContact = await prisma.contact.create({
                   data: {
                     instagramSID: participant.id,
                     firstName: firstName,
@@ -304,6 +387,17 @@ async function executeBackgroundSync(jobId: string, facebookPageId: string): Pro
                   },
                 });
               }
+              
+              // Auto-assign to pipeline if enabled
+              if (aiAnalysis && page.autoPipelineId) {
+                await autoAssignContactToPipeline({
+                  contactId: savedContact.id,
+                  aiAnalysis,
+                  pipelineId: page.autoPipelineId,
+                  updateMode: page.autoPipelineMode,
+                });
+              }
+              
               syncedCount++;
 
               // Update job progress periodically

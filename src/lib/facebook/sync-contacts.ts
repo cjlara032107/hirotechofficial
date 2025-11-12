@@ -1,6 +1,7 @@
 import { prisma } from '@/lib/db';
 import { FacebookClient, FacebookApiError } from './client';
-import { analyzeConversation } from '@/lib/ai/google-ai-service';
+import { analyzeConversation, analyzeConversationWithStageRecommendation } from '@/lib/ai/google-ai-service';
+import { autoAssignContactToPipeline } from '@/lib/pipelines/auto-assign';
 
 interface SyncResult {
   success: boolean;
@@ -13,6 +14,13 @@ interface SyncResult {
 export async function syncContacts(facebookPageId: string): Promise<SyncResult> {
   const page = await prisma.facebookPage.findUnique({
     where: { id: facebookPageId },
+    include: {
+      autoPipeline: {
+        include: {
+          stages: { orderBy: { order: 'asc' } }
+        }
+      }
+    }
   });
 
   if (!page) throw new Error('Facebook page not found');
@@ -24,6 +32,12 @@ export async function syncContacts(facebookPageId: string): Promise<SyncResult> 
   const errors: Array<{ platform: string; id: string; error: string; code?: number }> = [];
 
   console.log(`[Sync] Starting contact sync for Facebook Page: ${page.pageId}`);
+  console.log('[Auto-Pipeline] Enabled:', !!page.autoPipelineId);
+  if (page.autoPipelineId) {
+    console.log('[Auto-Pipeline] Target Pipeline:', page.autoPipeline?.name);
+    console.log('[Auto-Pipeline] Mode:', page.autoPipelineMode);
+    console.log('[Auto-Pipeline] Stages:', page.autoPipeline?.stages.length);
+  }
 
   // Sync Messenger contacts
   try {
@@ -61,6 +75,7 @@ export async function syncContacts(facebookPageId: string): Promise<SyncResult> 
           
           // Analyze conversation with AI if messages exist
           let aiContext: string | null = null;
+          let aiAnalysis = null;
           
           if (convo.messages?.data && convo.messages.data.length > 0) {
             try {
@@ -72,14 +87,39 @@ export async function syncContacts(facebookPageId: string): Promise<SyncResult> 
                 }));
 
               if (messagesToAnalyze.length > 0) {
-                aiContext = await analyzeConversation(messagesToAnalyze);
+                // If auto-pipeline is enabled, get full analysis
+                if (page.autoPipelineId && page.autoPipeline) {
+                  console.log('[Auto-Pipeline] Analyzing conversation for stage recommendation...');
+                  aiAnalysis = await analyzeConversationWithStageRecommendation(
+                    messagesToAnalyze,
+                    page.autoPipeline.stages
+                  );
+                  aiContext = aiAnalysis?.summary || null;
+                  if (aiAnalysis) {
+                    console.log('[Auto-Pipeline] AI Analysis:', {
+                      stage: aiAnalysis.recommendedStage,
+                      score: aiAnalysis.leadScore,
+                      status: aiAnalysis.leadStatus,
+                      confidence: aiAnalysis.confidence
+                    });
+                  }
+                } else {
+                  // Otherwise just get summary
+                  aiContext = await analyzeConversation(messagesToAnalyze);
+                }
+                
+                // Always add delay after analysis attempt (success or failure)
+                // This ensures we don't hit rate limits on the next contact
+                await new Promise(resolve => setTimeout(resolve, 1000));
               }
             } catch (error) {
               console.error(`[Sync] Failed to analyze conversation for ${participant.id}:`, error);
+              // Add delay even on error to prevent rapid-fire failures
+              await new Promise(resolve => setTimeout(resolve, 1000));
             }
           }
           
-          await prisma.contact.upsert({
+          const savedContact = await prisma.contact.upsert({
             where: {
               messengerPSID_facebookPageId: {
                 messengerPSID: participant.id,
@@ -106,6 +146,19 @@ export async function syncContacts(facebookPageId: string): Promise<SyncResult> 
               aiContextUpdatedAt: aiContext ? new Date() : null,
             },
           });
+          
+          // Auto-assign to pipeline if enabled
+          if (aiAnalysis && page.autoPipelineId) {
+            console.log('[Auto-Pipeline] Assigning contact to pipeline...');
+            await autoAssignContactToPipeline({
+              contactId: savedContact.id,
+              aiAnalysis,
+              pipelineId: page.autoPipelineId,
+              updateMode: page.autoPipelineMode,
+            });
+            console.log('[Auto-Pipeline] Assignment complete for contact:', savedContact.id);
+          }
+          
           syncedCount++;
         } catch (error: any) {
           failedCount++;
@@ -183,6 +236,7 @@ export async function syncContacts(facebookPageId: string): Promise<SyncResult> 
             
             // Analyze conversation with AI if messages exist
             let aiContext: string | null = null;
+            let aiAnalysis = null;
             
             if (convo.messages?.data && convo.messages.data.length > 0) {
               try {
@@ -194,10 +248,35 @@ export async function syncContacts(facebookPageId: string): Promise<SyncResult> 
                   }));
 
                 if (messagesToAnalyze.length > 0) {
-                  aiContext = await analyzeConversation(messagesToAnalyze);
+                  // If auto-pipeline is enabled, get full analysis
+                  if (page.autoPipelineId && page.autoPipeline) {
+                    console.log('[Auto-Pipeline] Analyzing IG conversation for stage recommendation...');
+                    aiAnalysis = await analyzeConversationWithStageRecommendation(
+                      messagesToAnalyze,
+                      page.autoPipeline.stages
+                    );
+                    aiContext = aiAnalysis?.summary || null;
+                    if (aiAnalysis) {
+                      console.log('[Auto-Pipeline] IG AI Analysis:', {
+                        stage: aiAnalysis.recommendedStage,
+                        score: aiAnalysis.leadScore,
+                        status: aiAnalysis.leadStatus,
+                        confidence: aiAnalysis.confidence
+                      });
+                    }
+                  } else {
+                    // Otherwise just get summary
+                    aiContext = await analyzeConversation(messagesToAnalyze);
+                  }
+                  
+                  // Always add delay after analysis attempt (success or failure)
+                  // This ensures we don't hit rate limits on the next contact
+                  await new Promise(resolve => setTimeout(resolve, 1000));
                 }
               } catch (error) {
                 console.error(`[Sync] Failed to analyze IG conversation for ${participant.id}:`, error);
+                // Add delay even on error to prevent rapid-fire failures
+                await new Promise(resolve => setTimeout(resolve, 1000));
               }
             }
             
@@ -214,9 +293,10 @@ export async function syncContacts(facebookPageId: string): Promise<SyncResult> 
               },
             });
 
+            let savedContact;
             if (existingContact) {
               // Update existing contact
-              await prisma.contact.update({
+              savedContact = await prisma.contact.update({
                 where: { id: existingContact.id },
                 data: {
                   instagramSID: participant.id,
@@ -230,7 +310,7 @@ export async function syncContacts(facebookPageId: string): Promise<SyncResult> 
               });
             } else {
               // Create new contact with full name from messages
-              await prisma.contact.create({
+              savedContact = await prisma.contact.create({
                 data: {
                   instagramSID: participant.id,
                   firstName: firstName,
@@ -244,6 +324,19 @@ export async function syncContacts(facebookPageId: string): Promise<SyncResult> 
                 },
               });
             }
+            
+            // Auto-assign to pipeline if enabled
+            if (aiAnalysis && page.autoPipelineId) {
+              console.log('[Auto-Pipeline] Assigning IG contact to pipeline...');
+              await autoAssignContactToPipeline({
+                contactId: savedContact.id,
+                aiAnalysis,
+                pipelineId: page.autoPipelineId,
+                updateMode: page.autoPipelineMode,
+              });
+              console.log('[Auto-Pipeline] IG assignment complete for contact:', savedContact.id);
+            }
+            
             syncedCount++;
           } catch (error: any) {
             failedCount++;

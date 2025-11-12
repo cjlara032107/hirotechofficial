@@ -18,9 +18,10 @@ import { LoadingSpinner } from '@/components/ui/loading-spinner';
 import { Progress } from '@/components/ui/progress';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Input } from '@/components/ui/input';
-import { Facebook, Instagram, RefreshCw, Unplug, CheckCircle2, Users, ChevronLeft, ChevronRight } from 'lucide-react';
+import { Facebook, Instagram, RefreshCw, Unplug, CheckCircle2, Users, ChevronLeft, ChevronRight, Settings, XCircle } from 'lucide-react';
 import { toast } from 'sonner';
 import { formatDistanceToNow } from 'date-fns';
+import Link from 'next/link';
 
 interface ConnectedPage {
   id: string;
@@ -239,6 +240,45 @@ export function ConnectedPagesList({ onRefresh, onSyncComplete }: ConnectedPages
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Failed to start sync';
       console.error('Error starting sync:', error);
+      toast.error(errorMessage);
+    }
+  };
+
+  // Cancel sync
+  const handleCancelSync = async (page: ConnectedPage) => {
+    const syncJob = activeSyncJobs[page.id];
+    if (!syncJob) return;
+
+    try {
+      const response = await fetch('/api/facebook/sync-cancel', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          jobId: syncJob.id,
+        }),
+      });
+
+      if (!response.ok) {
+        const data = await response.json();
+        throw new Error(data.error || 'Failed to cancel sync');
+      }
+
+      toast.success(`Sync cancelled for ${page.pageName}`);
+
+      // Update local state
+      setActiveSyncJobs(prev => {
+        const updated = { ...prev };
+        delete updated[page.id];
+        return updated;
+      });
+
+      // Refresh page data
+      await fetchConnectedPages();
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'Failed to cancel sync';
+      console.error('Error cancelling sync:', error);
       toast.error(errorMessage);
     }
   };
@@ -601,24 +641,36 @@ export function ConnectedPagesList({ onRefresh, onSyncComplete }: ConnectedPages
                     </div>
 
                     <div className="flex gap-2">
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => handleSync(page)}
-                        disabled={isSyncing || disconnectingPageId === page.id}
-                      >
-                        {isSyncing ? (
-                          <>
-                            <LoadingSpinner className="mr-2 h-4 w-4" />
-                            Syncing...
-                          </>
-                        ) : (
-                          <>
-                            <RefreshCw className="mr-2 h-4 w-4" />
-                            Sync
-                          </>
-                        )}
-                      </Button>
+                      <Link href={`/facebook-pages/${page.id}/settings`}>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                        >
+                          <Settings className="mr-2 h-4 w-4" />
+                          Settings
+                        </Button>
+                      </Link>
+                      {isSyncing ? (
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => handleCancelSync(page)}
+                          className="text-destructive hover:text-destructive"
+                        >
+                          <XCircle className="mr-2 h-4 w-4" />
+                          Stop Sync
+                        </Button>
+                      ) : (
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => handleSync(page)}
+                          disabled={disconnectingPageId === page.id}
+                        >
+                          <RefreshCw className="mr-2 h-4 w-4" />
+                          Sync
+                        </Button>
+                      )}
                       <Button
                         variant="outline"
                         size="sm"
