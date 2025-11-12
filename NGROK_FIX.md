@@ -2,7 +2,7 @@
 
 ## ✅ What I Fixed
 
-1. **Updated `NEXTAUTH_URL`** to your ngrok URL: `https://mae-squarish-sid.ngrok-free.dev`
+1. **Updated `NEXTAUTH_URL`** to your ngrok URL: `https://7d1d36b43a01.ngrok-free.app/`
 2. **Updated `NEXT_PUBLIC_APP_URL`** to match ngrok
 3. **Added explicit cookie configuration** for session tokens
 4. **Restarted dev server** with new configuration
@@ -21,7 +21,7 @@ The redirect loop happened because old cookies from `localhost:3000` are conflic
 1. Press `F12` to open DevTools
 2. Go to **Application** tab
 3. In left sidebar, expand **Cookies**
-4. Click on `https://mae-squarish-sid.ngrok-free.dev`
+4. Click on `https://7d1d36b43a01.ngrok-free.app/`
 5. Right-click → **Clear**
 6. Refresh the page (`F5`)
 
@@ -34,16 +34,16 @@ The redirect loop happened because old cookies from `localhost:3000` are conflic
 ### **Option 2: Use Incognito/Private Window**
 
 1. Press `Ctrl+Shift+N` (Chrome) or `Ctrl+Shift+P` (Firefox/Edge)
-2. Navigate to: `https://mae-squarish-sid.ngrok-free.dev/login`
+2. Navigate to: `https://7d1d36b43a01.ngrok-free.app//login`
 3. Fresh session, no old cookies!
 
 ---
 
 ## 🌐 Access Your App
 
-**Login Page:** https://mae-squarish-sid.ngrok-free.dev/login  
-**Contacts Page:** https://mae-squarish-sid.ngrok-free.dev/contacts  
-**Dashboard:** https://mae-squarish-sid.ngrok-free.dev/dashboard
+**Login Page:** https://7d1d36b43a01.ngrok-free.app//login  
+**Contacts Page:** https://7d1d36b43a01.ngrok-free.app//contacts  
+**Dashboard:** https://7d1d36b43a01.ngrok-free.app//dashboard
 
 ---
 

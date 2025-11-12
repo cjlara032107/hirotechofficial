@@ -25,7 +25,7 @@ The old cookies in your browser are encrypted with a different (or no) secret. *
 
 2. **Go to your app:**
    ```
-   https://mae-squarish-sid.ngrok-free.dev/login
+   https://7d1d36b43a01.ngrok-free.app//login
    ```
 
 3. ✅ **Done!** - No old cookies, everything works!
@@ -35,11 +35,11 @@ The old cookies in your browser are encrypted with a different (or no) secret. *
 ### **Option 2: Clear Cookies in Normal Browser**
 
 **Method A - Quick Clear:**
-1. Go to: `https://mae-squarish-sid.ngrok-free.dev`
+1. Go to: `https://7d1d36b43a01.ngrok-free.app/`
 2. Press `F12` (open DevTools)
 3. Go to **Application** tab (top menu)
 4. In left sidebar, expand **Cookies**
-5. Click on `https://mae-squarish-sid.ngrok-free.dev`
+5. Click on `https://7d1d36b43a01.ngrok-free.app/`
 6. Right-click anywhere → **Clear**
 7. Close DevTools and **refresh** (`F5`)
 
@@ -59,12 +59,12 @@ The old cookies in your browser are encrypted with a different (or no) secret. *
 
 ## 🌐 Access Your App
 
-**Your App URL:** https://mae-squarish-sid.ngrok-free.dev
+**Your App URL:** https://7d1d36b43a01.ngrok-free.app/
 
 Once you've cleared cookies, you can access:
-- **Login:** https://mae-squarish-sid.ngrok-free.dev/login
-- **Contacts:** https://mae-squarish-sid.ngrok-free.dev/contacts
-- **Dashboard:** https://mae-squarish-sid.ngrok-free.dev/dashboard
+- **Login:** https://7d1d36b43a01.ngrok-free.app//login
+- **Contacts:** https://7d1d36b43a01.ngrok-free.app//contacts
+- **Dashboard:** https://7d1d36b43a01.ngrok-free.app//dashboard
 
 ---
 

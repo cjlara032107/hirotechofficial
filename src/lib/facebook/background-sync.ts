@@ -1,6 +1,7 @@
 import { prisma } from '@/lib/db';
 import { Prisma } from '@prisma/client';
 import { FacebookClient, FacebookApiError } from './client';
+import { analyzeConversation } from '@/lib/ai/google-ai-service';
 
 interface BackgroundSyncResult {
   success: boolean;
@@ -119,6 +120,26 @@ async function executeBackgroundSync(jobId: string, facebookPageId: string): Pro
               }
             }
 
+            // Analyze conversation with AI if messages exist
+            let aiContext: string | null = null;
+            
+            if (convo.messages?.data && convo.messages.data.length > 0) {
+              try {
+                const messagesToAnalyze = convo.messages.data
+                  .filter((msg: any) => msg.message)
+                  .map((msg: any) => ({
+                    from: msg.from?.name || msg.from?.id || 'Unknown',
+                    text: msg.message,
+                  }));
+
+                if (messagesToAnalyze.length > 0) {
+                  aiContext = await analyzeConversation(messagesToAnalyze);
+                }
+              } catch (error) {
+                console.error(`[Background Sync ${jobId}] Failed to analyze conversation for ${participant.id}:`, error);
+              }
+            }
+
             await prisma.contact.upsert({
               where: {
                 messengerPSID_facebookPageId: {
@@ -134,12 +155,16 @@ async function executeBackgroundSync(jobId: string, facebookPageId: string): Pro
                 organizationId: page.organizationId,
                 facebookPageId: page.id,
                 lastInteraction: new Date(convo.updated_time),
+                aiContext: aiContext,
+                aiContextUpdatedAt: aiContext ? new Date() : null,
               },
               update: {
                 firstName: firstName,
                 lastName: lastName,
                 lastInteraction: new Date(convo.updated_time),
                 hasMessenger: true,
+                aiContext: aiContext,
+                aiContextUpdatedAt: aiContext ? new Date() : null,
               },
             });
             syncedCount++;
@@ -222,6 +247,26 @@ async function executeBackgroundSync(jobId: string, facebookPageId: string): Pro
               }
             }
 
+            // Analyze conversation with AI if messages exist
+            let aiContext: string | null = null;
+            
+            if (convo.messages?.data && convo.messages.data.length > 0) {
+              try {
+                const messagesToAnalyze = convo.messages.data
+                  .filter((msg: any) => msg.message)
+                  .map((msg: any) => ({
+                    from: msg.from?.name || msg.from?.username || msg.from?.id || 'Unknown',
+                    text: msg.message,
+                  }));
+
+                if (messagesToAnalyze.length > 0) {
+                  aiContext = await analyzeConversation(messagesToAnalyze);
+                }
+              } catch (error) {
+                console.error(`[Background Sync ${jobId}] Failed to analyze IG conversation for ${participant.id}:`, error);
+              }
+            }
+
               const existingContact = await prisma.contact.findFirst({
                 where: {
                   OR: [
@@ -240,6 +285,8 @@ async function executeBackgroundSync(jobId: string, facebookPageId: string): Pro
                     lastName: lastName,
                     hasInstagram: true,
                     lastInteraction: new Date(convo.updated_time),
+                    aiContext: aiContext,
+                    aiContextUpdatedAt: aiContext ? new Date() : null,
                   },
                 });
               } else {
@@ -252,6 +299,8 @@ async function executeBackgroundSync(jobId: string, facebookPageId: string): Pro
                     organizationId: page.organizationId,
                     facebookPageId: page.id,
                     lastInteraction: new Date(convo.updated_time),
+                    aiContext: aiContext,
+                    aiContextUpdatedAt: aiContext ? new Date() : null,
                   },
                 });
               }

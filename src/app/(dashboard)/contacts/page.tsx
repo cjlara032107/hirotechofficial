@@ -13,6 +13,7 @@ import { ScoreFilter } from '@/components/contacts/score-filter';
 import { StageFilter } from '@/components/contacts/stage-filter';
 import { ContactsTable } from '@/components/contacts/contacts-table';
 import { ContactsPagination } from '@/components/contacts/contacts-pagination';
+import { AnalyzeAllButton } from '@/components/contacts/analyze-all-button';
 import { Users, Plus } from 'lucide-react';
 import { redirect } from 'next/navigation';
 import Link from 'next/link';
@@ -299,12 +300,15 @@ export default async function ContactsPage({ searchParams }: ContactsPageProps) 
             Manage your messenger and Instagram contacts
           </p>
         </div>
-        <Button asChild>
-          <Link href="/campaigns/new">
-            <Plus className="h-4 w-4 mr-2" />
-            Create Campaign
-          </Link>
-        </Button>
+        <div className="flex gap-2">
+          <AnalyzeAllButton />
+          <Button asChild>
+            <Link href="/campaigns/new">
+              <Plus className="h-4 w-4 mr-2" />
+              Create Campaign
+            </Link>
+          </Button>
+        </div>
       </div>
 
       {/* Search and Filters */}

@@ -113,7 +113,7 @@ All systems checked and verified operational.
 ✅ Ngrok Tunnel
    Status: RUNNING
    Port: 4040
-   Public URL: https://mae-squarish-sid.ngrok-free.dev
+   Public URL: https://7d1d36b43a01.ngrok-free.app/
    Requests Handled: 3,000+
 
 ✅ Campaign Worker

@@ -376,7 +376,7 @@ Trigger: When campaigns are sent
 ```
 Status: RUNNING
 Port: 4040
-Public URL: https://mae-squarish-sid.ngrok-free.dev
+Public URL: https://7d1d36b43a01.ngrok-free.app/
 Target: http://localhost:3000
 Requests: 3,000+ handled
 ```

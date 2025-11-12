@@ -184,6 +184,26 @@ export default async function ContactDetailPage({ params }: ContactDetailPagePro
             </CardContent>
           </Card>
 
+          {contact.aiContext && (
+            <Card>
+              <CardHeader>
+                <div className="flex items-center justify-between">
+                  <CardTitle>AI Context</CardTitle>
+                  {contact.aiContextUpdatedAt && (
+                    <span className="text-xs text-muted-foreground">
+                      Updated {new Date(contact.aiContextUpdatedAt).toLocaleDateString()}
+                    </span>
+                  )}
+                </div>
+              </CardHeader>
+              <CardContent>
+                <p className="text-sm text-muted-foreground whitespace-pre-wrap">
+                  {contact.aiContext}
+                </p>
+              </CardContent>
+            </Card>
+          )}
+
           <Card>
             <CardHeader>
               <CardTitle>Activity Timeline</CardTitle>

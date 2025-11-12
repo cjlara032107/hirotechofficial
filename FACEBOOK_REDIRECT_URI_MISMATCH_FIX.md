@@ -95,8 +95,8 @@ redirect_uri: https://your-domain.com/api/facebook/callback-popup
 
 2. **Make sure both URLs are in Facebook App settings:**
    ```
-   https://mae-squarish-sid.ngrok-free.dev/api/facebook/callback
-   https://mae-squarish-sid.ngrok-free.dev/api/facebook/callback-popup
+   https://7d1d36b43a01.ngrok-free.app//api/facebook/callback
+   https://7d1d36b43a01.ngrok-free.app//api/facebook/callback-popup
    ```
 
 3. **Test the connection again!**

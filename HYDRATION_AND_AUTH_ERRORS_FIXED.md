@@ -9,7 +9,7 @@
 - File: `src/app/(dashboard)/settings/integrations/page.tsx` (Line 21)
 - The code used: `const appOrigin = typeof window !== 'undefined' ? window.location.origin : ''`
 - Server rendered: `''` (empty string) → displayed as "Loading..."
-- Client rendered: `'https://mae-squarish-sid.ngrok-free.dev'` → displayed as actual URL
+- Client rendered: `'https://7d1d36b43a01.ngrok-free.app/'` → displayed as actual URL
 - This mismatch caused React to show hydration error
 
 **The Fix Applied:**

@@ -56,7 +56,7 @@ Context: <code className="block bg-muted px-3 py-2 rounded text-sm mb-2">
 
 #### Error Stack Trace
 ```
-+ https://mae-squarish-sid.ngrok-free.dev/api/facebook/callback
++ https://7d1d36b43a01.ngrok-free.app//api/facebook/callback
 - Loading...
 ```
 
@@ -136,7 +136,7 @@ appOrigin = ''                 // empty string
 **During Client Hydration:**
 ```typescript
 typeof window !== 'undefined'  // true (window exists in browser)
-window.location.origin         // "https://mae-squarish-sid.ngrok-free.dev"
+window.location.origin         // "https://7d1d36b43a01.ngrok-free.app/"
 appOrigin = "https://..."      // actual URL
 ```
 

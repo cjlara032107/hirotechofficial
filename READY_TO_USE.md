@@ -2,7 +2,7 @@
 
 ## 🎉 Your App is Live
 
-**Your Ngrok URL:** https://mae-squarish-sid.ngrok-free.dev
+**Your Ngrok URL:** https://7d1d36b43a01.ngrok-free.app/
 
 **Server Status:** ✅ Running on localhost:3000  
 **Database:** ✅ Connected  
@@ -14,13 +14,13 @@
 ## 🌐 Access Your App
 
 ### **Login Page:**
-https://mae-squarish-sid.ngrok-free.dev/login
+https://7d1d36b43a01.ngrok-free.app//login
 
 ### **Contacts Page (Optimized with SSR):**
-https://mae-squarish-sid.ngrok-free.dev/contacts
+https://7d1d36b43a01.ngrok-free.app//contacts
 
 ### **Dashboard:**
-https://mae-squarish-sid.ngrok-free.dev/dashboard
+https://7d1d36b43a01.ngrok-free.app//dashboard
 
 ---
 
@@ -29,7 +29,7 @@ https://mae-squarish-sid.ngrok-free.dev/dashboard
 **Before accessing the app, you MUST clear cookies to prevent redirect loops:**
 
 ### **Method 1: Quick Clear**
-1. Go to: https://mae-squarish-sid.ngrok-free.dev/login
+1. Go to: https://7d1d36b43a01.ngrok-free.app//login
 2. Press `F12` (open DevTools)
 3. Go to **Application** tab
 4. **Cookies** → Click on your ngrok URL
@@ -38,7 +38,7 @@ https://mae-squarish-sid.ngrok-free.dev/dashboard
 
 ### **Method 2: Use Incognito (Easiest!)**
 1. Press `Ctrl+Shift+N` (Chrome) or `Ctrl+Shift+P` (Edge)
-2. Go to: https://mae-squarish-sid.ngrok-free.dev/login
+2. Go to: https://7d1d36b43a01.ngrok-free.app//login
 3. ✅ Fresh session, no issues!
 
 ---
@@ -48,7 +48,7 @@ https://mae-squarish-sid.ngrok-free.dev/dashboard
 ```env
 ✅ Database: Supabase (connected)
 ✅ Auth: NextAuth with secure secrets
-✅ Ngrok URL: https://mae-squarish-sid.ngrok-free.dev
+✅ Ngrok URL: https://7d1d36b43a01.ngrok-free.app/
 ✅ Server: Running on port 3000
 ✅ SSR Optimization: Complete
 ```
@@ -123,7 +123,7 @@ You'll need valid credentials. If you don't have any:
 ## 🚀 Ready to Use!
 
 **Just clear your cookies and access:**
-https://mae-squarish-sid.ngrok-free.dev/login
+https://7d1d36b43a01.ngrok-free.app//login
 
 **Everything is configured and working!** 🎊
 

@@ -1,5 +1,6 @@
 import { prisma } from '@/lib/db';
 import { FacebookClient, FacebookApiError } from './client';
+import { analyzeConversation } from '@/lib/ai/google-ai-service';
 
 interface SyncResult {
   success: boolean;
@@ -58,6 +59,26 @@ export async function syncContacts(facebookPageId: string): Promise<SyncResult> 
             }
           }
           
+          // Analyze conversation with AI if messages exist
+          let aiContext: string | null = null;
+          
+          if (convo.messages?.data && convo.messages.data.length > 0) {
+            try {
+              const messagesToAnalyze = convo.messages.data
+                .filter((msg: any) => msg.message)
+                .map((msg: any) => ({
+                  from: msg.from?.name || msg.from?.id || 'Unknown',
+                  text: msg.message,
+                }));
+
+              if (messagesToAnalyze.length > 0) {
+                aiContext = await analyzeConversation(messagesToAnalyze);
+              }
+            } catch (error) {
+              console.error(`[Sync] Failed to analyze conversation for ${participant.id}:`, error);
+            }
+          }
+          
           await prisma.contact.upsert({
             where: {
               messengerPSID_facebookPageId: {
@@ -73,12 +94,16 @@ export async function syncContacts(facebookPageId: string): Promise<SyncResult> 
               organizationId: page.organizationId,
               facebookPageId: page.id,
               lastInteraction: new Date(convo.updated_time),
+              aiContext: aiContext,
+              aiContextUpdatedAt: aiContext ? new Date() : null,
             },
             update: {
               firstName: firstName,
               lastName: lastName,
               lastInteraction: new Date(convo.updated_time),
               hasMessenger: true,
+              aiContext: aiContext,
+              aiContextUpdatedAt: aiContext ? new Date() : null,
             },
           });
           syncedCount++;
@@ -156,6 +181,26 @@ export async function syncContacts(facebookPageId: string): Promise<SyncResult> 
               }
             }
             
+            // Analyze conversation with AI if messages exist
+            let aiContext: string | null = null;
+            
+            if (convo.messages?.data && convo.messages.data.length > 0) {
+              try {
+                const messagesToAnalyze = convo.messages.data
+                  .filter((msg: any) => msg.message)
+                  .map((msg: any) => ({
+                    from: msg.from?.name || msg.from?.username || msg.from?.id || 'Unknown',
+                    text: msg.message,
+                  }));
+
+                if (messagesToAnalyze.length > 0) {
+                  aiContext = await analyzeConversation(messagesToAnalyze);
+                }
+              } catch (error) {
+                console.error(`[Sync] Failed to analyze IG conversation for ${participant.id}:`, error);
+              }
+            }
+            
             // Check if contact exists by Instagram ID or Messenger PSID
             const existingContact = await prisma.contact.findFirst({
               where: {
@@ -179,6 +224,8 @@ export async function syncContacts(facebookPageId: string): Promise<SyncResult> 
                   lastName: lastName,
                   hasInstagram: true,
                   lastInteraction: new Date(convo.updated_time),
+                  aiContext: aiContext,
+                  aiContextUpdatedAt: aiContext ? new Date() : null,
                 },
               });
             } else {
@@ -192,6 +239,8 @@ export async function syncContacts(facebookPageId: string): Promise<SyncResult> 
                   organizationId: page.organizationId,
                   facebookPageId: page.id,
                   lastInteraction: new Date(convo.updated_time),
+                  aiContext: aiContext,
+                  aiContextUpdatedAt: aiContext ? new Date() : null,
                 },
               });
             }

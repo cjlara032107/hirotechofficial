@@ -4,7 +4,7 @@
 
 ### **Status:**
 - ✅ Next.js Dev Server: http://localhost:3000
-- ✅ Ngrok Tunnel: https://mae-squarish-sid.ngrok-free.dev
+- ✅ Ngrok Tunnel: https://7d1d36b43a01.ngrok-free.app/
 - ✅ Database: Connected to Supabase
 - ✅ Auth: Configured
 
@@ -12,12 +12,12 @@
 
 ## 🌐 Access Your App
 
-**Your App URL:** https://mae-squarish-sid.ngrok-free.dev
+**Your App URL:** https://7d1d36b43a01.ngrok-free.app/
 
 ### **Pages:**
-- **Login:** https://mae-squarish-sid.ngrok-free.dev/login
-- **Contacts (Optimized):** https://mae-squarish-sid.ngrok-free.dev/contacts
-- **Dashboard:** https://mae-squarish-sid.ngrok-free.dev/dashboard
+- **Login:** https://7d1d36b43a01.ngrok-free.app//login
+- **Contacts (Optimized):** https://7d1d36b43a01.ngrok-free.app//contacts
+- **Dashboard:** https://7d1d36b43a01.ngrok-free.app//dashboard
 
 ---
 
@@ -27,7 +27,7 @@
 
 ### **Easiest Way - Use Incognito:**
 1. Press `Ctrl+Shift+N` (Chrome) or `Ctrl+Shift+P` (Edge)
-2. Go to: https://mae-squarish-sid.ngrok-free.dev/login
+2. Go to: https://7d1d36b43a01.ngrok-free.app//login
 3. ✅ Done!
 
 ---
@@ -89,7 +89,7 @@ Your **fully optimized SSR contacts page** with:
 ## ✨ Everything is Ready!
 
 **Just access the app:**  
-https://mae-squarish-sid.ngrok-free.dev/login
+https://7d1d36b43a01.ngrok-free.app//login
 
 (Remember to use incognito mode or clear cookies!)
 

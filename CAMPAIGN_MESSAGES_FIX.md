@@ -67,7 +67,7 @@ I've implemented a **smart fallback system** that allows campaigns to work **wit
 
 2. **Navigate to campaigns:**
    - Go to: http://localhost:3000/campaigns
-   - Or: https://mae-squarish-sid.ngrok-free.dev/campaigns
+   - Or: https://7d1d36b43a01.ngrok-free.app//campaigns
 
 3. **Create or select a campaign**
 

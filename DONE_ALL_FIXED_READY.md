@@ -213,7 +213,7 @@ npm start
 
 ### Your Configuration
 ```
-App URL: https://mae-squarish-sid.ngrok-free.dev
+App URL: https://7d1d36b43a01.ngrok-free.app/
 Database: Supabase PostgreSQL (configured)
 Redis: Redis Cloud (configured)
 Facebook App: 802438925861067

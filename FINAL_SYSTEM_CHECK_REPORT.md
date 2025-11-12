@@ -65,7 +65,7 @@ npm run build
 #### Ngrok Tunnel
 - **Status:** 🟢 RUNNING
 - **Port:** 4040
-- **Public URL:** https://mae-squarish-sid.ngrok-free.dev
+- **Public URL:** https://7d1d36b43a01.ngrok-free.app/
 - **Target:** http://localhost:3000
 - **Connections:** 1,380 handled
 - **Requests:** 3,072 processed

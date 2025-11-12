@@ -3,6 +3,7 @@
 datasource db {
   provider = "postgresql"
   url      = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
 }
 
 generator client {
@@ -127,6 +128,8 @@ model Contact {
   
   tags           String[]
   notes          String?      @db.Text
+  aiContext      String?      @db.Text
+  aiContextUpdatedAt DateTime?
   lastInteraction DateTime?
   
   createdAt      DateTime     @default(now())
