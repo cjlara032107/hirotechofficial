@@ -65,29 +65,42 @@ export default function TagsPage() {
   const [selectedColor, setSelectedColor] = useState('#64748b');
   const [editColor, setEditColor] = useState('#64748b');
 
-  const fetchTags = async () => {
-    try {
-      const response = await fetch('/api/tags');
-      const data = await response.json();
-      if (response.ok) {
-        setTags(data);
-      }
-    } catch (error) {
-      console.error('Error fetching tags:', error);
-    }
-  };
-
   useEffect(() => {
-    fetchTags().catch(console.error);
+    let mounted = true;
+    
+    const fetchTags = async () => {
+      if (!mounted) return;
+      
+      try {
+        const response = await fetch('/api/tags');
+        
+        // Check content type before parsing JSON
+        const contentType = response.headers.get('content-type');
+        if (!contentType?.includes('application/json')) {
+          console.error('Server returned non-JSON response');
+          return;
+        }
+        
+        const data = await response.json();
+        if (response.ok && mounted) {
+          setTags(data);
+        }
+      } catch (error) {
+        console.error('Error fetching tags:', error);
+      }
+    };
+    
+    fetchTags();
+    
+    return () => {
+      mounted = false;
+    };
   }, []);
 
   // Update edit color when editing tag changes
   useEffect(() => {
-    if (editingTag) {
-      setEditColor(editingTag.color);
-    } else {
-      setEditColor('#64748b'); // Reset to default
-    }
+    // This is safe because we're updating based on editingTag prop changes
+    setEditColor(editingTag?.color || '#64748b');
   }, [editingTag]);
 
   const handleCreateTag = async (e: React.FormEvent<HTMLFormElement>) => {
@@ -109,7 +122,12 @@ export default function TagsPage() {
         toast.success('Tag created successfully');
         setIsCreateOpen(false);
         setSelectedColor('#64748b'); // Reset to default
-        fetchTags();
+        // Refetch tags to update the list
+        const refreshResponse = await fetch('/api/tags');
+        if (refreshResponse.ok) {
+          const refreshData = await refreshResponse.json();
+          setTags(refreshData);
+        }
       } else {
         const data = await response.json();
         toast.error(data.error || 'Failed to create tag');
@@ -140,7 +158,12 @@ export default function TagsPage() {
       if (response.ok) {
         toast.success('Tag updated successfully');
         setEditingTag(null);
-        fetchTags();
+        // Refetch tags to update the list
+        const refreshResponse = await fetch('/api/tags');
+        if (refreshResponse.ok) {
+          const refreshData = await refreshResponse.json();
+          setTags(refreshData);
+        }
       } else {
         const data = await response.json();
         toast.error(data.error || 'Failed to update tag');
@@ -161,7 +184,12 @@ export default function TagsPage() {
 
       if (response.ok) {
         toast.success('Tag deleted successfully');
-        fetchTags();
+        // Refetch tags to update the list
+        const refreshResponse = await fetch('/api/tags');
+        if (refreshResponse.ok) {
+          const refreshData = await refreshResponse.json();
+          setTags(refreshData);
+        }
       } else {
         toast.error('Failed to delete tag');
       }

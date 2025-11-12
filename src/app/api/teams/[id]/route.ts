@@ -3,6 +3,7 @@ import { auth } from '@/auth'
 import { prisma } from '@/lib/db'
 import { isTeamAdmin, isTeamOwner } from '@/lib/teams/permissions'
 import { logActivity } from '@/lib/teams/activity'
+import { TeamStatus } from '@prisma/client'
 
 interface RouteParams {
   params: Promise<{ id: string }>
@@ -118,7 +119,13 @@ export async function PATCH(
     const body = await request.json()
     const { name, description, avatar, status } = body
 
-    const updateData: any = {}
+    const updateData: {
+      name?: string;
+      description?: string | null;
+      avatar?: string | null;
+      status?: TeamStatus;
+      archivedAt?: Date;
+    } = {}
     if (name !== undefined) updateData.name = name.trim()
     if (description !== undefined) updateData.description = description?.trim()
     if (avatar !== undefined) updateData.avatar = avatar
@@ -127,8 +134,9 @@ export async function PATCH(
     if (status !== undefined) {
       const owner = await isTeamOwner(session.user.id, id)
       if (owner) {
-        updateData.status = status
-        if (status === 'ARCHIVED') {
+        const statusEnum = status as TeamStatus
+        updateData.status = statusEnum
+        if (statusEnum === 'ARCHIVED') {
           updateData.archivedAt = new Date()
         }
       }

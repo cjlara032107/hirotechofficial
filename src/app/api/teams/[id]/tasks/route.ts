@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { auth } from '@/auth'
 import { prisma } from '@/lib/db'
 import { logActivity } from '@/lib/teams/activity'
+import { TaskPriority, TaskStatus } from '@prisma/client'
 
 interface RouteParams {
   params: Promise<{ id: string }>
@@ -38,10 +39,15 @@ export async function GET(
       return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
     }
 
-    const where: any = { teamId: id }
-    if (status) where.status = status
+    const where: {
+      teamId: string;
+      status?: TaskStatus;
+      assignedToId?: string;
+      priority?: TaskPriority;
+    } = { teamId: id }
+    if (status) where.status = status as TaskStatus
     if (assignedTo) where.assignedToId = assignedTo
-    if (priority) where.priority = priority
+    if (priority) where.priority = priority as TaskPriority
 
     const tasks = await prisma.teamTask.findMany({
       where,

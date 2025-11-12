@@ -19,10 +19,10 @@ export function Header() {
   const { data: session } = useSession();
   const [isMounted, setIsMounted] = useState(false);
 
-  // Mark as mounted after first render
+  // Mark as mounted after first render - this is intentional to avoid hydration mismatch
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setIsMounted(true);
-     
   }, []);
 
   const getInitials = (name?: string | null) => {

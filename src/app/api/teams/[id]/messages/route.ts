@@ -38,7 +38,11 @@ export async function GET(
       return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
     }
 
-    const where: any = { teamId: id, isDeleted: false }
+    const where: {
+      teamId: string;
+      isDeleted: boolean;
+      threadId?: string;
+    } = { teamId: id, isDeleted: false }
     if (threadId) where.threadId = threadId
 
     const [messages, total] = await Promise.all([

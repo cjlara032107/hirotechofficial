@@ -5,6 +5,7 @@ import {
   GitBranch,
   User,
   FileText,
+  type LucideIcon,
 } from 'lucide-react';
 
 interface Activity {
@@ -18,7 +19,7 @@ interface Activity {
   } | null;
 }
 
-const activityIcons: Record<string, any> = {
+const activityIcons: Record<string, LucideIcon> = {
   MESSAGE_SENT: MessageSquare,
   MESSAGE_RECEIVED: MessageSquare,
   TAG_ADDED: Tag,

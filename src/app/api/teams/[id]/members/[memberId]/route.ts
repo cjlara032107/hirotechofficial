@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { auth } from '@/auth'
 import { prisma } from '@/lib/db'
 import { isTeamAdmin, isTeamOwner } from '@/lib/teams/permissions'
+import { TeamRole, TeamMemberStatus } from '@prisma/client'
 import { logActivity } from '@/lib/teams/activity'
 
 interface RouteParams {
@@ -33,14 +34,26 @@ export async function PATCH(
     const body = await request.json()
     const { role, displayName, bio, status, suspendedUntil, suspendedReason } = body
 
-    const updateData: any = {}
+    const updateData: {
+      displayName?: string;
+      bio?: string | null;
+      role?: TeamRole;
+      status?: TeamMemberStatus;
+      suspendedAt?: Date | null;
+      suspendedUntil?: Date | null;
+      suspendedReason?: string | null;
+    } = {}
     
     if (displayName !== undefined) updateData.displayName = displayName
     if (bio !== undefined) updateData.bio = bio
 
     // Role changes require owner permission (except promoting to ADMIN)
     if (role !== undefined) {
-      if (role === 'OWNER') {
+      const roleEnum = role as TeamRole
+      
+      updateData.role = roleEnum
+      
+      if (roleEnum === 'OWNER') {
         // Only owner can transfer ownership
         const owner = await isTeamOwner(session.user.id, id)
         if (!owner) {
@@ -86,20 +99,19 @@ export async function PATCH(
           success: true,
           message: 'Ownership transferred successfully'
         })
-      } else {
-        updateData.role = role
       }
     }
 
     // Status changes
     if (status !== undefined) {
-      updateData.status = status
+      const statusEnum = status as TeamMemberStatus
+      updateData.status = statusEnum
       
-      if (status === 'SUSPENDED') {
+      if (statusEnum === 'SUSPENDED') {
         updateData.suspendedAt = new Date()
         if (suspendedUntil) updateData.suspendedUntil = new Date(suspendedUntil)
         if (suspendedReason) updateData.suspendedReason = suspendedReason
-      } else if (status === 'ACTIVE') {
+      } else if (statusEnum === 'ACTIVE') {
         updateData.suspendedAt = null
         updateData.suspendedUntil = null
         updateData.suspendedReason = null

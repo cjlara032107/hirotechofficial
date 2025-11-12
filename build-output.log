@@ -7,18 +7,18 @@
 
  ⚠ The "middleware" file convention is deprecated. Please use "proxy" instead. Learn more: https://nextjs.org/docs/messages/middleware-to-proxy
    Creating an optimized production build ...
- ✓ Compiled successfully in 3.6s
+ ✓ Compiled successfully in 4.4s
    Running TypeScript ...
 Failed to compile.
 
-./src/app/(dashboard)/contacts/page.tsx:72:11
-Type error: Property 'facebookPageId' does not exist on type 'ContactWhereInput'. Did you mean 'facebookPage'?
+./src/components/contacts/contacts-table.tsx:143:7
+Type error: Cannot find name 'setAllContactIds'. Did you mean 'fetchAllContactIds'?
 
-[0m [90m 70 |[39m   [90m// Filter by page[39m
- [90m 71 |[39m   [36mif[39m (params[33m.[39mpageId) {
-[31m[1m>[22m[39m[90m 72 |[39m     where[33m.[39mfacebookPageId [33m=[39m params[33m.[39mpageId[33m;[39m
- [90m    |[39m           [31m[1m^[22m[39m
- [90m 73 |[39m   }
- [90m 74 |[39m
- [90m 75 |[39m   [90m// Filter by date range[39m[0m
+[0m [90m 141 |[39m
+ [90m 142 |[39m       [36mconst[39m data [33m=[39m [36mawait[39m response[33m.[39mjson()[33m;[39m
+[31m[1m>[22m[39m[90m 143 |[39m       setAllContactIds(data[33m.[39mcontactIds)[33m;[39m
+ [90m     |[39m       [31m[1m^[22m[39m
+ [90m 144 |[39m       setTotalContactsCount(data[33m.[39mtotal)[33m;[39m
+ [90m 145 |[39m       [36mreturn[39m data[33m.[39mcontactIds[33m;[39m
+ [90m 146 |[39m     } [36mcatch[39m (error) {[0m
 Next.js build worker exited with code: 1 and signal: null

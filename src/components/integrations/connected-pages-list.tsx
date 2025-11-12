@@ -446,7 +446,7 @@ export function ConnectedPagesList({ onRefresh, onSyncComplete }: ConnectedPages
           <div className="text-center py-8 text-muted-foreground">
             <Facebook className="h-12 w-12 mx-auto mb-4 opacity-50" />
             <p>No Facebook pages connected yet</p>
-            <p className="text-sm mt-2">Click "Connect with Facebook" above to get started</p>
+            <p className="text-sm mt-2">Click &quot;Connect with Facebook&quot; above to get started</p>
           </div>
         </CardContent>
       </Card>

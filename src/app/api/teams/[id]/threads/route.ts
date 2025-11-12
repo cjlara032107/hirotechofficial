@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { auth } from '@/auth'
 import { prisma } from '@/lib/db'
+import { ThreadType } from '@prisma/client'
 import { logActivity } from '@/lib/teams/activity'
 
 interface RouteParams {
@@ -36,8 +37,12 @@ export async function GET(
       return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
     }
 
-    const where: any = { teamId: id }
-    if (type) where.type = type
+    const where: {
+      teamId: string;
+      type?: ThreadType;
+      participantIds?: { has: string };
+    } = { teamId: id }
+    if (type) where.type = type as ThreadType
 
     // For direct and group chats, only show threads user is part of
     if (type === 'DIRECT' || type === 'GROUP') {

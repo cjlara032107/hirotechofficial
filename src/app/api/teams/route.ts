@@ -9,7 +9,7 @@ import { logActivity } from '@/lib/teams/activity'
  * GET /api/teams
  * Get all teams for the current user
  */
-export async function GET(request: NextRequest) {
+export async function GET() {
   try {
     const session = await auth()
     if (!session?.user?.id) {

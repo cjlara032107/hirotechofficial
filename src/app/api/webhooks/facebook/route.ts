@@ -77,11 +77,36 @@ export async function POST(request: NextRequest) {
   return NextResponse.json({ success: true });
 }
 
-async function handleIncomingMessage(event: any) {
+interface WebhookEvent {
+  sender: { id: string };
+  recipient: { id: string };
+  message?: {
+    mid: string;
+    text?: string;
+    attachments?: Array<{
+      type: string;
+      payload: { url: string };
+    }>;
+  };
+  delivery?: {
+    mids?: string[];
+    watermark: number;
+  };
+  read?: {
+    watermark: number;
+  };
+}
+
+async function handleIncomingMessage(event: WebhookEvent) {
   try {
     const senderId = event.sender.id;
     const recipientId = event.recipient.id;
     const message = event.message;
+
+    if (!message) {
+      console.error('No message data in event');
+      return;
+    }
 
     // Find the Facebook page
     const page = await prisma.facebookPage.findFirst({
@@ -212,8 +237,13 @@ async function handleIncomingMessage(event: any) {
   }
 }
 
-async function handleDeliveryReceipt(event: any) {
+async function handleDeliveryReceipt(event: WebhookEvent) {
   try {
+    if (!event.delivery) {
+      console.error('No delivery data in event');
+      return;
+    }
+
     const mids = event.delivery.mids || [];
 
     await prisma.message.updateMany({
@@ -230,8 +260,13 @@ async function handleDeliveryReceipt(event: any) {
   }
 }
 
-async function handleReadReceipt(event: any) {
+async function handleReadReceipt(event: WebhookEvent) {
   try {
+    if (!event.read) {
+      console.error('No read data in event');
+      return;
+    }
+
     const senderId = event.sender.id;
 
     // Find contact
@@ -259,7 +294,7 @@ async function handleReadReceipt(event: any) {
   }
 }
 
-async function handleInstagramMessage(value: any) {
+async function handleInstagramMessage(value: WebhookEvent) {
   try {
     const senderId = value.sender?.id;
     const recipientId = value.recipient?.id;
