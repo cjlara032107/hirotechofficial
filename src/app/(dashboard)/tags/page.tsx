@@ -90,7 +90,10 @@ export default function TagsPage() {
     if (prevEditingTagRef.current !== editingTag) {
       prevEditingTagRef.current = editingTag;
       if (editingTag) {
-        setEditColor(editingTag.color);
+        // Defer state update to avoid synchronous setState in effect
+        queueMicrotask(() => {
+          setEditColor(editingTag.color);
+        });
       }
     }
   }, [editingTag]);

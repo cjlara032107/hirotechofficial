@@ -7,8 +7,8 @@ interface RouteParams {
 }
 
 /**
- * GET /api/teams/[id]/messages/search
- * Search messages in team threads
+ * GET /api/teams/[id]/messages/pinned
+ * Get paginated pinned messages for a team
  */
 export async function GET(
   request: NextRequest,
@@ -23,17 +23,10 @@ export async function GET(
     const { id } = await params
     const { searchParams } = new URL(request.url)
     
-    const query = searchParams.get('q') || ''
+    const page = parseInt(searchParams.get('page') || '1')
+    const limit = parseInt(searchParams.get('limit') || '20')
     const threadId = searchParams.get('threadId')
-    const limit = parseInt(searchParams.get('limit') || '50')
-    const offset = parseInt(searchParams.get('offset') || '0')
-
-    if (!query || query.length < 2) {
-      return NextResponse.json(
-        { error: 'Search query must be at least 2 characters' },
-        { status: 400 }
-      )
-    }
+    const cursor = searchParams.get('cursor')
 
     // Check if user is a member
     const member = await prisma.teamMember.findUnique({
@@ -49,48 +42,34 @@ export async function GET(
     // Build where clause
     const where: {
       teamId: string
+      isPinned: boolean
       isDeleted: boolean
-      content: { contains: string; mode: 'insensitive' }
       threadId?: string
+      pinnedAt?: { lt: Date }
     } = {
       teamId: id,
-      isDeleted: false,
-      content: {
-        contains: query,
-        mode: 'insensitive'
-      }
+      isPinned: true,
+      isDeleted: false
     }
 
     if (threadId) {
-      // Verify user has access to this thread
-      const thread = await prisma.teamThread.findUnique({
-        where: { id: threadId },
-        select: { participantIds: true, type: true, isChannel: true }
-      })
-
-      if (!thread) {
-        return NextResponse.json({ error: 'Thread not found' }, { status: 404 })
-      }
-
-      // Check access
-      const hasAccess = thread.isChannel || 
-                       thread.type === 'DISCUSSION' || 
-                       thread.participantIds.includes(member.id)
-
-      if (!hasAccess) {
-        return NextResponse.json({ error: 'No access to this thread' }, { status: 403 })
-      }
-
       where.threadId = threadId
     }
 
-    // Search messages
+    // Cursor-based pagination
+    if (cursor) {
+      where.pinnedAt = { lt: new Date(cursor) }
+    }
+
+    const skip = cursor ? 0 : (page - 1) * limit
+
+    // Fetch pinned messages
     const [messages, total] = await Promise.all([
       prisma.teamMessage.findMany({
         where,
-        orderBy: { createdAt: 'desc' },
+        orderBy: { pinnedAt: 'desc' },
         take: limit,
-        skip: offset,
+        skip,
         include: {
           sender: {
             include: {
@@ -114,22 +93,29 @@ export async function GET(
           }
         }
       }),
-      prisma.teamMessage.count({ where })
+      cursor ? Promise.resolve(0) : prisma.teamMessage.count({ where })
     ])
+
+    const hasMore = messages.length === limit
+    const nextCursor = messages.length > 0 && messages[messages.length - 1].pinnedAt
+      ? messages[messages.length - 1].pinnedAt?.toISOString()
+      : null
 
     return NextResponse.json({
       messages,
-      total,
-      query,
+      total: total || messages.length,
+      page: cursor ? undefined : page,
       limit,
-      offset,
-      hasMore: total > offset + limit
+      hasMore,
+      nextCursor,
+      totalPages: cursor ? undefined : Math.ceil((total || 0) / limit)
     })
   } catch (error) {
-    console.error('Error searching messages:', error)
+    console.error('Error fetching pinned messages:', error)
     return NextResponse.json(
-      { error: 'Failed to search messages' },
+      { error: 'Failed to fetch pinned messages' },
       { status: 500 }
     )
   }
 }
+

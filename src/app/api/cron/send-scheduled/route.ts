@@ -384,4 +384,3 @@ async function generateAIMessages(campaign: any, contacts: any[]): Promise<Recor
     throw error;
   }
 }
-

@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useCallback } from 'react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
@@ -10,6 +10,7 @@ import { formatDistanceToNow } from 'date-fns'
 import { Send, Plus, Users } from 'lucide-react'
 import { toast } from 'sonner'
 import { LoadingSpinner } from '@/components/ui/loading-spinner'
+import { useSupabaseRealtime } from '@/contexts/supabase-realtime-context'
 
 interface Thread {
   id: string
@@ -44,20 +45,10 @@ export function TeamInbox({ teamId }: TeamInboxProps) {
   const [loading, setLoading] = useState(true)
   const [sending, setSending] = useState(false)
   const [newMessage, setNewMessage] = useState('')
+  
+  const { isConnected, subscribeToTeamMessages, subscribeToTeamThreads } = useSupabaseRealtime()
 
-  useEffect(() => {
-    fetchThreads()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [teamId])
-
-  useEffect(() => {
-    if (selectedThread) {
-      fetchMessages(selectedThread.id)
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedThread])
-
-  async function fetchThreads() {
+  const fetchThreads = useCallback(async () => {
     try {
       const response = await fetch(`/api/teams/${teamId}/threads`)
       const data = await response.json()
@@ -71,9 +62,9 @@ export function TeamInbox({ teamId }: TeamInboxProps) {
     } finally {
       setLoading(false)
     }
-  }
+  }, [teamId, selectedThread])
 
-  async function fetchMessages(threadId: string) {
+  const fetchMessages = useCallback(async (threadId: string) => {
     try {
       const response = await fetch(`/api/teams/${teamId}/messages?threadId=${threadId}`)
       const data = await response.json()
@@ -81,7 +72,99 @@ export function TeamInbox({ teamId }: TeamInboxProps) {
     } catch (error) {
       console.error('Error fetching messages:', error)
     }
-  }
+  }, [teamId])
+
+  useEffect(() => {
+    fetchThreads()
+  }, [fetchThreads])
+
+  useEffect(() => {
+    if (selectedThread) {
+      fetchMessages(selectedThread.id)
+    }
+  }, [selectedThread, fetchMessages])
+
+  // Supabase Realtime subscriptions
+  useEffect(() => {
+    if (!isConnected || !teamId) return
+
+    console.log('[Supabase Realtime] Setting up basic inbox listeners for team:', teamId)
+
+    // Subscribe to team messages
+    const unsubscribeMessages = subscribeToTeamMessages(teamId, {
+      onInsert: async (message) => {
+        // Fetch full message data with relations from API
+        try {
+          const response = await fetch(`/api/teams/${teamId}/messages?limit=1&messageId=${message.id}`)
+          const data = await response.json()
+          
+          if (data.messages && data.messages.length > 0) {
+            const fullMessage = data.messages[0]
+            
+            if (selectedThread?.id === fullMessage.threadId) {
+              setMessages(prev => {
+                // Check if message already exists (avoid duplicates)
+                const exists = prev.some(m => m.id === fullMessage.id)
+                if (exists) return prev
+                return [...prev, fullMessage]
+              })
+            }
+            
+            // Update thread last message time
+            if (fullMessage.threadId) {
+              setThreads(prev => prev.map(t => 
+                t.id === fullMessage.threadId 
+                  ? { ...t, lastMessageAt: fullMessage.createdAt }
+                  : t
+              ))
+            }
+          }
+        } catch (error) {
+          console.error('[Supabase Realtime] Error fetching full message:', error)
+        }
+      },
+      onUpdate: async (message) => {
+        // Fetch full message data with relations from API
+        try {
+          const response = await fetch(`/api/teams/${teamId}/messages?limit=1&messageId=${message.id}`)
+          const data = await response.json()
+          
+          if (data.messages && data.messages.length > 0) {
+            const fullMessage = data.messages[0]
+            
+            if (selectedThread?.id === fullMessage.threadId) {
+              setMessages(prev => prev.map(m => 
+                m.id === fullMessage.id ? fullMessage : m
+              ))
+            }
+          }
+        } catch (error) {
+          console.error('[Supabase Realtime] Error fetching updated message:', error)
+        }
+      },
+      onDelete: (messageId) => {
+        setMessages(prev => prev.filter(m => m.id !== messageId))
+      }
+    })
+
+    // Subscribe to team threads
+    const unsubscribeThreads = subscribeToTeamThreads(teamId, {
+      onInsert: (thread) => {
+        setThreads(prev => [thread as Thread, ...prev])
+      },
+      onUpdate: (thread) => {
+        setThreads(prev => prev.map(t => 
+          t.id === thread.id ? (thread as Thread) : t
+        ))
+      }
+    })
+
+    return () => {
+      console.log('[Supabase Realtime] Cleaning up basic inbox listeners')
+      unsubscribeMessages()
+      unsubscribeThreads()
+    }
+  }, [isConnected, teamId, selectedThread?.id, subscribeToTeamMessages, subscribeToTeamThreads])
 
   async function sendMessage() {
     if (!newMessage.trim()) return
@@ -100,7 +183,7 @@ export function TeamInbox({ teamId }: TeamInboxProps) {
       if (!response.ok) throw new Error('Failed to send message')
 
       const data = await response.json()
-      setMessages([data.message, ...messages])
+      // Message will be added via Realtime subscription
       setNewMessage('')
       toast.success('Message sent')
     } catch (error) {
@@ -215,4 +298,3 @@ export function TeamInbox({ teamId }: TeamInboxProps) {
     </div>
   )
 }
-

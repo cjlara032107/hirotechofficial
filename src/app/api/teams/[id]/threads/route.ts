@@ -144,38 +144,58 @@ export async function POST(
     }
 
     const body = await request.json()
-    const { title, type, participantIds } = body
+    const { title, type, participantIds, isChannel, groupName, groupAvatar } = body
 
-    if (!participantIds || !Array.isArray(participantIds) || participantIds.length === 0) {
-      return NextResponse.json(
-        { error: 'Participants are required' },
-        { status: 400 }
-      )
+    // For channels, only admins can create
+    if (isChannel || type === 'DISCUSSION') {
+      const isAdmin = member.role === 'ADMIN' || member.role === 'OWNER'
+      if (!isAdmin) {
+        return NextResponse.json(
+          { error: 'Only admins can create channels' },
+          { status: 403 }
+        )
+      }
     }
 
-    // Add creator to participants
-    const allParticipants = Array.from(new Set([member.id, ...participantIds]))
-
-    // Determine thread type
-    let threadType = type || 'GROUP'
-    if (allParticipants.length === 2) {
-      threadType = 'DIRECT'
-      
-      // Check if direct thread already exists
-      const existing = await prisma.teamThread.findFirst({
-        where: {
-          teamId: id,
-          type: 'DIRECT',
-          participantIds: { hasEvery: allParticipants }
-        }
-      })
-
-      if (existing) {
+    // For group chats, validate participants
+    if (type === 'GROUP' || (type !== 'DISCUSSION' && !isChannel)) {
+      if (!participantIds || !Array.isArray(participantIds) || participantIds.length === 0) {
         return NextResponse.json(
-          { error: 'Direct conversation already exists', thread: existing },
+          { error: 'Participants are required for group chats' },
           { status: 400 }
         )
       }
+
+      // Validate all participant IDs exist in the team
+      const validMembers = await prisma.teamMember.findMany({
+        where: {
+          id: { in: participantIds },
+          teamId: id,
+          status: 'ACTIVE'
+        }
+      })
+
+      if (validMembers.length !== participantIds.length) {
+        return NextResponse.json(
+          { error: 'Some participants are not valid team members' },
+          { status: 400 }
+        )
+      }
+    }
+
+    // Add creator to participants (for group chats)
+    const allParticipants = type === 'GROUP' 
+      ? Array.from(new Set([member.id, ...(participantIds || [])]))
+      : (participantIds || [])
+
+    // Determine thread type
+    let threadType = type || 'GROUP'
+    if (threadType === 'GROUP' && allParticipants.length === 2) {
+      threadType = 'DIRECT'
+      
+      // ALLOW MULTIPLE DIRECT CONVERSATIONS
+      // Duplicate check removed - users can create multiple direct conversations
+      // This allows for separate conversation topics/threads between same two users
     }
 
     const thread = await prisma.teamThread.create({
@@ -183,7 +203,12 @@ export async function POST(
         teamId: id,
         title: title?.trim(),
         type: threadType,
-        participantIds: allParticipants
+        participantIds: allParticipants,
+        isChannel: isChannel ?? (type === 'DISCUSSION'),
+        isGroupChat: type === 'GROUP',
+        groupName: groupName?.trim(),
+        groupAvatar,
+        createdById: member.id
       },
       include: {
         _count: {

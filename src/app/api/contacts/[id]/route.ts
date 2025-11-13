@@ -13,6 +13,10 @@ export async function GET(
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
+    const { searchParams } = new URL(request.url);
+    const includeMessages = searchParams.get('includeMessages') === 'true';
+    const messagesLimit = parseInt(searchParams.get('messagesLimit') || '20');
+
     const contact = await prisma.contact.findFirst({
       where: {
         id: id,
@@ -31,6 +35,16 @@ export async function GET(
             },
           },
         },
+        ...(includeMessages && {
+          conversations: {
+            include: {
+              messages: {
+                take: messagesLimit,
+                orderBy: { createdAt: 'desc' }
+              }
+            }
+          }
+        })
       },
     });
 

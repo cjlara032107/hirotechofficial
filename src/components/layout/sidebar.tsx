@@ -14,12 +14,14 @@ import {
   Settings,
   Users2,
   Bot,
+  Calendar,
 } from 'lucide-react';
 
 const navigation = [
   { name: 'Dashboard', href: '/dashboard', icon: LayoutDashboard },
   { name: 'Contacts', href: '/contacts', icon: Users },
   { name: 'Campaigns', href: '/campaigns', icon: Send },
+  { name: 'Scheduled', href: '/campaigns/scheduled', icon: Calendar },
   { name: 'Pipelines', href: '/pipelines', icon: GitBranch },
   { name: 'AI Automations', href: '/ai-automations', icon: Bot },
   { name: 'Templates', href: '/templates', icon: FileText },

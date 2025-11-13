@@ -186,6 +186,7 @@ export async function GET(request: NextRequest) {
         }
 
         console.log(`[AI Automations Cron] Rule "${rule.name}" - Processing ${eligibleContacts.length} contacts`);
+        console.log(`[AI Automations Cron] Eligible contacts:`, eligibleContacts.map(c => `${c.firstName} (${c.id})`));
 
         let ruleSent = 0;
         let ruleFailed = 0;
@@ -193,6 +194,8 @@ export async function GET(request: NextRequest) {
         // Process each eligible contact
         for (const contact of eligibleContacts) {
           try {
+            console.log(`[AI Automations Cron] Processing contact: ${contact.firstName} (${contact.id})`);
+            
             // ⭐ CONFLICT PREVENTION: Check if contact is eligible
             const eligibilityCheck = await isContactEligibleForAutomation(
               contact.id,

@@ -38,16 +38,19 @@ interface TeamMember {
 
 interface CreateConversationDialogProps {
   teamId: string
-  currentMemberId: string
+  open: boolean
+  onOpenChange: (open: boolean) => void
+  isAdmin: boolean
   onCreated: () => void
 }
 
 export function CreateConversationDialog({
   teamId,
-  currentMemberId,
+  open,
+  onOpenChange,
+  isAdmin,
   onCreated
 }: CreateConversationDialogProps) {
-  const [open, setOpen] = useState(false)
   const [loading, setLoading] = useState(false)
   const [uploading, setUploading] = useState(false)
   const [members, setMembers] = useState<TeamMember[]>([])
@@ -77,14 +80,14 @@ export function CreateConversationDialog({
       
       const membersList = data.members || []
       setMembers(membersList.filter((m: TeamMember) => 
-        m.id !== currentMemberId && m.status === 'ACTIVE'
+        m.status === 'ACTIVE'
       ))
     } catch (err) {
       console.error('Error fetching members:', err)
       toast.error('Failed to load team members')
       setMembers([])
     }
-  }, [teamId, currentMemberId])
+  }, [teamId])
 
   useEffect(() => {
     if (open) {
@@ -139,6 +142,12 @@ export function CreateConversationDialog({
   }
 
   async function createConversation() {
+    // Admin-only check for channels
+    if (type === 'channel' && !isAdmin) {
+      toast.error('Only admins can create channels')
+      return
+    }
+
     if (type === 'direct' && selectedMembers.length !== 1) {
       toast.error('Please select exactly one member for direct message')
       return
@@ -164,20 +173,22 @@ export function CreateConversationDialog({
           title: title.trim() || null,
           description: description.trim() || null,
           avatar: avatar || null,
-          participantIds: [currentMemberId, ...selectedMembers],
+          participantIds: selectedMembers,
           isChannel: type === 'channel',
+          groupName: type === 'group' ? title.trim() : null,
           enableTopics: type === 'group' ? enableTopics : false
         })
       })
 
       if (!response.ok) {
-        throw new Error('Failed to create conversation')
+        const data = await response.json()
+        throw new Error(data.error || 'Failed to create conversation')
       }
 
       toast.success(`${type === 'channel' ? 'Channel' : type === 'group' ? 'Group' : 'Conversation'} created successfully`)
       onCreated()
       resetForm()
-      setOpen(false)
+      onOpenChange(false)
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Failed to create conversation')
     } finally {
@@ -196,13 +207,7 @@ export function CreateConversationDialog({
   }
 
   return (
-    <Dialog open={open} onOpenChange={setOpen}>
-      <DialogTrigger asChild>
-        <Button size="sm" variant="outline">
-          <Plus className="w-4 h-4 mr-2" />
-          New
-        </Button>
-      </DialogTrigger>
+    <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>Create New Conversation</DialogTitle>
@@ -221,9 +226,9 @@ export function CreateConversationDialog({
               <Users className="w-4 h-4 mr-2" />
               Group Chat
             </TabsTrigger>
-            <TabsTrigger value="channel">
+            <TabsTrigger value="channel" disabled={!isAdmin}>
               <Radio className="w-4 h-4 mr-2" />
-              Channel
+              Channel {!isAdmin && '(Admin Only)'}
             </TabsTrigger>
           </TabsList>
 
@@ -503,7 +508,7 @@ export function CreateConversationDialog({
         </Tabs>
 
         <DialogFooter>
-          <Button variant="outline" onClick={() => setOpen(false)}>
+          <Button variant="outline" onClick={() => onOpenChange(false)}>
             Cancel
           </Button>
           <Button onClick={createConversation} disabled={loading}>

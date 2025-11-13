@@ -65,12 +65,23 @@ export default function AIAutomationsPage() {
     try {
       setError(null);
       const response = await fetch('/api/ai-automations');
+      
+      // Check if response is JSON before parsing
+      const contentType = response.headers.get('content-type');
+      if (!contentType || !contentType.includes('application/json')) {
+        // Not JSON - likely redirected to login page (HTML)
+        console.log('[AI Automations] Not authenticated, redirecting to login');
+        window.location.href = '/login';
+        return;
+      }
+      
       const data = await response.json();
       
       if (!response.ok) {
         // 401 is expected when not logged in - will redirect to login
         if (response.status === 401) {
           console.log('[AI Automations] Not authenticated, redirecting to login');
+          window.location.href = '/login';
           return;
         }
         throw new Error(data.error || 'Failed to load automation rules');

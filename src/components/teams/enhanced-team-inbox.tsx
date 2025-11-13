@@ -36,7 +36,7 @@ import {
 import { toast } from 'sonner'
 import { LoadingSpinner } from '@/components/ui/loading-spinner'
 import { CreateConversationDialog } from './create-conversation-dialog'
-import { useSocket } from '@/contexts/socket-context'
+import { useSupabaseRealtime } from '@/contexts/supabase-realtime-context'
 import { useSession } from '@/hooks/use-session'
 
 interface EnhancedTeamInboxProps {
@@ -125,7 +125,7 @@ export function EnhancedTeamInbox({
   const scrollRef = useRef<HTMLDivElement>(null)
   const typingTimeoutRef = useRef<NodeJS.Timeout | null>(null)
   
-  const { socket, isConnected, joinTeam, leaveTeam, joinThread, leaveThread, emitTyping, stopTyping } = useSocket()
+  const { isConnected, subscribeToTeamMessages, subscribeToTeamThreads, emitTyping, stopTyping, onTyping } = useSupabaseRealtime()
   const { data: session } = useSession()
 
   const fetchThreads = useCallback(async () => {
@@ -225,99 +225,167 @@ export function EnhancedTeamInbox({
     }
   }, [selectedThread, selectedTopic, fetchMessages])
 
-  // Socket.IO connection for real-time updates
+  // Supabase Realtime connection for real-time updates
   useEffect(() => {
-    if (!socket || !isConnected || !teamId) return
+    if (!isConnected || !teamId) return
 
-    console.log('[Socket.IO] Setting up team inbox listeners for team:', teamId)
+    console.log('[Supabase Realtime] Setting up team inbox listeners for team:', teamId)
     
-    // Join team room
-    joinTeam(teamId)
-
-    // Listen for new messages
-    socket.on('message:new', (data: { threadId: string; message: Message }) => {
-      console.log('[Socket.IO] New message received:', data)
-      if (selectedThread?.id === data.threadId) {
-        setMessages(prev => [...prev, data.message])
-        // Scroll to bottom
-        setTimeout(() => {
-          if (scrollRef.current) {
-            scrollRef.current.scrollTop = scrollRef.current.scrollHeight
+    // Subscribe to team messages
+    const unsubscribeMessages = subscribeToTeamMessages(teamId, {
+      onInsert: async (message) => {
+        console.log('[Supabase Realtime] ✅ New message event received:', {
+          messageId: message.id,
+          teamId: message.teamId,
+          threadId: message.threadId,
+          currentThreadId: selectedThread?.id,
+          timestamp: new Date().toISOString()
+        })
+        
+        // Fetch full message data with relations from API
+        try {
+          const response = await fetch(`/api/teams/${teamId}/messages?limit=1&messageId=${message.id}`)
+          
+          if (!response.ok) {
+            console.error('[Supabase Realtime] ❌ API fetch failed:', response.status, response.statusText)
+            return
           }
-        }, 100)
+          
+          const data = await response.json()
+          
+          if (!data.messages || data.messages.length === 0) {
+            console.error('[Supabase Realtime] ❌ No message data returned')
+            return
+          }
+          
+          const fullMessage = data.messages[0]
+          console.log('[Supabase Realtime] 📦 Full message fetched:', {
+            id: fullMessage.id,
+            threadId: fullMessage.threadId,
+            sender: fullMessage.sender?.user?.name,
+            content: fullMessage.content.substring(0, 50)
+          })
+          
+          // ALWAYS update thread last message time (even if not viewing)
+          if (fullMessage.threadId) {
+            setThreads(prev => {
+              const updated = prev.map(t => 
+                t.id === fullMessage.threadId 
+                  ? { ...t, lastMessageAt: fullMessage.createdAt }
+                  : t
+              )
+              console.log('[Supabase Realtime] 🔄 Thread list updated')
+              return updated
+            })
+          }
+          
+          // Only add to messages if viewing this thread
+          if (selectedThread?.id === fullMessage.threadId) {
+            setMessages(prev => {
+              // Check if message already exists (avoid duplicates)
+              const exists = prev.some(m => m.id === fullMessage.id)
+              if (exists) {
+                console.log('[Supabase Realtime] ⚠️ Message already exists, skipping')
+                return prev
+              }
+              console.log('[Supabase Realtime] ✅ Message added to view')
+              return [...prev, fullMessage]
+            })
+            
+            // Scroll to bottom
+            setTimeout(() => {
+              if (scrollRef.current) {
+                scrollRef.current.scrollTop = scrollRef.current.scrollHeight
+              }
+            }, 100)
+          } else {
+            console.log('[Supabase Realtime] ℹ️ Message for different thread, not adding to view but thread updated')
+          }
+        } catch (error) {
+          console.error('[Supabase Realtime] ❌ Error fetching full message:', error)
+        }
+      },
+      onUpdate: async (message) => {
+        console.log('[Supabase Realtime] Message updated:', message)
+        
+        // Fetch full message data with relations from API
+        try {
+          const response = await fetch(`/api/teams/${teamId}/messages?limit=1&messageId=${message.id}`)
+          const data = await response.json()
+          
+          if (data.messages && data.messages.length > 0) {
+            const fullMessage = data.messages[0]
+            
+            if (selectedThread?.id === fullMessage.threadId) {
+              setMessages(prev => prev.map(m => 
+                m.id === fullMessage.id ? fullMessage : m
+              ))
+            }
+          }
+        } catch (error) {
+          console.error('[Supabase Realtime] Error fetching updated message:', error)
+        }
+      },
+      onDelete: (messageId) => {
+        console.log('[Supabase Realtime] Message deleted:', messageId)
+        setMessages(prev => prev.filter(m => m.id !== messageId))
       }
-      
-      // Update thread last message time
-      setThreads(prev => prev.map(t => 
-        t.id === data.threadId 
-          ? { ...t, lastMessageAt: data.message.createdAt }
-          : t
-      ))
     })
 
-    // Listen for message updates
-    socket.on('message:updated', (data: { threadId: string; message: Message }) => {
-      console.log('[Socket.IO] Message updated:', data)
-      if (selectedThread?.id === data.threadId) {
-        setMessages(prev => prev.map(m => 
-          m.id === data.message.id ? data.message : m
+    // Subscribe to team threads
+    const unsubscribeThreads = subscribeToTeamThreads(teamId, {
+      onInsert: (thread) => {
+        console.log('[Supabase Realtime] New thread created:', thread)
+        setThreads(prev => [thread as Thread, ...prev])
+      },
+      onUpdate: (thread) => {
+        console.log('[Supabase Realtime] Thread updated:', thread)
+        setThreads(prev => prev.map(t => 
+          t.id === thread.id ? (thread as Thread) : t
         ))
       }
     })
 
-    // Listen for message deletions
-    socket.on('message:deleted', (data: { threadId: string; messageId: string }) => {
-      console.log('[Socket.IO] Message deleted:', data)
-      if (selectedThread?.id === data.threadId) {
-        setMessages(prev => prev.filter(m => m.id !== data.messageId))
-      }
-    })
-
-    // Listen for new threads
-    socket.on('thread:new', (data: { thread: Thread }) => {
-      console.log('[Socket.IO] New thread created:', data)
-      setThreads(prev => [data.thread, ...prev])
-    })
-
-    // Listen for typing indicators
-    socket.on('user:typing', (data: { threadId: string; userId: string; userName: string }) => {
-      if (selectedThread?.id === data.threadId && data.userId !== session?.user?.id) {
-        setTypingUsers(prev => ({ ...prev, [data.userId]: data.userName }))
-      }
-    })
-
-    socket.on('user:stopped-typing', (data: { threadId: string; userId: string }) => {
-      setTypingUsers(prev => {
-        const newState = { ...prev }
-        delete newState[data.userId]
-        return newState
-      })
-    })
-
     return () => {
-      console.log('[Socket.IO] Cleaning up team inbox listeners')
-      socket.off('message:new')
-      socket.off('message:updated')
-      socket.off('message:deleted')
-      socket.off('thread:new')
-      socket.off('user:typing')
-      socket.off('user:stopped-typing')
-      leaveTeam(teamId)
+      console.log('[Supabase Realtime] Cleaning up team inbox listeners')
+      unsubscribeMessages()
+      unsubscribeThreads()
     }
-  }, [socket, isConnected, teamId, selectedThread, session?.user?.id, joinTeam, leaveTeam])
+  }, [isConnected, teamId, selectedThread?.id, subscribeToTeamMessages, subscribeToTeamThreads])
 
-  // Join/leave thread rooms when thread selection changes
+  // Subscribe to typing indicators for selected thread
   useEffect(() => {
-    if (!socket || !isConnected || !selectedThread) return
+    if (!isConnected || !selectedThread) return
 
-    console.log('[Socket.IO] Joining thread:', selectedThread.id)
-    joinThread(selectedThread.id)
+    console.log('[Supabase Realtime] Setting up typing indicators for thread:', selectedThread.id)
+
+    const unsubscribeTyping = onTyping(selectedThread.id, (data) => {
+      if (data.userName && data.userId !== session?.user?.id) {
+        setTypingUsers(prev => ({ ...prev, [data.userId]: data.userName }))
+        
+        // Auto-clear typing after 3 seconds
+        setTimeout(() => {
+          setTypingUsers(prev => {
+            const newState = { ...prev }
+            delete newState[data.userId]
+            return newState
+          })
+        }, 3000)
+      } else if (!data.userName) {
+        // Stop typing
+        setTypingUsers(prev => {
+          const newState = { ...prev }
+          delete newState[data.userId]
+          return newState
+        })
+      }
+    })
 
     return () => {
-      console.log('[Socket.IO] Leaving thread:', selectedThread.id)
-      leaveThread(selectedThread.id)
+      console.log('[Supabase Realtime] Cleaning up typing indicators')
+      unsubscribeTyping()
     }
-  }, [socket, isConnected, selectedThread, joinThread, leaveThread])
+  }, [isConnected, selectedThread?.id, session?.user?.id, onTyping])
 
   async function searchMessages(query: string) {
     if (!query.trim()) {
@@ -544,7 +612,9 @@ export function EnhancedTeamInbox({
             <CardTitle className="text-base">Conversations</CardTitle>
             <CreateConversationDialog
               teamId={teamId}
-              currentMemberId={currentMemberId}
+              open={false}
+              onOpenChange={() => {}}
+              isAdmin={false}
               onCreated={fetchThreads}
             />
           </div>

@@ -3,6 +3,9 @@ import { auth } from '@/auth'
 import { prisma } from '@/lib/db'
 import { logActivity } from '@/lib/teams/activity'
 
+// Note: Real-time updates are now handled automatically by Supabase Realtime
+// No need to manually emit events - database changes are automatically broadcast
+
 interface RouteParams {
   params: Promise<{ id: string }>
 }
@@ -24,6 +27,7 @@ export async function GET(
     const { id } = await params
     const { searchParams } = new URL(request.url)
     const threadId = searchParams.get('threadId')
+    const messageId = searchParams.get('messageId')
     const limit = parseInt(searchParams.get('limit') || '50')
     const offset = parseInt(searchParams.get('offset') || '0')
 
@@ -42,8 +46,10 @@ export async function GET(
       teamId: string;
       isDeleted: boolean;
       threadId?: string;
+      id?: string;
     } = { teamId: id, isDeleted: false }
     if (threadId) where.threadId = threadId
+    if (messageId) where.id = messageId
 
     const [messages, total] = await Promise.all([
       prisma.teamMessage.findMany({

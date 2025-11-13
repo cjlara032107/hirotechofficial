@@ -1,0 +1,59 @@
+# Vercel Ignore File
+# Files and directories to exclude from deployment
+
+# Development files
+node_modules/
+.next/
+.env.local
+.env*.local
+
+# Test files
+test-*.js
+*.test.ts
+*.test.tsx
+*.spec.ts
+*.spec.tsx
+test-results/
+coverage/
+
+# Build logs
+build-*.log
+*.log
+
+# Documentation (optional - remove if you want docs deployed)
+_*.md
+*.txt
+README_*.md
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE files
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+
+# Database files (don't upload local DBs)
+*.db
+*.sqlite
+*.sqlite3
+
+# Scripts
+scripts/test-*.ts
+scripts/diagnose*.ts
+check-*.js
+comprehensive-*.js
+diagnose-*.js
+fix-*.js
+find-*.js
+create-test-*.js
+simulate-*.js
+test-*.js
+

@@ -1,7 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { auth } from '@/auth'
 import { prisma } from '@/lib/db'
-import { emitMessageUpdate, emitMessageDelete } from '@/lib/socket/server'
+
+// Note: Real-time updates are now handled automatically by Supabase Realtime
+// No need to manually emit events - database changes are automatically broadcast
 
 interface RouteParams {
   params: Promise<{ id: string; messageId: string }>
@@ -81,13 +83,7 @@ export async function PATCH(
       }
     })
 
-    // Emit socket event for real-time updates
-    try {
-      emitMessageUpdate(id, message.threadId || '', updatedMessage)
-    } catch (error) {
-      console.log('[Socket.IO] Not available:', error)
-      // Socket.IO not initialized, continue without real-time updates
-    }
+    // Real-time update will be automatically broadcast by Supabase Realtime
 
     return NextResponse.json({ message: updatedMessage })
   } catch (error) {
@@ -150,13 +146,7 @@ export async function DELETE(
       }
     })
 
-    // Emit socket event for real-time updates
-    try {
-      emitMessageDelete(id, message.threadId || '', messageId)
-    } catch (error) {
-      console.log('[Socket.IO] Not available:', error)
-      // Socket.IO not initialized, continue without real-time updates
-    }
+    // Real-time deletion will be automatically broadcast by Supabase Realtime
 
     return NextResponse.json({ success: true })
   } catch (error) {

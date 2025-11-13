@@ -56,7 +56,14 @@ export async function analyzeConversation(
 
   try {
     const genAI = new GoogleGenerativeAI(apiKey);
-    const model = genAI.getGenerativeModel({ model: 'gemini-2.0-flash-exp' });
+    // Using gemini-2.5-flash with v1 API - verified working!
+    const model = genAI.getGenerativeModel({ 
+      model: 'models/gemini-2.5-flash',
+      generationConfig: {
+        temperature: 0.7,
+        maxOutputTokens: 500,
+      },
+    });
 
     // Format conversation for AI
     const conversationText = messages
@@ -126,7 +133,14 @@ export async function generateFollowUpMessage(
 
   try {
     const genAI = new GoogleGenerativeAI(apiKey);
-    const model = genAI.getGenerativeModel({ model: 'gemini-2.0-flash-exp' });
+    // Using gemini-2.5-flash with v1 API - verified working!
+    const model = genAI.getGenerativeModel({ 
+      model: 'models/gemini-2.5-flash',
+      generationConfig: {
+        temperature: 0.8,
+        maxOutputTokens: 1000,
+      },
+    });
 
     // Format conversation history
     const historyText = conversationHistory
@@ -225,7 +239,14 @@ export async function analyzeConversationWithStageRecommendation(
 
   try {
     const genAI = new GoogleGenerativeAI(apiKey);
-    const model = genAI.getGenerativeModel({ model: 'gemini-2.0-flash-exp' });
+    // Using gemini-2.5-flash with v1 API - verified working!
+    const model = genAI.getGenerativeModel({ 
+      model: 'models/gemini-2.5-flash',
+      generationConfig: {
+        temperature: 0.8,
+        maxOutputTokens: 2000,
+      },
+    });
 
     const conversationText = messages
       .map(msg => `${msg.from}: ${msg.text}`)
