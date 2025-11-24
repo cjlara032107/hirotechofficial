@@ -107,12 +107,22 @@ export async function GET(request: NextRequest) {
         // Build where clause for finding eligible contacts
         const whereClause: any = {
           organizationId: rule.User.organizationId,
-          lastInteraction: {
-            lte: thresholdDate,
-          },
           messengerPSID: {
             not: null,
           },
+          OR: [
+            {
+              lastInteraction: {
+                lte: thresholdDate,
+              },
+            },
+            {
+              lastInteraction: null,
+              createdAt: {
+                lte: thresholdDate,
+              },
+            },
+          ],
         };
 
         // Filter by Facebook page if specified
@@ -210,11 +220,27 @@ export async function GET(request: NextRequest) {
               continue;
             }
 
-            const conversation = contact.conversations[0];
+            // Get or create conversation
+            let conversation = contact.conversations[0];
             if (!conversation) {
-              console.log(`[AI Automations Cron] No conversation for contact: ${contact.id}`);
-              ruleFailed++;
-              continue;
+              // Create conversation if it doesn't exist (for contacts with messengerPSID)
+              if (contact.messengerPSID && contact.facebookPageId) {
+                console.log(`[AI Automations Cron] Creating conversation for contact: ${contact.firstName} (${contact.id})`);
+                conversation = await prisma.conversation.create({
+                  data: {
+                    contactId: contact.id,
+                    facebookPageId: contact.facebookPageId,
+                    platform: 'MESSENGER',
+                    status: 'OPEN',
+                    lastMessageAt: new Date(),
+                  },
+                });
+                console.log(`[AI Automations Cron] Created conversation: ${conversation.id}`);
+              } else {
+                console.log(`[AI Automations Cron] No conversation found and cannot create (missing messengerPSID or facebookPageId) for contact: ${contact.id}`);
+                ruleFailed++;
+                continue;
+              }
             }
 
             // Get conversation history
@@ -228,10 +254,9 @@ export async function GET(request: NextRequest) {
               take: 20,
             });
 
+            // If no messages, we can still send (new conversation), but AI won't have history
             if (messages.length === 0) {
-              console.log(`[AI Automations Cron] No messages in conversation: ${conversation.id}`);
-              ruleFailed++;
-              continue;
+              console.log(`[AI Automations Cron] No messages in conversation: ${conversation.id} - will send without history`);
             }
 
             // Check if contact replied recently (live check)
@@ -247,12 +272,14 @@ export async function GET(request: NextRequest) {
               }
             }
 
-            // Format messages for AI
-            const conversationHistory = messages.reverse().map(msg => ({
-              from: msg.isFromBusiness ? 'Business' : contact.firstName || 'Customer',
-              text: msg.content,
-              timestamp: msg.createdAt,
-            }));
+            // Format messages for AI (or use empty array if no history)
+            const conversationHistory = messages.length > 0
+              ? messages.reverse().map(msg => ({
+                  from: msg.isFromBusiness ? 'Business' : contact.firstName || 'Customer',
+                  text: msg.content,
+                  timestamp: msg.createdAt,
+                }))
+              : []; // Empty history for new conversations
 
             // Generate AI message
             const aiResult = await generateFollowUpMessage(
@@ -279,6 +306,32 @@ export async function GET(request: NextRequest) {
                   aiPromptUsed: rule.customPrompt,
                   status: 'failed',
                   errorMessage: 'Failed to generate AI message',
+                  executedAt: new Date(),
+                },
+              });
+              
+              continue;
+            }
+
+            // Verify Facebook page has access token
+            if (!contact.facebookPage?.pageAccessToken) {
+              console.error(`[AI Automations Cron] No access token for Facebook page: ${contact.facebookPage?.id}`);
+              ruleFailed++;
+              
+              await prisma.aIAutomationExecution.create({
+                data: {
+                  id: `exec_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+                  ruleId: rule.id,
+                  userId: rule.userId,
+                  contactId: contact.id,
+                  conversationId: conversation.id,
+                  recipientPSID: contact.messengerPSID || 'unknown',
+                  recipientName: `${contact.firstName} ${contact.lastName || ''}`.trim(),
+                  aiPromptUsed: rule.customPrompt,
+                  generatedMessage: aiResult.message,
+                  aiReasoning: aiResult.reasoning,
+                  status: 'failed',
+                  errorMessage: 'Facebook page access token missing',
                   executedAt: new Date(),
                 },
               });
