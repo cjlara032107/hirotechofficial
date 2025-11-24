@@ -261,8 +261,10 @@ export default function CampaignDetailPage() {
     }
   };
 
+  // Calculate progress based on sent count vs total recipients
+  // Cap at 100% to avoid showing more than 100%
   const progress = campaign.totalRecipients > 0 
-    ? (campaign.sentCount / campaign.totalRecipients) * 100 
+    ? Math.min((campaign.sentCount / campaign.totalRecipients) * 100, 100)
     : 0;
 
   const deliveryRate = campaign.sentCount > 0

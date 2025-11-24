@@ -37,7 +37,60 @@ export async function GET(
       return NextResponse.json({ error: 'Campaign not found' }, { status: 404 });
     }
 
-    return NextResponse.json(campaign);
+    // Recalculate metrics from actual message counts for accuracy
+    const messageCounts = await prisma.message.groupBy({
+      by: ['status'],
+      where: {
+        campaignId: id,
+      },
+      _count: {
+        status: true,
+      },
+    });
+
+    // Calculate accurate counts
+    const actualSentCount = messageCounts
+      .filter(m => m.status === 'SENT' || m.status === 'DELIVERED' || m.status === 'READ')
+      .reduce((sum, m) => sum + m._count.status, 0);
+    
+    const actualDeliveredCount = messageCounts
+      .filter(m => m.status === 'DELIVERED' || m.status === 'READ')
+      .reduce((sum, m) => sum + m._count.status, 0);
+    
+    const actualReadCount = messageCounts
+      .filter(m => m.status === 'READ')
+      .reduce((sum, m) => sum + m._count.status, 0);
+    
+    const actualFailedCount = messageCounts
+      .filter(m => m.status === 'FAILED')
+      .reduce((sum, m) => sum + m._count.status, 0);
+
+    // Update campaign if counts are different (async, don't wait)
+    if (
+      campaign.sentCount !== actualSentCount ||
+      campaign.deliveredCount !== actualDeliveredCount ||
+      campaign.readCount !== actualReadCount ||
+      campaign.failedCount !== actualFailedCount
+    ) {
+      prisma.campaign.update({
+        where: { id },
+        data: {
+          sentCount: actualSentCount,
+          deliveredCount: actualDeliveredCount,
+          readCount: actualReadCount,
+          failedCount: actualFailedCount,
+        },
+      }).catch(err => console.error('Error updating campaign metrics:', err));
+    }
+
+    // Return campaign with accurate counts
+    return NextResponse.json({
+      ...campaign,
+      sentCount: actualSentCount,
+      deliveredCount: actualDeliveredCount,
+      readCount: actualReadCount,
+      failedCount: actualFailedCount,
+    });
   } catch (error) {
     const err = error as Error;
     console.error('Get campaign error:', err);

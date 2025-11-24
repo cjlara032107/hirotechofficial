@@ -341,15 +341,58 @@ async function handleDeliveryReceipt(event: WebhookEvent) {
     if (!event.delivery) return;
     const mids = event.delivery.mids || [];
 
+    // Update messages and get campaign IDs
+    const updatedMessages = await prisma.message.findMany({
+      where: {
+        facebookMessageId: { in: mids },
+        status: { not: 'DELIVERED' }, // Only update messages that aren't already delivered
+      },
+      select: {
+        id: true,
+        campaignId: true,
+        status: true,
+      },
+    });
+
+    if (updatedMessages.length === 0) return;
+
+    // Update message statuses
     await prisma.message.updateMany({
       where: {
         facebookMessageId: { in: mids },
+        status: { not: 'DELIVERED' },
       },
       data: {
         status: 'DELIVERED',
         deliveredAt: new Date(event.delivery.watermark),
       },
     });
+
+    // Update campaign deliveredCount for each unique campaign
+    const campaignIds = [...new Set(updatedMessages.map(m => m.campaignId).filter(Boolean))];
+    
+    for (const campaignId of campaignIds) {
+      if (!campaignId) continue;
+      
+      // Count how many messages from this campaign were just delivered
+      const campaignMessageCount = updatedMessages.filter(
+        m => m.campaignId === campaignId && m.status !== 'DELIVERED'
+      ).length;
+      
+      if (campaignMessageCount > 0) {
+        try {
+          await prisma.campaign.update({
+            where: { id: campaignId },
+            data: {
+              deliveredCount: { increment: campaignMessageCount },
+            },
+          });
+          console.log(`✅ Updated campaign ${campaignId}: +${campaignMessageCount} delivered`);
+        } catch (error) {
+          console.error(`Error updating campaign ${campaignId} deliveredCount:`, error);
+        }
+      }
+    }
   } catch (error) {
     console.error('Error handling delivery receipt:', error);
   }
@@ -367,6 +410,23 @@ async function handleReadReceipt(event: WebhookEvent) {
 
     if (!contact) return;
 
+    // Get messages that will be updated
+    const messagesToUpdate = await prisma.message.findMany({
+      where: {
+        contactId: contact.id,
+        isFromBusiness: true,
+        sentAt: { lte: new Date(event.read.watermark) },
+        status: { not: 'READ' },
+      },
+      select: {
+        id: true,
+        campaignId: true,
+        status: true,
+      },
+    });
+
+    if (messagesToUpdate.length === 0) return;
+
     // Update messages as read
     await prisma.message.updateMany({
       where: {
@@ -380,6 +440,32 @@ async function handleReadReceipt(event: WebhookEvent) {
         readAt: new Date(event.read.watermark),
       },
     });
+
+    // Update campaign readCount for each unique campaign
+    const campaignIds = [...new Set(messagesToUpdate.map(m => m.campaignId).filter(Boolean))];
+    
+    for (const campaignId of campaignIds) {
+      if (!campaignId) continue;
+      
+      // Count how many messages from this campaign were just read
+      const campaignMessageCount = messagesToUpdate.filter(
+        m => m.campaignId === campaignId && m.status !== 'READ'
+      ).length;
+      
+      if (campaignMessageCount > 0) {
+        try {
+          await prisma.campaign.update({
+            where: { id: campaignId },
+            data: {
+              readCount: { increment: campaignMessageCount },
+            },
+          });
+          console.log(`✅ Updated campaign ${campaignId}: +${campaignMessageCount} read`);
+        } catch (error) {
+          console.error(`Error updating campaign ${campaignId} readCount:`, error);
+        }
+      }
+    }
   } catch (error) {
     console.error('Error handling read receipt:', error);
   }
