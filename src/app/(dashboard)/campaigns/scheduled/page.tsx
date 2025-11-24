@@ -63,6 +63,7 @@ export default function ScheduledCampaignsPage() {
   const [sendNowDialogOpen, setSendNowDialogOpen] = useState(false);
   const [campaignToSendNow, setCampaignToSendNow] = useState<string | null>(null);
   const [isSending, setIsSending] = useState(false);
+  const [recipientCounts, setRecipientCounts] = useState<Record<string, number>>({});
 
   useEffect(() => {
     fetchScheduledCampaigns();

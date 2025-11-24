@@ -117,7 +117,7 @@ export default function CampaignDetailPage() {
       const currentStatus = currentCampaign?.status;
       
       // Poll if sending, or if recently completed (to catch final state)
-      if (currentStatus === 'SENDING' || (currentStatus === 'COMPLETED' && !currentCampaign.completedAt)) {
+      if (currentStatus === 'SENDING' || (currentStatus === 'COMPLETED' && currentCampaign && !(currentCampaign as any).completedAt)) {
         fetchCampaign();
       }
     }, 2000); // Poll every 2 seconds for faster updates
