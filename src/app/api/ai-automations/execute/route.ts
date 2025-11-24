@@ -18,7 +18,7 @@ export async function POST(request: NextRequest) {
     }
 
     const body = await request.json();
-    const { ruleId } = body;
+    const { ruleId, bypassCooldown } = body;
 
     if (!ruleId) {
       return NextResponse.json(
@@ -149,23 +149,29 @@ export async function POST(request: NextRequest) {
     const stoppedIds = stoppedContactIds.map(s => s.contactId);
     eligibleContacts = eligibleContacts.filter(c => !stoppedIds.includes(c.id));
 
-    // Check cooldown - don't send to same contact within last 12 hours
-    const cooldownDate = new Date(now.getTime() - 12 * 60 * 60 * 1000);
-    const recentExecutions = await prisma.aIAutomationExecution.findMany({
-      where: {
-        ruleId: rule.id,
-        executedAt: {
-          gte: cooldownDate,
+    // Check cooldown - don't send to same contact within last 12 hours (unless bypassed for manual testing)
+    let recentContactIds: string[] = [];
+    if (!bypassCooldown) {
+      const cooldownDate = new Date(now.getTime() - 12 * 60 * 60 * 1000);
+      const recentExecutions = await prisma.aIAutomationExecution.findMany({
+        where: {
+          ruleId: rule.id,
+          executedAt: {
+            gte: cooldownDate,
+          },
+          status: 'sent',
         },
-        status: 'sent',
-      },
-      select: {
-        contactId: true,
-      },
-    });
+        select: {
+          contactId: true,
+        },
+      });
 
-    const recentContactIds = recentExecutions.map(e => e.contactId);
-    eligibleContacts = eligibleContacts.filter(c => !recentContactIds.includes(c.id));
+      recentContactIds = recentExecutions.map(e => e.contactId);
+      eligibleContacts = eligibleContacts.filter(c => !recentContactIds.includes(c.id));
+      console.log(`[AI Automations] Cooldown check: ${recentContactIds.length} contacts in cooldown period`);
+    } else {
+      console.log(`[AI Automations] Cooldown check bypassed for manual testing`);
+    }
 
     console.log(`[AI Automations] Found ${eligibleContacts.length} eligible contacts after filters`);
 
@@ -194,9 +200,11 @@ export async function POST(request: NextRequest) {
         console.log(`[AI Automations] Processing contact: ${contact.firstName} (${contact.id})`);
 
         // ⭐ CONFLICT PREVENTION: Check if contact is eligible
+        // For manual testing, we can bypass the "recently contacted" check
         const eligibilityCheck = await isContactEligibleForAutomation(
           contact.id,
-          rule.excludeTags
+          rule.excludeTags,
+          bypassCooldown // Pass bypass flag to skip recent contact check
         );
 
         if (!eligibilityCheck.eligible) {

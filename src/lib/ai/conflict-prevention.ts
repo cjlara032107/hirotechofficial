@@ -170,7 +170,8 @@ export async function isContactInActiveChatSession(contactId: string): Promise<b
  */
 export async function isContactEligibleForAutomation(
   contactId: string,
-  excludedTags: string[] = []
+  excludedTags: string[] = [],
+  bypassRecentContactCheck: boolean = false
 ): Promise<{
   eligible: boolean;
   reason?: string;
@@ -184,8 +185,8 @@ export async function isContactEligibleForAutomation(
       };
     }
 
-    // Check 2: Recently contacted?
-    if (await wasContactRecentlyContacted(contactId, 12)) {
+    // Check 2: Recently contacted? (can be bypassed for manual testing)
+    if (!bypassRecentContactCheck && await wasContactRecentlyContacted(contactId, 12)) {
       return {
         eligible: false,
         reason: 'Contact was messaged within last 12 hours',

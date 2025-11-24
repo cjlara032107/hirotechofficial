@@ -191,7 +191,10 @@ export default function AIAutomationsPage() {
       const response = await fetch('/api/ai-automations/execute', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ruleId: id })
+        body: JSON.stringify({ 
+          ruleId: id,
+          bypassCooldown: true // Bypass cooldown for manual testing
+        })
       });
 
       const data = await response.json();
