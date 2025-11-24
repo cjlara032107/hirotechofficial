@@ -10,7 +10,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Switch } from '@/components/ui/switch';
 import { Badge } from '@/components/ui/badge';
 import { toast } from 'sonner';
-import { Loader2, X } from 'lucide-react';
+import { Loader2, X, AlertCircle } from 'lucide-react';
 
 interface FacebookPage {
   id: string;
@@ -439,12 +439,22 @@ export function CreateRuleDialog({ open, onOpenChange, onSuccess }: CreateRuleDi
                 preview = `${totalMinutes} minute${totalMinutes !== 1 ? 's' : ''}`;
               }
 
+              // Check if interval is very short (less than 1 hour)
+              const intervalInMinutes = totalMs / (60 * 1000);
+              const isShortInterval = intervalInMinutes < 60;
+              
               return (
                 <div className="p-3 bg-muted/50 rounded-lg border border-border/50">
                   <p className="text-sm font-medium">⏰ Total Duration: {preview}</p>
                   <p className="text-xs text-muted-foreground mt-1">
                     Messages will be sent after contacts have been inactive for this duration
                   </p>
+                  {isShortInterval && (
+                    <p className="text-xs text-amber-600 dark:text-amber-400 mt-2 flex items-center gap-1">
+                      <AlertCircle className="w-3 h-3" />
+                      Note: A 12-hour cooldown applies between messages to the same contact, regardless of interval
+                    </p>
+                  )}
                 </div>
               );
             })()}
