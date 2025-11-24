@@ -11,8 +11,13 @@ export const maxDuration = 300; // 5 minutes max execution time
 export async function GET(request: NextRequest) {
   try {
     // Verify cron secret if set (security for production)
+    // Vercel cron jobs send a special header, so we allow those
     const authHeader = request.headers.get('authorization');
-    if (process.env.CRON_SECRET && authHeader !== `Bearer ${process.env.CRON_SECRET}`) {
+    const isVercelCron = request.headers.get('x-vercel-cron') === '1';
+    const cronSecret = process.env.CRON_SECRET;
+    
+    // Allow Vercel cron jobs or requests with valid secret
+    if (cronSecret && !isVercelCron && authHeader !== `Bearer ${cronSecret}`) {
       console.log('[AI Automations Cron] Unauthorized request');
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
