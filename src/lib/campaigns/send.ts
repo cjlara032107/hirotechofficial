@@ -42,10 +42,15 @@ async function sendMessageDirect(data: {
       },
     });
 
-    await prisma.campaign.update({
-      where: { id: campaignId },
-      data: { failedCount: { increment: 1 } },
-    });
+    // Update failedCount atomically
+    try {
+      await prisma.campaign.update({
+        where: { id: campaignId },
+        data: { failedCount: { increment: 1 } },
+      });
+    } catch (updateError) {
+      console.error(`Failed to update failedCount for campaign ${campaignId}:`, updateError);
+    }
 
     return { success: false, error };
   }
@@ -79,10 +84,16 @@ async function sendMessageDirect(data: {
         },
       });
 
-      await prisma.campaign.update({
-        where: { id: campaignId },
-        data: { sentCount: { increment: 1 } },
-      });
+      // Update sentCount atomically
+      try {
+        await prisma.campaign.update({
+          where: { id: campaignId },
+          data: { sentCount: { increment: 1 } },
+        });
+      } catch (error) {
+        // If update fails, log but don't fail the message send
+        console.error(`Failed to update sentCount for campaign ${campaignId}:`, error);
+      }
 
       await prisma.contactActivity.create({
         data: {
@@ -109,12 +120,17 @@ async function sendMessageDirect(data: {
         },
       });
 
+    // Update failedCount atomically
+    try {
       await prisma.campaign.update({
         where: { id: campaignId },
         data: { failedCount: { increment: 1 } },
       });
+    } catch (error) {
+      console.error(`Failed to update failedCount for campaign ${campaignId}:`, error);
+    }
 
-      return { success: false, error: 'error' in result ? result.error : 'Unknown error' };
+    return { success: false, error: 'error' in result ? result.error : 'Unknown error' };
     }
   } catch (error: any) {
     await prisma.message.create({
@@ -131,10 +147,15 @@ async function sendMessageDirect(data: {
       },
     });
 
-    await prisma.campaign.update({
-      where: { id: campaignId },
-      data: { failedCount: { increment: 1 } },
-    });
+    // Update failedCount atomically
+    try {
+      await prisma.campaign.update({
+        where: { id: campaignId },
+        data: { failedCount: { increment: 1 } },
+      });
+    } catch (updateError) {
+      console.error(`Failed to update failedCount for campaign ${campaignId}:`, updateError);
+    }
 
     return { success: false, error: error.message };
   }
@@ -191,17 +212,20 @@ async function sendMessagesInBackground(
           batch.map(message => sendMessageDirect(message))
         );
 
-        // Count successes and failures
+        // Count successes and failures accurately
         results.forEach((result, index) => {
-          if (result.status === 'fulfilled' && result.value.success) {
-            successCount++;
-          } else {
-            failCount++;
-            if (result.status === 'rejected') {
-              console.error(`❌ Message ${i + index + 1} failed:`, result.reason);
-            } else if (result.status === 'fulfilled') {
-              console.error(`❌ Message ${i + index + 1} failed:`, result.value.error);
+          if (result.status === 'fulfilled') {
+            // Only count as failure if result.value.success is explicitly false
+            if (result.value.success === true) {
+              successCount++;
+            } else {
+              failCount++;
+              console.error(`❌ Message ${i + index + 1} failed:`, result.value.error || 'Unknown error');
             }
+          } else {
+            // Promise was rejected
+            failCount++;
+            console.error(`❌ Message ${i + index + 1} rejected:`, result.reason);
           }
         });
 

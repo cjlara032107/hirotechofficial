@@ -1,11 +1,20 @@
 import { PrismaClient } from '@prisma/client';
 
 const prismaClientSingleton = () => {
+  // Enhance DATABASE_URL with connection pool settings if not already present
+  let databaseUrl = process.env.DATABASE_URL || '';
+  
+  // Add connection pool parameters if using Supabase pooler
+  if (databaseUrl.includes('pooler.supabase.com') && !databaseUrl.includes('connection_limit')) {
+    const separator = databaseUrl.includes('?') ? '&' : '?';
+    databaseUrl = `${databaseUrl}${separator}connection_limit=10&pool_timeout=20&connect_timeout=10`;
+  }
+  
   return new PrismaClient({
     log: process.env.NODE_ENV === 'development' ? ['warn', 'error'] : ['error'],
     datasources: {
       db: {
-        url: process.env.DATABASE_URL,
+        url: databaseUrl,
       },
     },
   });

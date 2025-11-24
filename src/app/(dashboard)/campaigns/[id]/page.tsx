@@ -120,7 +120,7 @@ export default function CampaignDetailPage() {
       if (currentStatus === 'SENDING' || (currentStatus === 'COMPLETED' && currentCampaign && !(currentCampaign as any).completedAt)) {
         fetchCampaign();
       }
-    }, 2000); // Poll every 2 seconds for faster updates
+    }, 1000); // Poll every 1 second for real-time updates during sending
 
     return () => clearInterval(interval);
   }, [params.id, fetchCampaign]); // Now includes fetchCampaign which is stable due to useCallback
