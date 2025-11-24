@@ -37,6 +37,8 @@ interface ContactData {
   nextTriggerTime: string;
   isEligible: boolean;
   isStopped: boolean;
+  isInCooldown?: boolean;
+  cooldownExpiresAt?: string | null;
   stopInfo: {
     reason: string;
     followUpsSent: number;
@@ -155,8 +157,8 @@ export function RuleDetailsDialog({
     return `${first}${last}`;
   };
 
-  const eligibleContacts = contacts.filter(c => c.isEligible && !c.isStopped);
-  const ineligibleContacts = contacts.filter(c => !c.isEligible && !c.isStopped);
+  const eligibleContacts = contacts.filter(c => c.isEligible && !c.isStopped && !c.isInCooldown);
+  const ineligibleContacts = contacts.filter(c => (!c.isEligible || c.isInCooldown) && !c.isStopped);
   const stoppedContacts = contacts.filter(c => c.isStopped);
 
   return (
@@ -429,9 +431,14 @@ function ContactCard({ contact, formatTimeUntil, getContactInitials }: ContactCa
                 Stopped
               </Badge>
             )}
-            {contact.isEligible && !contact.isStopped && (
+            {contact.isEligible && !contact.isStopped && !contact.isInCooldown && (
               <Badge variant="default" className="bg-green-600 text-xs">
                 Ready
+              </Badge>
+            )}
+            {contact.isInCooldown && !contact.isStopped && (
+              <Badge variant="secondary" className="bg-yellow-500 text-xs">
+                In Cooldown
               </Badge>
             )}
           </div>
@@ -443,14 +450,26 @@ function ContactCard({ contact, formatTimeUntil, getContactInitials }: ContactCa
             </div>
             <div className="flex items-center gap-1">
               <Clock className="w-3 h-3" />
-              {contact.isEligible
+              {contact.isInCooldown && contact.cooldownExpiresAt
+                ? `Cooldown expires in ${formatTimeUntil(contact.timeUntilTriggerMs)}`
+                : contact.isEligible
                 ? `Eligible for ${formatTimeUntil(contact.timeSinceEligibleMs)}`
                 : `Triggers in ${formatTimeUntil(contact.timeUntilTriggerMs)}`}
             </div>
+            {contact.isInCooldown && contact.cooldownExpiresAt && (
+              <div className="flex items-center gap-1 mt-1 p-2 bg-yellow-500/10 rounded border border-yellow-500/20">
+                <Clock className="w-3 h-3 text-yellow-600" />
+                <span className="text-xs font-medium text-yellow-700">
+                  Cooldown until: {format(new Date(contact.cooldownExpiresAt), 'MMM d, yyyy h:mm a')}
+                </span>
+              </div>
+            )}
             <div className="flex items-center gap-1 mt-2 p-2 bg-muted/50 rounded border border-border/50">
               <Calendar className="w-3 h-3 text-primary" />
               <span className="font-medium text-foreground">
-                Next message due: {format(new Date(contact.nextTriggerTime), 'MMM d, yyyy h:mm a')}
+                {contact.isInCooldown && contact.cooldownExpiresAt
+                  ? `Next eligible: ${format(new Date(contact.cooldownExpiresAt), 'MMM d, yyyy h:mm a')}`
+                  : `Next message due: ${format(new Date(contact.nextTriggerTime), 'MMM d, yyyy h:mm a')}`}
               </span>
             </div>
             {contact.stopInfo && (

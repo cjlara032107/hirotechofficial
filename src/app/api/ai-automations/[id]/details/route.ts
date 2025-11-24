@@ -131,8 +131,8 @@ export async function GET(
       stoppedContacts.map(s => [s.contactId, s])
     );
 
-    // Get recent executions for each contact
-    const recentExecutions = await prisma.aIAutomationExecution.findMany({
+    // Get recent executions for each contact (all executions, not just recent)
+    const allExecutions = await prisma.aIAutomationExecution.findMany({
       where: {
         ruleId: rule.id,
         contactId: {
@@ -146,31 +146,80 @@ export async function GET(
     });
 
     // Group executions by contact
-    const executionsByContact = new Map<string, typeof recentExecutions>();
-    for (const execution of recentExecutions) {
+    const executionsByContact = new Map<string, typeof allExecutions>();
+    for (const execution of allExecutions) {
       if (!executionsByContact.has(execution.contactId)) {
         executionsByContact.set(execution.contactId, []);
       }
       executionsByContact.get(execution.contactId)!.push(execution);
     }
 
+    // Check cooldown period (12 hours)
+    const cooldownMs = 12 * 60 * 60 * 1000;
+    const cooldownDate = new Date(now.getTime() - cooldownMs);
+    const recentExecutionsForCooldown = await prisma.aIAutomationExecution.findMany({
+      where: {
+        ruleId: rule.id,
+        executedAt: {
+          gte: cooldownDate,
+        },
+        status: 'sent',
+        contactId: {
+          in: matchingContacts.map(c => c.id),
+        },
+      },
+      select: {
+        contactId: true,
+        executedAt: true,
+      },
+    });
+
+    // Create map of contactId -> last execution time (for cooldown)
+    const lastExecutionByContact = new Map<string, Date>();
+    for (const exec of recentExecutionsForCooldown) {
+      const existing = lastExecutionByContact.get(exec.contactId);
+      if (!existing || exec.executedAt > existing) {
+        lastExecutionByContact.set(exec.contactId, exec.executedAt);
+      }
+    }
+
     // Process contacts and calculate trigger times
     const contactsData = matchingContacts.map(contact => {
       const lastInteraction = contact.lastInteraction || contact.createdAt;
       const nextTriggerTime = new Date(lastInteraction.getTime() + thresholdMs);
-      const isEligible = now >= nextTriggerTime;
       const isStopped = stoppedContactIds.has(contact.id);
       const stopInfo = stoppedMap.get(contact.id);
       const executions = executionsByContact.get(contact.id) || [];
+      
+      // Check if contact is in cooldown
+      const lastExecution = lastExecutionByContact.get(contact.id);
+      const isInCooldown = lastExecution !== undefined;
+      const cooldownExpiresAt = lastExecution 
+        ? new Date(lastExecution.getTime() + cooldownMs)
+        : null;
+      
+      // Contact is eligible if:
+      // 1. Time interval has passed (now >= nextTriggerTime)
+      // 2. Not stopped
+      // 3. Not in cooldown (or cooldown has expired)
+      const timeIntervalPassed = now >= nextTriggerTime;
+      const cooldownExpired = !isInCooldown || (cooldownExpiresAt && now >= cooldownExpiresAt);
+      const isEligible = timeIntervalPassed && !isStopped && cooldownExpired;
 
       // Calculate time until trigger or time since eligible
-      const timeUntilTrigger = isEligible 
-        ? 0 
-        : Math.max(0, nextTriggerTime.getTime() - now.getTime());
+      let timeUntilTrigger = 0;
+      let timeSinceEligible = 0;
       
-      const timeSinceEligible = isEligible
-        ? Math.max(0, now.getTime() - nextTriggerTime.getTime())
-        : 0;
+      if (isInCooldown && cooldownExpiresAt && now < cooldownExpiresAt) {
+        // In cooldown - show time until cooldown expires
+        timeUntilTrigger = Math.max(0, cooldownExpiresAt.getTime() - now.getTime());
+      } else if (timeIntervalPassed) {
+        // Time interval passed, eligible (or was eligible)
+        timeSinceEligible = Math.max(0, now.getTime() - nextTriggerTime.getTime());
+      } else {
+        // Time interval not passed yet
+        timeUntilTrigger = Math.max(0, nextTriggerTime.getTime() - now.getTime());
+      }
 
       return {
         id: contact.id,
@@ -182,6 +231,8 @@ export async function GET(
         nextTriggerTime: nextTriggerTime.toISOString(),
         isEligible,
         isStopped,
+        isInCooldown,
+        cooldownExpiresAt: cooldownExpiresAt?.toISOString() || null,
         stopInfo: stopInfo ? {
           reason: stopInfo.stoppedReason,
           followUpsSent: stopInfo.followUpsSent,
