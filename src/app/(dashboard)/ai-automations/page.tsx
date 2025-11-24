@@ -262,11 +262,34 @@ export default function AIAutomationsPage() {
   };
 
   const getTimeIntervalText = (rule: Rule) => {
-    const parts = [];
-    if (rule.timeIntervalDays) parts.push(`${rule.timeIntervalDays}d`);
-    if (rule.timeIntervalHours) parts.push(`${rule.timeIntervalHours}h`);
-    if (rule.timeIntervalMinutes) parts.push(`${rule.timeIntervalMinutes}m`);
-    return parts.join(' ') || 'Not set';
+    const days = rule.timeIntervalDays || 0;
+    const hours = rule.timeIntervalHours || 0;
+    const minutes = rule.timeIntervalMinutes || 0;
+    
+    if (days === 0 && hours === 0 && minutes === 0) {
+      return 'Not set';
+    }
+
+    const totalMs = days * 24 * 60 * 60 * 1000 + hours * 60 * 60 * 1000 + minutes * 60 * 1000;
+    const totalHours = Math.floor(totalMs / (60 * 60 * 1000));
+    const totalMinutes = Math.floor((totalMs % (60 * 60 * 1000)) / (60 * 1000));
+    const totalDays = Math.floor(totalHours / 24);
+    const remainingHours = totalHours % 24;
+
+    // Format in a user-friendly way
+    if (totalDays > 0) {
+      if (remainingHours > 0) {
+        return `${totalDays}d ${remainingHours}h`;
+      }
+      return `${totalDays} day${totalDays !== 1 ? 's' : ''}`;
+    } else if (totalHours > 0) {
+      if (totalMinutes > 0) {
+        return `${totalHours}h ${totalMinutes}m`;
+      }
+      return `${totalHours} hour${totalHours !== 1 ? 's' : ''}`;
+    } else {
+      return `${totalMinutes} minute${totalMinutes !== 1 ? 's' : ''}`;
+    }
   };
 
   // Filtered rules based on search query
