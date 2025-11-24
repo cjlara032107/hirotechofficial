@@ -213,10 +213,47 @@ async function executeFastSync(jobId: string, facebookPageId: string): Promise<v
       const messengerConvos = await client.getMessengerConversations(page.pageId);
       console.log(`[Fast Sync ${jobId}] Fetched ${messengerConvos.length} Messenger conversations`);
 
+      // Validate conversations array
+      if (!Array.isArray(messengerConvos)) {
+        throw new Error(`Expected array of conversations but got: ${typeof messengerConvos}`);
+      }
+
+      if (messengerConvos.length === 0) {
+        console.warn(`[Fast Sync ${jobId}] No Messenger conversations found for page ${page.pageId}. The page may not have any conversations yet.`);
+        // Still mark as completed, just with 0 contacts
+      }
+
       // Collect all unique participants from all conversations
       const participantMap = new Map<string, ParticipantInfo>();
+      let conversationsWithNoParticipants = 0;
+      
       for (const convo of messengerConvos) {
+        // Validate conversation structure
+        if (!convo || typeof convo !== 'object') {
+          console.warn(`[Fast Sync ${jobId}] Skipping invalid conversation:`, convo);
+          continue;
+        }
+
+        // Validate participants structure
+        if (!convo.participants || !convo.participants.data || !Array.isArray(convo.participants.data)) {
+          console.warn(`[Fast Sync ${jobId}] Conversation ${convo.id} has no valid participants data`);
+          conversationsWithNoParticipants++;
+          continue;
+        }
+
+        // Validate updated_time exists
+        if (!convo.updated_time) {
+          console.warn(`[Fast Sync ${jobId}] Conversation ${convo.id} has no updated_time`);
+          continue;
+        }
+
         for (const participant of convo.participants.data) {
+          // Validate participant structure
+          if (!participant || !participant.id) {
+            console.warn(`[Fast Sync ${jobId}] Skipping invalid participant in conversation ${convo.id}:`, participant);
+            continue;
+          }
+
           if (participant.id === page.pageId) continue; // Skip page itself
           
           const existing = participantMap.get(participant.id);
@@ -231,8 +268,16 @@ async function executeFastSync(jobId: string, facebookPageId: string): Promise<v
         }
       }
 
+      if (conversationsWithNoParticipants > 0) {
+        console.warn(`[Fast Sync ${jobId}] ${conversationsWithNoParticipants} conversations had no valid participants data`);
+      }
+
       const participantList = Array.from(participantMap.values());
-      console.log(`[Fast Sync ${jobId}] Found ${participantList.length} unique Messenger participants`);
+      console.log(`[Fast Sync ${jobId}] Found ${participantList.length} unique Messenger participants from ${messengerConvos.length} conversations`);
+
+      if (participantList.length === 0 && messengerConvos.length > 0) {
+        console.warn(`[Fast Sync ${jobId}] WARNING: Found ${messengerConvos.length} conversations but 0 participants. This might indicate an issue with the Facebook API response format.`);
+      }
 
       // Batch fetch existing contacts for early skip checks
       const participantIds = participantList.map(p => p.participantId);
@@ -285,6 +330,11 @@ async function executeFastSync(jobId: string, facebookPageId: string): Promise<v
           batch.map(participant =>
             contactLimiter.execute(async () => {
               try {
+                // Validate participant data
+                if (!participant || !participant.participantId) {
+                  throw new Error('Invalid participant data: missing participantId');
+                }
+
                 // Extract name
                 let firstName = `User ${participant.participantId.slice(-6)}`;
                 let lastName: string | null = null;
@@ -295,6 +345,19 @@ async function executeFastSync(jobId: string, facebookPageId: string): Promise<v
                   if (nameParts.length > 1) {
                     lastName = nameParts.slice(1).join(' ');
                   }
+                }
+
+                // Validate updatedTime
+                let lastInteraction: Date;
+                try {
+                  lastInteraction = new Date(participant.updatedTime);
+                  if (isNaN(lastInteraction.getTime())) {
+                    console.warn(`[Fast Sync ${jobId}] Invalid updatedTime for participant ${participant.participantId}, using current date`);
+                    lastInteraction = new Date();
+                  }
+                } catch {
+                  console.warn(`[Fast Sync ${jobId}] Error parsing updatedTime for participant ${participant.participantId}, using current date`);
+                  lastInteraction = new Date();
                 }
 
                 // Upsert contact (no AI analysis, no pipeline assignment)
@@ -312,12 +375,12 @@ async function executeFastSync(jobId: string, facebookPageId: string): Promise<v
                     hasMessenger: true,
                     organizationId: page.organizationId,
                     facebookPageId: page.id,
-                    lastInteraction: new Date(participant.updatedTime),
+                    lastInteraction,
                   },
                   update: {
                     firstName,
                     lastName,
-                    lastInteraction: new Date(participant.updatedTime),
+                    lastInteraction,
                     hasMessenger: true,
                   },
                 });
@@ -327,9 +390,13 @@ async function executeFastSync(jobId: string, facebookPageId: string): Promise<v
                 failedCount++;
                 const errorMessage = error instanceof Error ? error.message : 'Unknown error';
                 const errorCode = error instanceof FacebookApiError ? error.code : undefined;
+                const participantId = participant?.participantId || 'unknown';
+                
+                console.error(`[Fast Sync ${jobId}] Failed to sync Messenger contact ${participantId}:`, error);
+                
                 errors.push({
                   platform: 'Messenger',
-                  id: participant.participantId,
+                  id: participantId,
                   error: errorMessage,
                   code: errorCode,
                 });
@@ -360,12 +427,33 @@ async function executeFastSync(jobId: string, facebookPageId: string): Promise<v
         tokenExpired = true;
       }
 
-      console.error(`[Fast Sync ${jobId}] Failed to fetch Messenger conversations:`, error);
+      console.error(`[Fast Sync ${jobId}] Failed to fetch Messenger conversations for page ${page.pageId}:`, error);
+      
+      // Log detailed error information
+      if (error instanceof Error) {
+        console.error(`[Fast Sync ${jobId}] Error details:`, {
+          message: error.message,
+          stack: error.stack,
+          name: error.name,
+        });
+      }
+      
       errors.push({
         platform: 'Messenger',
         id: 'conversations',
         error: errorMessage,
         code: errorCode,
+      });
+
+      // Update job status to indicate conversation fetch failure
+      await prisma.syncJob.update({
+        where: { id: jobId },
+        data: {
+          status: tokenExpired ? 'FAILED' : 'FAILED',
+          errors: errors.length > 0 ? errors : Prisma.JsonNull,
+          tokenExpired,
+          completedAt: new Date(),
+        },
       });
     }
 
@@ -376,10 +464,47 @@ async function executeFastSync(jobId: string, facebookPageId: string): Promise<v
         const igConvos = await client.getInstagramConversations(page.instagramAccountId);
         console.log(`[Fast Sync ${jobId}] Fetched ${igConvos.length} Instagram conversations`);
 
+        // Validate conversations array
+        if (!Array.isArray(igConvos)) {
+          console.error(`[Fast Sync ${jobId}] Expected array of IG conversations but got: ${typeof igConvos}`);
+          throw new Error(`Invalid Instagram conversations data type: ${typeof igConvos}`);
+        }
+
+        if (igConvos.length === 0) {
+          console.warn(`[Fast Sync ${jobId}] No Instagram conversations found for account ${page.instagramAccountId}.`);
+        }
+
         // Collect all unique participants
         const igParticipantMap = new Map<string, ParticipantInfo>();
+        let igConversationsWithNoParticipants = 0;
+        
         for (const convo of igConvos) {
+          // Validate conversation structure
+          if (!convo || typeof convo !== 'object') {
+            console.warn(`[Fast Sync ${jobId}] Skipping invalid IG conversation:`, convo);
+            continue;
+          }
+
+          // Validate participants structure
+          if (!convo.participants || !convo.participants.data || !Array.isArray(convo.participants.data)) {
+            console.warn(`[Fast Sync ${jobId}] IG Conversation ${convo.id} has no valid participants data`);
+            igConversationsWithNoParticipants++;
+            continue;
+          }
+
+          // Validate updated_time exists
+          if (!convo.updated_time) {
+            console.warn(`[Fast Sync ${jobId}] IG Conversation ${convo.id} has no updated_time`);
+            continue;
+          }
+
           for (const participant of convo.participants.data) {
+            // Validate participant structure
+            if (!participant || !participant.id) {
+              console.warn(`[Fast Sync ${jobId}] Skipping invalid IG participant in conversation ${convo.id}:`, participant);
+              continue;
+            }
+
             if (participant.id === page.instagramAccountId) continue; // Skip page itself
             
             const existing = igParticipantMap.get(participant.id);
@@ -393,8 +518,16 @@ async function executeFastSync(jobId: string, facebookPageId: string): Promise<v
           }
         }
 
+        if (igConversationsWithNoParticipants > 0) {
+          console.warn(`[Fast Sync ${jobId}] ${igConversationsWithNoParticipants} IG conversations had no valid participants data`);
+        }
+
         const igParticipantList = Array.from(igParticipantMap.values());
-        console.log(`[Fast Sync ${jobId}] Found ${igParticipantList.length} unique Instagram participants`);
+        console.log(`[Fast Sync ${jobId}] Found ${igParticipantList.length} unique Instagram participants from ${igConvos.length} conversations`);
+
+        if (igParticipantList.length === 0 && igConvos.length > 0) {
+          console.warn(`[Fast Sync ${jobId}] WARNING: Found ${igConvos.length} IG conversations but 0 participants. This might indicate an issue with the Facebook API response format.`);
+        }
 
         // Batch fetch existing contacts
         const igParticipantIds = igParticipantList.map(p => p.participantId);
@@ -452,6 +585,11 @@ async function executeFastSync(jobId: string, facebookPageId: string): Promise<v
             batch.map(participant =>
               igContactLimiter.execute(async () => {
                 try {
+                  // Validate participant data
+                  if (!participant || !participant.participantId) {
+                    throw new Error('Invalid participant data: missing participantId');
+                  }
+
                   // Extract name
                   let firstName = `IG User ${participant.participantId.slice(-6)}`;
                   let lastName: string | null = null;
@@ -462,6 +600,19 @@ async function executeFastSync(jobId: string, facebookPageId: string): Promise<v
                     if (nameParts.length > 1) {
                       lastName = nameParts.slice(1).join(' ');
                     }
+                  }
+
+                  // Validate updatedTime
+                  let lastInteraction: Date;
+                  try {
+                    lastInteraction = new Date(participant.updatedTime);
+                    if (isNaN(lastInteraction.getTime())) {
+                      console.warn(`[Fast Sync ${jobId}] Invalid updatedTime for IG participant ${participant.participantId}, using current date`);
+                      lastInteraction = new Date();
+                    }
+                  } catch {
+                    console.warn(`[Fast Sync ${jobId}] Error parsing updatedTime for IG participant ${participant.participantId}, using current date`);
+                    lastInteraction = new Date();
                   }
 
                   // Check if contact exists by Instagram ID or Messenger PSID
@@ -483,7 +634,7 @@ async function executeFastSync(jobId: string, facebookPageId: string): Promise<v
                         firstName,
                         lastName,
                         hasInstagram: true,
-                        lastInteraction: new Date(participant.updatedTime),
+                        lastInteraction,
                       },
                     });
                   } else {
@@ -496,7 +647,7 @@ async function executeFastSync(jobId: string, facebookPageId: string): Promise<v
                         hasInstagram: true,
                         organizationId: page.organizationId,
                         facebookPageId: page.id,
-                        lastInteraction: new Date(participant.updatedTime),
+                        lastInteraction,
                       },
                     });
                   }
@@ -506,9 +657,13 @@ async function executeFastSync(jobId: string, facebookPageId: string): Promise<v
                   failedCount++;
                   const errorMessage = error instanceof Error ? error.message : 'Unknown error';
                   const errorCode = error instanceof FacebookApiError ? error.code : undefined;
+                  const participantId = participant?.participantId || 'unknown';
+                  
+                  console.error(`[Fast Sync ${jobId}] Failed to sync Instagram contact ${participantId}:`, error);
+                  
                   errors.push({
                     platform: 'Instagram',
-                    id: participant.participantId,
+                    id: participantId,
                     error: errorMessage,
                     code: errorCode,
                   });
@@ -539,7 +694,17 @@ async function executeFastSync(jobId: string, facebookPageId: string): Promise<v
           tokenExpired = true;
         }
 
-        console.error(`[Fast Sync ${jobId}] Failed to fetch Instagram conversations:`, error);
+        console.error(`[Fast Sync ${jobId}] Failed to fetch Instagram conversations for account ${page.instagramAccountId}:`, error);
+        
+        // Log detailed error information
+        if (error instanceof Error) {
+          console.error(`[Fast Sync ${jobId}] IG Error details:`, {
+            message: error.message,
+            stack: error.stack,
+            name: error.name,
+          });
+        }
+        
         errors.push({
           platform: 'Instagram',
           id: 'conversations',
