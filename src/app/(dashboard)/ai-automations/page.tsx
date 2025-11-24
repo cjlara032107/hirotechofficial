@@ -197,13 +197,24 @@ export default function AIAutomationsPage() {
       const data = await response.json();
 
       if (response.ok) {
-        toast.success(`Test complete: ${data.sent} sent, ${data.failed} failed`);
+        if (data.sent > 0) {
+          toast.success(`✅ Success! Sent ${data.sent} message(s)${data.failed > 0 ? `. ${data.failed} failed.` : ''}`);
+        } else if (data.failed > 0) {
+          toast.warning(`⚠️ No messages sent. ${data.failed} contact(s) failed eligibility checks. ${data.message || ''}`);
+        } else {
+          toast.info(`ℹ️ ${data.message || 'No eligible contacts found. Check time interval, tags, or cooldown period.'}`);
+        }
         fetchRules();
       } else {
-        toast.error(data.error || 'Test failed');
+        const errorMsg = data.details 
+          ? `${data.error}: ${data.details}`
+          : data.error || 'Test failed';
+        toast.error(errorMsg);
       }
-    } catch {
-      toast.error('Failed to execute test');
+    } catch (err) {
+      const errorMessage = err instanceof Error ? err.message : 'Failed to execute test';
+      toast.error(`Error: ${errorMessage}`);
+      console.error('Test execution error:', err);
     } finally {
       setActionLoading(null);
     }

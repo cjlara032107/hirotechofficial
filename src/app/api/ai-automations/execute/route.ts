@@ -45,7 +45,12 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    console.log(`[AI Automations] Manual execution of rule: ${rule.name}`);
+    console.log(`[AI Automations] Manual execution of rule: ${rule.name} (ID: ${rule.id})`);
+    
+    // Warn if rule is disabled (but allow manual execution for testing)
+    if (!rule.enabled) {
+      console.log(`[AI Automations] Warning: Rule "${rule.name}" is disabled, but allowing manual execution`);
+    }
 
     // Get user's organization
     const user = await prisma.user.findUnique({
@@ -73,9 +78,22 @@ export async function POST(request: NextRequest) {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const whereClause: Record<string, any> = {
       organizationId: user.organizationId,
-      lastInteraction: {
-        lte: thresholdDate,
+      messengerPSID: {
+        not: null,
       },
+      OR: [
+        {
+          lastInteraction: {
+            lte: thresholdDate,
+          },
+        },
+        {
+          lastInteraction: null,
+          createdAt: {
+            lte: thresholdDate,
+          },
+        },
+      ],
     };
 
     // Filter by Facebook page if specified
@@ -108,6 +126,9 @@ export async function POST(request: NextRequest) {
       take: 50, // Limit for manual testing
     });
 
+    const totalBeforeFilters = eligibleContacts.length;
+    console.log(`[AI Automations] Found ${totalBeforeFilters} contacts matching basic criteria`);
+
     // Exclude contacts with excluded tags
     if (rule.excludeTags.length > 0) {
       eligibleContacts = eligibleContacts.filter(contact => {
@@ -128,7 +149,40 @@ export async function POST(request: NextRequest) {
     const stoppedIds = stoppedContactIds.map(s => s.contactId);
     eligibleContacts = eligibleContacts.filter(c => !stoppedIds.includes(c.id));
 
-    console.log(`[AI Automations] Found ${eligibleContacts.length} eligible contacts`);
+    // Check cooldown - don't send to same contact within last 12 hours
+    const cooldownDate = new Date(now.getTime() - 12 * 60 * 60 * 1000);
+    const recentExecutions = await prisma.aIAutomationExecution.findMany({
+      where: {
+        ruleId: rule.id,
+        executedAt: {
+          gte: cooldownDate,
+        },
+        status: 'sent',
+      },
+      select: {
+        contactId: true,
+      },
+    });
+
+    const recentContactIds = recentExecutions.map(e => e.contactId);
+    eligibleContacts = eligibleContacts.filter(c => !recentContactIds.includes(c.id));
+
+    console.log(`[AI Automations] Found ${eligibleContacts.length} eligible contacts after filters`);
+
+    if (eligibleContacts.length === 0) {
+      return NextResponse.json({
+        success: true,
+        sent: 0,
+        failed: 0,
+        total: 0,
+        message: 'No eligible contacts found. Check: time interval, tags, stopped contacts, or cooldown period.',
+        details: {
+          totalBeforeFilters,
+          stoppedCount: stoppedIds.length,
+          recentExecutionsCount: recentContactIds.length,
+        },
+      });
+    }
 
     let sent = 0;
     let failed = 0;
@@ -136,6 +190,8 @@ export async function POST(request: NextRequest) {
     // Process each eligible contact
     for (const contact of eligibleContacts) {
       try {
+        console.log(`[AI Automations] Processing contact: ${contact.firstName} (${contact.id})`);
+
         // ⭐ CONFLICT PREVENTION: Check if contact is eligible
         const eligibilityCheck = await isContactEligibleForAutomation(
           contact.id,
@@ -144,6 +200,7 @@ export async function POST(request: NextRequest) {
 
         if (!eligibilityCheck.eligible) {
           console.log(`[AI Automations] Contact ${contact.id} not eligible: ${eligibilityCheck.reason}`);
+          failed++;
           continue;
         }
 
@@ -203,6 +260,32 @@ export async function POST(request: NextRequest) {
               aiPromptUsed: rule.customPrompt,
               status: 'failed',
               errorMessage: 'Failed to generate AI message',
+              executedAt: new Date(),
+            },
+          });
+          
+          continue;
+        }
+
+        // Verify Facebook page has access token
+        if (!contact.facebookPage?.pageAccessToken) {
+          console.error(`[AI Automations] No access token for Facebook page: ${contact.facebookPage?.id}`);
+          failed++;
+          
+          await prisma.aIAutomationExecution.create({
+            data: {
+              id: `exec_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+              ruleId: rule.id,
+              userId: session.user.id,
+              contactId: contact.id,
+              conversationId: conversation.id,
+              recipientPSID: contact.messengerPSID || 'unknown',
+              recipientName: `${contact.firstName} ${contact.lastName || ''}`.trim(),
+              aiPromptUsed: rule.customPrompt,
+              generatedMessage: aiResult.message,
+              aiReasoning: aiResult.reasoning,
+              status: 'failed',
+              errorMessage: 'Facebook page access token missing',
               executedAt: new Date(),
             },
           });
@@ -305,11 +388,20 @@ export async function POST(request: NextRequest) {
       sent,
       failed,
       total: eligibleContacts.length,
+      message: sent > 0 
+        ? `Successfully sent ${sent} message(s). ${failed > 0 ? `${failed} failed.` : ''}`
+        : failed > 0
+        ? `No messages sent. ${failed} contact(s) failed eligibility checks.`
+        : 'No eligible contacts found.',
     });
   } catch (error) {
     console.error('[AI Automations] Execute error:', error);
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error occurred';
     return NextResponse.json(
-      { error: 'Failed to execute automation rule' },
+      { 
+        error: 'Failed to execute automation rule',
+        details: errorMessage,
+      },
       { status: 500 }
     );
   }
