@@ -132,15 +132,17 @@ export async function hasExcludedTags(
  */
 export async function isContactInActiveChatSession(contactId: string): Promise<boolean> {
   try {
-    // Check for recent messages (within last 2 hours)
-    const twoHoursAgo = new Date();
-    twoHoursAgo.setHours(twoHoursAgo.getHours() - 2);
+    // Check for recent messages FROM the contact (not from business)
+    // This prevents interrupting when the customer is actively chatting
+    const thirtyMinutesAgo = new Date();
+    thirtyMinutesAgo.setMinutes(thirtyMinutesAgo.getMinutes() - 30);
 
-    const recentActivity = await prisma.message.findFirst({
+    const recentContactMessage = await prisma.message.findFirst({
       where: {
         contactId,
+        isFromBusiness: false, // Only check messages FROM the contact
         createdAt: {
-          gte: twoHoursAgo,
+          gte: thirtyMinutesAgo,
         },
       },
       orderBy: {
@@ -148,19 +150,11 @@ export async function isContactInActiveChatSession(contactId: string): Promise<b
       },
     });
 
-    // If there's recent activity (within 2 hours), consider it an active session
-    if (recentActivity) {
-      const timeDiff = new Date().getTime() - recentActivity.createdAt.getTime();
-      const minutesAgo = Math.floor(timeDiff / (1000 * 60));
-      
-      // Active if last message was within 30 minutes
-      return minutesAgo <= 30;
-    }
-
-    return false;
+    // If contact sent a message within last 30 minutes, they're actively chatting
+    return !!recentContactMessage;
   } catch (error) {
     console.error('[Conflict Prevention] Error checking chat session:', error);
-    return false;
+    return false; // Fail open - allow automation
   }
 }
 
@@ -209,8 +203,9 @@ export async function isContactEligibleForAutomation(
       };
     }
 
-    // Check 5: In active chat session?
-    if (await isContactInActiveChatSession(contactId)) {
+    // Check 5: In active chat session? (can be bypassed for manual testing)
+    // Only check if not bypassing - manual testing should allow sending even if contact recently messaged
+    if (!bypassRecentContactCheck && await isContactInActiveChatSession(contactId)) {
       return {
         eligible: false,
         reason: 'Contact is in active chat session',

@@ -170,11 +170,15 @@ export async function GET(request: NextRequest) {
           take: remainingQuota, // Respect daily limit
         });
 
+        const beforeTagFilter = eligibleContacts.length;
+        console.log(`[AI Automations Cron] Rule "${rule.name}" - Found ${beforeTagFilter} contacts matching time interval`);
+
         // Exclude contacts with excluded tags
         if (rule.excludeTags.length > 0) {
           eligibleContacts = eligibleContacts.filter(contact => {
             return !rule.excludeTags.some(tag => contact.tags.includes(tag));
           });
+          console.log(`[AI Automations Cron] After exclude tags filter: ${eligibleContacts.length} contacts`);
         }
 
         // Filter out contacts that have been stopped for this rule
@@ -188,7 +192,9 @@ export async function GET(request: NextRequest) {
         });
 
         const stoppedIds = stoppedContactIds.map(s => s.contactId);
+        const beforeStoppedFilter = eligibleContacts.length;
         eligibleContacts = eligibleContacts.filter(c => !stoppedIds.includes(c.id));
+        console.log(`[AI Automations Cron] After stopped filter: ${eligibleContacts.length} contacts (${stoppedIds.length} stopped)`);
 
         // Check cooldown - don't send to same contact within last 12 hours
         const cooldownDate = new Date(now.getTime() - 12 * 60 * 60 * 1000);
@@ -206,10 +212,13 @@ export async function GET(request: NextRequest) {
         });
 
         const recentContactIds = recentExecutions.map(e => e.contactId);
+        const beforeCooldownFilter = eligibleContacts.length;
         eligibleContacts = eligibleContacts.filter(c => !recentContactIds.includes(c.id));
+        console.log(`[AI Automations Cron] After cooldown filter: ${eligibleContacts.length} contacts (${recentContactIds.length} in cooldown)`);
 
         if (eligibleContacts.length === 0) {
-          console.log(`[AI Automations Cron] Rule "${rule.name}" - No eligible contacts`);
+          console.log(`[AI Automations Cron] Rule "${rule.name}" - No eligible contacts after all filters`);
+          console.log(`[AI Automations Cron] Filter summary: ${beforeTagFilter} initial → ${beforeStoppedFilter} after tags → ${beforeCooldownFilter} after stopped → 0 after cooldown`);
           continue;
         }
 
@@ -275,14 +284,17 @@ export async function GET(request: NextRequest) {
             }
 
             // Check if contact replied recently (live check)
+            // This is a redundant check since isContactEligibleForAutomation already checks this
+            // But we keep it for additional safety
             const recentContactMessages = messages.filter(msg => !msg.isFromBusiness);
             if (recentContactMessages.length > 0) {
               const lastContactMessage = recentContactMessages[0];
               const timeSinceReply = now.getTime() - lastContactMessage.createdAt.getTime();
               
-              // If contact replied within last hour, skip (they're active)
-              if (timeSinceReply < 60 * 60 * 1000) {
-                console.log(`[AI Automations Cron] Contact ${contact.id} replied recently, skipping`);
+              // If contact replied within last 30 minutes, skip (they're actively chatting)
+              // This matches the isContactInActiveChatSession check
+              if (timeSinceReply < 30 * 60 * 1000) {
+                console.log(`[AI Automations Cron] Contact ${contact.id} replied recently (${Math.floor(timeSinceReply / 60000)} minutes ago), skipping`);
                 continue;
               }
             }
