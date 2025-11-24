@@ -10,8 +10,11 @@ import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Badge } from '@/components/ui/badge';
+import { Checkbox } from '@/components/ui/checkbox';
+import { Switch } from '@/components/ui/switch';
 import { toast } from 'sonner';
 import { MESSAGE_TAGS } from '@/lib/facebook/message-tags';
+import { CalendarIcon, Clock, Search, X, Users, Loader2, RefreshCw } from 'lucide-react';
 
 export default function NewCampaignPage() {
   const router = useRouter();
@@ -26,6 +29,21 @@ export default function NewCampaignPage() {
   const [selectedPageId, setSelectedPageId] = useState('');
   const [creating, setCreating] = useState(false);
   const [loadingPages, setLoadingPages] = useState(true);
+  const [isScheduled, setIsScheduled] = useState(false);
+  const [scheduledDate, setScheduledDate] = useState('');
+  const [scheduledTime, setScheduledTime] = useState('');
+  const [autoFetchEnabled, setAutoFetchEnabled] = useState(false);
+  const [targetContacts, setTargetContacts] = useState<Array<{
+    id: string;
+    firstName: string;
+    lastName: string;
+    email: string | null;
+    phone: string | null;
+    tags: string[];
+  }>>([]);
+  const [excludedContactIds, setExcludedContactIds] = useState<Set<string>>(new Set());
+  const [searchQuery, setSearchQuery] = useState('');
+  const [loadingContacts, setLoadingContacts] = useState(false);
 
   useEffect(() => {
     fetchTags();
@@ -36,6 +54,20 @@ export default function NewCampaignPage() {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Fetch target contacts when settings change
+  useEffect(() => {
+    if (selectedPageId && platform) {
+      // Small delay to ensure state is updated
+      const timer = setTimeout(() => {
+        fetchTargetContacts();
+      }, 100);
+      return () => clearTimeout(timer);
+    } else {
+      setTargetContacts([]);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedPageId, platform, selectedTags]);
 
   const fetchTags = async () => {
     try {
@@ -91,6 +123,77 @@ export default function NewCampaignPage() {
     }
   };
 
+  const fetchTargetContacts = async () => {
+    if (!selectedPageId || !platform) return;
+
+    setLoadingContacts(true);
+    try {
+      const response = await fetch('/api/campaigns/preview-contacts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          facebookPageId: selectedPageId,
+          platform,
+          targetingType: selectedTags.length === 0 ? 'ALL_CONTACTS' : 'TAGS',
+          targetTags: selectedTags,
+        }),
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || 'Failed to fetch contacts');
+      }
+
+      const data = await response.json();
+      setTargetContacts(data.contacts || []);
+      // Reset excluded contacts when contacts list changes
+      setExcludedContactIds(new Set());
+    } catch (error) {
+      console.error('Error fetching target contacts:', error);
+      const err = error as Error;
+      toast.error(err.message || 'Failed to load target contacts');
+    } finally {
+      setLoadingContacts(false);
+    }
+  };
+
+  const handleRemoveContact = (contactId: string) => {
+    setExcludedContactIds((prev) => {
+      const newSet = new Set(prev);
+      newSet.add(contactId);
+      return newSet;
+    });
+  };
+
+  const handleRestoreContact = (contactId: string) => {
+    setExcludedContactIds((prev) => {
+      const newSet = new Set(prev);
+      newSet.delete(contactId);
+      return newSet;
+    });
+  };
+
+  // Filter contacts based on search and exclusions
+  const filteredContacts = targetContacts.filter((contact) => {
+    // Filter by search query
+    if (searchQuery) {
+      const query = searchQuery.toLowerCase();
+      const fullName = `${contact.firstName} ${contact.lastName}`.toLowerCase();
+      const email = (contact.email || '').toLowerCase();
+      const phone = (contact.phone || '').toLowerCase();
+      
+      if (!fullName.includes(query) && !email.includes(query) && !phone.includes(query)) {
+        return false;
+      }
+    }
+    
+    // Filter out excluded contacts
+    return !excludedContactIds.has(contact.id);
+  });
+
+  const displayedContacts = filteredContacts;
+  const excludedCount = excludedContactIds.size;
+
   const handleCreate = async () => {
     if (!name || !messageContent) {
       toast.error('Please fill in all required fields');
@@ -105,6 +208,21 @@ export default function NewCampaignPage() {
     if (platform === 'MESSENGER' && !messageTag) {
       toast.error('Please select a message tag for Messenger campaigns');
       return;
+    }
+
+    // Validate scheduling if enabled
+    if (isScheduled) {
+      if (!scheduledDate || !scheduledTime) {
+        toast.error('Please select both date and time for scheduled campaign');
+        return;
+      }
+
+      // Combine date and time and validate it's in the future
+      const scheduledDateTime = new Date(`${scheduledDate}T${scheduledTime}`);
+      if (scheduledDateTime <= new Date()) {
+        toast.error('Scheduled time must be in the future');
+        return;
+      }
     }
 
     setCreating(true);
@@ -136,6 +254,33 @@ export default function NewCampaignPage() {
 
       const template = await templateRes.json();
 
+      // Prepare scheduledAt if scheduling is enabled
+      let scheduledAt: string | null = null;
+      if (isScheduled && scheduledDate && scheduledTime) {
+        // Create date in local timezone, then convert to ISO (UTC)
+        // The date and time inputs are in user's local timezone
+        const localDateTime = new Date(`${scheduledDate}T${scheduledTime}`);
+        
+        // Validate it's in the future
+        if (localDateTime <= new Date()) {
+          toast.error('Scheduled time must be in the future');
+          setCreating(false);
+          return;
+        }
+        
+        scheduledAt = localDateTime.toISOString();
+      }
+
+      // Prepare target contact IDs (exclude removed contacts)
+      const finalTargetContactIds = targetContacts
+        .filter((contact) => !excludedContactIds.has(contact.id))
+        .map((contact) => contact.id);
+
+      // If contacts were excluded, use SPECIFIC_CONTACTS targeting
+      const finalTargetingType = excludedContactIds.size > 0 
+        ? 'SPECIFIC_CONTACTS' 
+        : (selectedTags.length === 0 ? 'ALL_CONTACTS' : 'TAGS');
+
       // Create campaign - if no tags selected, target all contacts
       const campaignRes = await fetch('/api/campaigns', {
         method: 'POST',
@@ -146,8 +291,11 @@ export default function NewCampaignPage() {
           messageTag: messageTag && messageTag !== 'NONE' ? messageTag : null,
           facebookPageId: selectedPageId,
           templateId: template.id,
-          targetingType: selectedTags.length === 0 ? 'ALL_CONTACTS' : 'TAGS',
+          targetingType: finalTargetingType,
           targetTags: selectedTags,
+          targetContactIds: finalTargetingType === 'SPECIFIC_CONTACTS' ? finalTargetContactIds : undefined,
+          scheduledAt,
+          autoFetchEnabled: isScheduled ? autoFetchEnabled : false, // Only enable for scheduled campaigns
         }),
       });
 
@@ -159,7 +307,21 @@ export default function NewCampaignPage() {
 
       if (campaignRes.ok) {
         const campaign = await campaignRes.json();
-        toast.success('Campaign created successfully');
+        const recipientCount = targetContacts.length - excludedContactIds.size;
+        
+        if (isScheduled && scheduledAt) {
+          if (recipientCount > 0) {
+            toast.success(`Campaign scheduled successfully! It will be sent to ${recipientCount} contact${recipientCount !== 1 ? 's' : ''} at the scheduled time.`);
+          } else {
+            toast.success('Campaign scheduled successfully! Recipients will be determined when the campaign is sent at the scheduled time.');
+          }
+        } else {
+          if (recipientCount > 0) {
+            toast.success(`Campaign created successfully! ${recipientCount} contact${recipientCount !== 1 ? 's' : ''} will receive the message.`);
+          } else {
+            toast.success('Campaign created successfully!');
+          }
+        }
         router.push(`/campaigns/${campaign.id}`);
       } else {
         const data = await campaignRes.json();
@@ -363,6 +525,367 @@ export default function NewCampaignPage() {
               <code className="px-1.5 py-0.5 rounded bg-muted text-foreground">{'{lastName}'}</code>
               <code className="px-1.5 py-0.5 rounded bg-muted text-foreground">{'{name}'}</code>
             </p>
+          </div>
+
+          {/* Target Contacts Preview */}
+          {selectedPageId ? (
+            <div className="space-y-4 pt-2 border-t border-border/50">
+              <div className="flex items-center justify-between">
+                <div>
+                  <Label className="text-sm font-semibold flex items-center gap-2">
+                    <Users className="h-4 w-4" />
+                    Recipients Preview
+                  </Label>
+                  <p className="text-xs text-muted-foreground mt-1">
+                    {loadingContacts ? (
+                      'Loading contacts...'
+                    ) : (
+                      <>
+                        {targetContacts.length > 0 ? (
+                          <>
+                            <span className="font-medium text-foreground">
+                              {displayedContacts.length} of {targetContacts.length} contact{targetContacts.length !== 1 ? 's' : ''}
+                            </span>
+                            {' will receive this message'}
+                            {excludedCount > 0 && (
+                              <span className="text-amber-600 ml-2 font-medium">
+                                ({excludedCount} excluded)
+                              </span>
+                            )}
+                          </>
+                        ) : (
+                          <span className="text-amber-600">
+                            ⚠️ No contacts found matching your criteria. Please check your page selection, platform, and tags.
+                          </span>
+                        )}
+                      </>
+                    )}
+                  </p>
+                </div>
+                <div className="flex items-center gap-2">
+                  {targetContacts.length > 0 && (
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      onClick={fetchTargetContacts}
+                      disabled={loadingContacts}
+                      className="h-8"
+                    >
+                      {loadingContacts ? (
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                      ) : (
+                        'Refresh'
+                      )}
+                    </Button>
+                  )}
+                </div>
+              </div>
+
+              {loadingContacts ? (
+                <div className="p-8 border border-dashed border-border/50 rounded-xl text-center bg-muted/20">
+                  <Loader2 className="h-6 w-6 animate-spin mx-auto mb-2 text-muted-foreground" />
+                  <p className="text-sm text-muted-foreground">Loading contacts...</p>
+                </div>
+              ) : targetContacts.length > 0 ? (
+                <div className="space-y-3">
+                  {/* Search Box */}
+                  <div className="relative">
+                    <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                    <Input
+                      type="text"
+                      placeholder="Search contacts by name, email, or phone..."
+                      value={searchQuery}
+                      onChange={(e) => setSearchQuery(e.target.value)}
+                      className="pl-10 h-11 rounded-xl border-border/50 focus-visible:ring-primary/30"
+                    />
+                  </div>
+
+                  {/* Contacts List */}
+                  <div className="max-h-96 overflow-y-auto border border-border/50 rounded-xl divide-y divide-border/50">
+                    {displayedContacts.length === 0 ? (
+                      <div className="p-6 text-center">
+                        <p className="text-sm text-muted-foreground">
+                          {searchQuery ? 'No contacts match your search' : 'All contacts have been excluded'}
+                        </p>
+                        {excludedCount > 0 && (
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => setExcludedContactIds(new Set())}
+                            className="mt-2"
+                          >
+                            Restore all excluded contacts
+                          </Button>
+                        )}
+                      </div>
+                    ) : (
+                      displayedContacts.map((contact) => (
+                        <div
+                          key={contact.id}
+                          className="p-4 hover:bg-accent/50 transition-colors flex items-center justify-between"
+                        >
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-2 mb-1">
+                              <p className="font-semibold text-sm truncate">
+                                {contact.firstName} {contact.lastName}
+                              </p>
+                              {contact.tags && contact.tags.length > 0 && (
+                                <div className="flex gap-1 flex-wrap">
+                                  {contact.tags.slice(0, 2).map((tag) => (
+                                    <Badge key={tag} variant="secondary" className="text-xs">
+                                      {tag}
+                                    </Badge>
+                                  ))}
+                                  {contact.tags.length > 2 && (
+                                    <Badge variant="secondary" className="text-xs">
+                                      +{contact.tags.length - 2}
+                                    </Badge>
+                                  )}
+                                </div>
+                              )}
+                            </div>
+                            <div className="flex gap-4 text-xs text-muted-foreground">
+                              {contact.email && (
+                                <span className="truncate">{contact.email}</span>
+                              )}
+                              {contact.phone && (
+                                <span className="truncate">{contact.phone}</span>
+                              )}
+                            </div>
+                          </div>
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => handleRemoveContact(contact.id)}
+                            className="ml-4 h-8 w-8 p-0 text-destructive hover:text-destructive hover:bg-destructive/10"
+                          >
+                            <X className="h-4 w-4" />
+                          </Button>
+                        </div>
+                      ))
+                    )}
+                  </div>
+
+                  {/* Excluded Contacts Section */}
+                  {excludedCount > 0 && (
+                    <div className="space-y-2">
+                      <div className="flex items-center justify-between">
+                        <Label className="text-sm font-semibold text-muted-foreground">
+                          Excluded Contacts ({excludedCount})
+                        </Label>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => setExcludedContactIds(new Set())}
+                          className="h-7 text-xs"
+                        >
+                          Restore All
+                        </Button>
+                      </div>
+                      <div className="max-h-32 overflow-y-auto border border-border/50 rounded-xl divide-y divide-border/50 bg-muted/20">
+                        {targetContacts
+                          .filter((contact) => excludedContactIds.has(contact.id))
+                          .map((contact) => (
+                            <div
+                              key={contact.id}
+                              className="p-3 flex items-center justify-between text-sm"
+                            >
+                              <span className="text-muted-foreground truncate">
+                                {contact.firstName} {contact.lastName}
+                              </span>
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="sm"
+                                onClick={() => handleRestoreContact(contact.id)}
+                                className="ml-4 h-6 w-6 p-0 text-primary hover:text-primary hover:bg-primary/10"
+                              >
+                                <X className="h-3 w-3 rotate-45" />
+                              </Button>
+                            </div>
+                          ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <div className="p-6 border border-dashed border-amber-200/50 rounded-xl text-center bg-amber-50/30">
+                  <Users className="h-8 w-8 mx-auto mb-2 text-amber-600" />
+                  <p className="text-sm font-semibold text-amber-900 mb-2">No contacts found</p>
+                  <p className="text-xs text-amber-800 mb-3">
+                    No contacts match your selected criteria. This could be because:
+                  </p>
+                  <ul className="text-xs text-amber-800 text-left space-y-1 max-w-md mx-auto mb-3">
+                    <li>• No contacts have {platform === 'MESSENGER' ? 'Messenger' : 'Instagram'} enabled</li>
+                    <li>• Selected tags don't match any contacts</li>
+                    <li>• Contacts haven't been synced from Facebook yet</li>
+                  </ul>
+                  <div className="flex gap-2 justify-center">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={fetchTargetContacts}
+                      disabled={loadingContacts}
+                      className="h-8 text-xs"
+                    >
+                      {loadingContacts ? (
+                        <Loader2 className="h-3 w-3 animate-spin mr-1" />
+                      ) : (
+                        'Try Again'
+                      )}
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={() => router.push('/contacts')}
+                      className="h-8 text-xs"
+                    >
+                      View Contacts
+                    </Button>
+                  </div>
+                </div>
+              )}
+            </div>
+          ) : (
+            <div className="space-y-4 pt-2 border-t border-border/50">
+              <div className="p-4 border border-dashed border-border/50 rounded-xl bg-muted/20">
+                <p className="text-sm text-muted-foreground flex items-center gap-2">
+                  <Users className="h-4 w-4" />
+                  <span>
+                    <strong>Recipients Preview</strong> will appear after you select a Facebook page
+                  </span>
+                </p>
+              </div>
+            </div>
+          )}
+
+          <div className="space-y-4 pt-2 border-t border-border/50">
+            <div className="flex items-center space-x-3">
+              <Checkbox
+                id="schedule-campaign"
+                checked={isScheduled}
+                onCheckedChange={(checked) => setIsScheduled(checked === true)}
+                className="rounded-md"
+              />
+              <div className="flex-1">
+                <Label 
+                  htmlFor="schedule-campaign" 
+                  className="text-sm font-semibold cursor-pointer"
+                >
+                  Schedule this campaign
+                </Label>
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  Send this campaign automatically at a specific date and time
+                </p>
+              </div>
+            </div>
+
+            {isScheduled && (
+              <div className="ml-8 space-y-4 p-4 bg-muted/30 rounded-xl border border-border/50">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div className="space-y-2.5">
+                    <Label className="text-sm font-semibold flex items-center gap-2">
+                      <CalendarIcon className="h-4 w-4" />
+                      Schedule Date *
+                    </Label>
+                    <Input
+                      type="date"
+                      value={scheduledDate}
+                      onChange={(e) => setScheduledDate(e.target.value)}
+                      min={new Date().toISOString().split('T')[0]}
+                      className="h-11 rounded-xl border-border/50 focus-visible:ring-primary/30"
+                    />
+                    {scheduledDate && (
+                      <p className="text-xs text-muted-foreground">
+                        Selected: {new Date(scheduledDate).toLocaleDateString('en-US', { 
+                          weekday: 'long', 
+                          year: 'numeric', 
+                          month: 'long', 
+                          day: 'numeric' 
+                        })}
+                      </p>
+                    )}
+                  </div>
+
+                  <div className="space-y-2.5">
+                    <Label className="text-sm font-semibold flex items-center gap-2">
+                      <Clock className="h-4 w-4" />
+                      Schedule Time *
+                    </Label>
+                    <Input
+                      type="time"
+                      value={scheduledTime}
+                      onChange={(e) => setScheduledTime(e.target.value)}
+                      className="h-11 rounded-xl border-border/50 focus-visible:ring-primary/30"
+                    />
+                    {scheduledDate && scheduledTime && (
+                      <p className="text-xs text-muted-foreground">
+                        {(() => {
+                          const scheduledDateTime = new Date(`${scheduledDate}T${scheduledTime}`);
+                          const now = new Date();
+                          const diff = scheduledDateTime.getTime() - now.getTime();
+                          const hours = Math.floor(diff / (1000 * 60 * 60));
+                          const minutes = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
+                          
+                          if (diff < 0) {
+                            return '⚠️ This time is in the past';
+                          } else if (hours < 1) {
+                            return `⏰ Sending in ${minutes} minute${minutes !== 1 ? 's' : ''}`;
+                          } else {
+                            return `⏰ Sending in ${hours} hour${hours !== 1 ? 's' : ''} and ${minutes} minute${minutes !== 1 ? 's' : ''}`;
+                          }
+                        })()}
+                      </p>
+                    )}
+                  </div>
+                </div>
+
+                {/* Auto-Fetch Toggle */}
+                <div className="flex items-center justify-between p-3 bg-muted/50 rounded-lg border border-border/50">
+                  <div className="flex-1">
+                    <div className="flex items-center gap-2 mb-1">
+                      <RefreshCw className="h-4 w-4 text-muted-foreground" />
+                      <Label htmlFor="auto-fetch" className="text-sm font-semibold cursor-pointer">
+                        Auto-fetch new conversations
+                      </Label>
+                    </div>
+                    <p className="text-xs text-muted-foreground ml-6">
+                      Automatically fetch newly added conversations from Facebook and include them in this campaign when it sends
+                    </p>
+                  </div>
+                  <Switch
+                    id="auto-fetch"
+                    checked={autoFetchEnabled}
+                    onCheckedChange={setAutoFetchEnabled}
+                  />
+                </div>
+
+                <div className="p-3 bg-blue-50/50 border border-blue-200/50 rounded-lg space-y-2">
+                  <p className="text-xs text-blue-900">
+                    ℹ️ <strong>Scheduled campaigns</strong> will be automatically sent by the system at the specified time. 
+                    You can view and manage scheduled campaigns from the campaigns page.
+                  </p>
+                  {autoFetchEnabled && (
+                    <p className="text-xs text-blue-900">
+                      🔄 <strong>Auto-fetch enabled:</strong> The system will fetch fresh conversations from Facebook right before sending, 
+                      ensuring new contacts are included in this campaign.
+                    </p>
+                  )}
+                  {targetContacts.length === 0 && !autoFetchEnabled && (
+                    <p className="text-xs text-blue-900">
+                      📋 <strong>Note:</strong> Recipients will be fetched automatically when the campaign is sent. 
+                      If you want to preview recipients now, make sure you've selected a Facebook page and the contacts are synced.
+                    </p>
+                  )}
+                </div>
+              </div>
+            )}
           </div>
 
           <div className="flex gap-3 pt-4">

@@ -42,8 +42,11 @@ interface ScheduledCampaign {
   includeTags: string[];
   excludeTags: string[];
   createdAt: string;
+  targetingType?: string;
+  targetTags?: string[];
   facebookPage: {
     pageName: string;
+    id: string;
   };
   template: {
     name: string;
@@ -81,6 +84,12 @@ export default function ScheduledCampaignsPage() {
         // Filter only scheduled campaigns
         const scheduled = data.filter((c: ScheduledCampaign) => c.status === 'SCHEDULED');
         setCampaigns(scheduled);
+        
+        // Fetch recipient counts for campaigns that don't have them
+        const campaignsNeedingCounts = scheduled.filter((c: ScheduledCampaign) => !c.totalRecipients || c.totalRecipients === 0);
+        if (campaignsNeedingCounts.length > 0) {
+          fetchRecipientCounts(campaignsNeedingCounts);
+        }
       } else {
         toast.error(data.error || 'Failed to fetch campaigns');
       }
@@ -124,6 +133,37 @@ export default function ScheduledCampaignsPage() {
   const handleSendNow = (campaignId: string) => {
     setCampaignToSendNow(campaignId);
     setSendNowDialogOpen(true);
+  };
+
+  const fetchRecipientCounts = async (campaignsToCheck: ScheduledCampaign[]) => {
+    const counts: Record<string, number> = {};
+    
+    // Fetch counts in parallel
+    await Promise.all(
+      campaignsToCheck.map(async (campaign) => {
+        try {
+          const response = await fetch('/api/campaigns/preview-contacts', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              facebookPageId: campaign.facebookPage.id,
+              platform: campaign.platform,
+              targetingType: campaign.targetingType || (campaign.targetTags && campaign.targetTags.length > 0 ? 'TAGS' : 'ALL_CONTACTS'),
+              targetTags: campaign.targetTags || [],
+            }),
+          });
+          
+          if (response.ok) {
+            const data = await response.json();
+            counts[campaign.id] = data.total || 0;
+          }
+        } catch (error) {
+          console.error(`Error fetching recipient count for campaign ${campaign.id}:`, error);
+        }
+      })
+    );
+    
+    setRecipientCounts((prev) => ({ ...prev, ...counts }));
   };
 
   const confirmSendNow = async () => {
@@ -266,6 +306,7 @@ export default function ScheduledCampaignsPage() {
                   isPastDue={true}
                   onDelete={handleDelete}
                   onSendNow={handleSendNow}
+                  recipientCount={recipientCounts[campaign.id]}
                 />
               ))}
             </div>
@@ -309,6 +350,7 @@ export default function ScheduledCampaignsPage() {
                   isPastDue={false}
                   onDelete={handleDelete}
                   onSendNow={handleSendNow}
+                  recipientCount={recipientCounts[campaign.id]}
                 />
               ))}
             </div>
@@ -363,17 +405,22 @@ export default function ScheduledCampaignsPage() {
   );
 }
 
+
 interface CampaignCardProps {
   campaign: ScheduledCampaign;
   isPastDue: boolean;
   onDelete: (id: string) => void;
   onSendNow: (id: string) => void;
+  recipientCount?: number;
 }
 
-function CampaignCard({ campaign, isPastDue, onDelete, onSendNow }: CampaignCardProps) {
+function CampaignCard({ campaign, isPastDue, onDelete, onSendNow, recipientCount }: CampaignCardProps) {
   const scheduledDate = parseISO(campaign.scheduledAt);
   const now = new Date();
   const timeUntilSend = Math.ceil((scheduledDate.getTime() - now.getTime()) / (1000 * 60));
+  
+  // Use provided recipientCount or fall back to campaign.totalRecipients
+  const displayRecipientCount = recipientCount !== undefined ? recipientCount : (campaign.totalRecipients || 0);
 
   return (
     <div
@@ -410,23 +457,71 @@ function CampaignCard({ campaign, isPastDue, onDelete, onSendNow }: CampaignCard
             </p>
           )}
 
-          <div className="flex items-center gap-4 text-sm text-muted-foreground">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4 p-4 bg-muted/30 rounded-lg border border-border/50">
+            {/* Scheduled Time Section */}
+            <div className="space-y-2">
+              <div className="flex items-center gap-2 text-sm font-semibold text-foreground">
+                <Clock className="w-4 h-4 text-primary" />
+                Scheduled Send Time
+              </div>
+              <div className="flex flex-col gap-1">
+                <div className="text-lg font-bold text-foreground">
+                  {format(scheduledDate, 'MMM dd, yyyy')}
+                </div>
+                <div className="text-base font-semibold text-primary">
+                  {format(scheduledDate, 'h:mm a')}
+                </div>
+                {!isPastDue && (
+                  <div className="text-xs text-muted-foreground mt-1">
+                    {formatDistanceToNow(scheduledDate, { addSuffix: true })}
+                  </div>
+                )}
+                {isPastDue && (
+                  <div className="text-xs text-orange-600 font-medium mt-1">
+                    ⚠️ Past due - should have been sent already
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Recipients Section */}
+            <div className="space-y-2">
+              <div className="flex items-center gap-2 text-sm font-semibold text-foreground">
+                <Users className="w-4 h-4 text-primary" />
+                Recipients
+              </div>
+              <div className="flex items-baseline gap-2">
+                <div className="text-3xl font-bold text-foreground">
+                  {displayRecipientCount}
+                </div>
+                <div className="text-sm text-muted-foreground">
+                  {displayRecipientCount === 1 ? 'recipient' : 'recipients'}
+                </div>
+              </div>
+              {campaign.autoFetchEnabled && (
+                <div className="text-xs text-muted-foreground mt-1">
+                  🔄 Auto-fetch enabled - recipients will be updated at send time
+                </div>
+              )}
+              {!displayRecipientCount && !campaign.autoFetchEnabled && (
+                <div className="text-xs text-amber-600 mt-1">
+                  ⚠️ No recipients set - will be determined at send time
+                </div>
+              )}
+              {displayRecipientCount > 0 && campaign.autoFetchEnabled && (
+                <div className="text-xs text-blue-600 mt-1">
+                  ℹ️ Current count: {displayRecipientCount}. May increase with new conversations.
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Additional Info */}
+          <div className="flex items-center gap-4 text-sm text-muted-foreground mt-3">
             <span className="flex items-center gap-1">
               <Calendar className="w-4 h-4" />
               {campaign.facebookPage.pageName}
             </span>
-            
-            <Badge variant="outline" className={isPastDue ? 'bg-orange-100 text-orange-700 border-orange-300' : 'bg-blue-50'}>
-              <Clock className="w-3 h-3 mr-1" />
-              {format(scheduledDate, 'MMM dd, yyyy HH:mm')}
-              {!isPastDue && ` (${formatDistanceToNow(scheduledDate, { addSuffix: true })})`}
-            </Badge>
-
-            <Badge variant="secondary">
-              <Users className="w-3 h-3 mr-1" />
-              {campaign.totalRecipients || 0} recipients
-            </Badge>
-
             <Badge variant="secondary">
               {campaign.platform}
             </Badge>

@@ -236,19 +236,41 @@ async function sendMessagesInBackground(
           return;
         }
 
+        // Verify all messages have been processed
+        const totalProcessed = (finalCampaign.sentCount || 0) + (finalCampaign.failedCount || 0);
+        const allProcessed = totalProcessed >= (finalCampaign.totalRecipients || 0);
+        
         if (finalCampaign.status === 'SENDING') {
-          const updateResult = await prisma.campaign.update({
-            where: { id: campaignId },
-            data: { 
-              status: 'COMPLETED',
-              completedAt: new Date(),
-            },
-          });
-          console.log(`✅ Campaign ${campaignId} marked as COMPLETED`, {
-            sentCount: updateResult.sentCount,
-            failedCount: updateResult.failedCount,
-            totalRecipients: updateResult.totalRecipients,
-          });
+          if (allProcessed || finalCampaign.totalRecipients === 0) {
+            const updateResult = await prisma.campaign.update({
+              where: { id: campaignId },
+              data: { 
+                status: 'COMPLETED',
+                completedAt: new Date(),
+              },
+            });
+            console.log(`✅ Campaign ${campaignId} marked as COMPLETED`, {
+              sentCount: updateResult.sentCount,
+              failedCount: updateResult.failedCount,
+              totalRecipients: updateResult.totalRecipients,
+              totalProcessed,
+            });
+          } else {
+            console.warn(`⚠️ Campaign ${campaignId} not fully processed: ${totalProcessed}/${finalCampaign.totalRecipients}. Marking as completed anyway since background process finished.`);
+            // Mark as completed anyway since background process is done
+            const updateResult = await prisma.campaign.update({
+              where: { id: campaignId },
+              data: { 
+                status: 'COMPLETED',
+                completedAt: new Date(),
+              },
+            });
+            console.log(`✅ Campaign ${campaignId} marked as COMPLETED (background finished)`, {
+              sentCount: updateResult.sentCount,
+              failedCount: updateResult.failedCount,
+              totalRecipients: updateResult.totalRecipients,
+            });
+          }
         } else {
           console.warn(`⚠️ Campaign ${campaignId} status is ${finalCampaign.status}, skipping completion update`);
         }

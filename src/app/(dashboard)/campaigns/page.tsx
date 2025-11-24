@@ -87,20 +87,36 @@ export default function CampaignsPage() {
   useEffect(() => {
     fetchCampaigns();
     
-    // Poll every 5 seconds if there are campaigns in SENDING status
+    // Poll every 2 seconds if there are campaigns in SENDING status or recently completed
     const interval = setInterval(() => {
       const currentCampaigns = campaignsRef.current;
       const hasActiveCampaigns = currentCampaigns.some(
-        (c) => c.status === 'SENDING'
+        (c) => c.status === 'SENDING' || (c.status === 'COMPLETED' && !c.completedAt)
       );
       
       if (hasActiveCampaigns) {
         fetchCampaigns();
       }
-    }, 5000);
+    }, 2000); // Poll every 2 seconds for faster updates
 
     return () => clearInterval(interval);
   }, []); // Empty dependency array - only run once on mount
+  
+  // Force refresh when any campaign completes
+  useEffect(() => {
+    const completedCampaigns = campaigns.filter(
+      (c) => c.status === 'COMPLETED' && c.completedAt
+    );
+    
+    if (completedCampaigns.length > 0) {
+      // Final refresh to ensure all data is up to date
+      const timeout = setTimeout(() => {
+        fetchCampaigns();
+      }, 500);
+      
+      return () => clearTimeout(timeout);
+    }
+  }, [campaigns]);
 
   const fetchCampaigns = async () => {
     try {

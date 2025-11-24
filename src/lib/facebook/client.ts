@@ -295,8 +295,8 @@ export class FacebookClient {
 
       // Fetch all subsequent pages with progress updates
       let pageCount = 1;
-      const MAX_PAGES = 100; // Safety limit: max 100 pages (10,000 conversations)
-      while (hasMore && nextUrl && pageCount < MAX_PAGES) {
+      // No limit - fetch all conversations
+      while (hasMore && nextUrl) {
         try {
           if (pageCount % 10 === 0) {
             console.log(`[Facebook API] Fetched ${pageCount} pages, ${allConversations.length} Messenger conversations so far...`);
@@ -344,9 +344,7 @@ export class FacebookClient {
         }
       }
       
-      if (pageCount >= MAX_PAGES) {
-        console.warn(`[Facebook API] Reached maximum page limit (${MAX_PAGES}), stopping pagination. Fetched ${allConversations.length} conversations total.`);
-      }
+      // All pages fetched
 
       return allConversations;
     } catch (error: any) {

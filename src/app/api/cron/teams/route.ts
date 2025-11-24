@@ -1,6 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { runScheduledJobs } from '@/lib/teams/cron-jobs'
 
+export const dynamic = 'force-dynamic'
+export const maxDuration = 300 // 5 minutes max execution time
+
 /**
  * API endpoint for team-related cron jobs
  * 

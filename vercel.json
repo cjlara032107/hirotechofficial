@@ -4,5 +4,19 @@
   "devCommand": "npm run dev",
   "installCommand": "npm install --legacy-peer-deps",
   "framework": "nextjs",
-  "regions": ["iad1"]
+  "regions": ["iad1"],
+  "crons": [
+    {
+      "path": "/api/cron/ai-automations",
+      "schedule": "* * * * *"
+    },
+    {
+      "path": "/api/cron/send-scheduled",
+      "schedule": "* * * * *"
+    },
+    {
+      "path": "/api/cron/api-keys",
+      "schedule": "0 * * * *"
+    }
+  ]
 }

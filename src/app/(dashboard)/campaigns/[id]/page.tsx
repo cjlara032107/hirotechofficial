@@ -110,14 +110,17 @@ export default function CampaignDetailPage() {
   useEffect(() => {
     fetchCampaign();
     
-    // Poll for updates if campaign is sending
+    // Poll for updates if campaign is sending or recently completed
     // Using ref to access current campaign status without triggering re-renders
     const interval = setInterval(() => {
-      const currentStatus = campaignRef.current?.status;
-      if (currentStatus === 'SENDING') {
+      const currentCampaign = campaignRef.current;
+      const currentStatus = currentCampaign?.status;
+      
+      // Poll if sending, or if recently completed (to catch final state)
+      if (currentStatus === 'SENDING' || (currentStatus === 'COMPLETED' && !currentCampaign.completedAt)) {
         fetchCampaign();
       }
-    }, 3000);
+    }, 2000); // Poll every 2 seconds for faster updates
 
     return () => clearInterval(interval);
   }, [params.id, fetchCampaign]); // Now includes fetchCampaign which is stable due to useCallback

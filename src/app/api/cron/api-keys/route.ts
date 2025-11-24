@@ -2,6 +2,9 @@ import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/db';
 import { ApiKeyStatus } from '@prisma/client';
 
+export const dynamic = 'force-dynamic';
+export const maxDuration = 300; // 5 minutes max execution time
+
 /**
  * Cron job to re-enable API keys after 24-hour cooldown
  * 

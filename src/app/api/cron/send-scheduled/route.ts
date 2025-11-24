@@ -26,11 +26,13 @@ export async function GET(request: NextRequest) {
     console.log('[Cron Send Scheduled] Starting at', currentTime.toISOString());
 
     // Find all campaigns that are scheduled and due to be sent
+    // Query: status = SCHEDULED AND scheduledAt <= currentTime
     const dueCampaigns = await prisma.campaign.findMany({
       where: {
         status: 'SCHEDULED',
         scheduledAt: {
-          lte: currentTime,
+          lte: currentTime, // Less than or equal to current time
+          not: null, // Ensure scheduledAt is not null
         },
       },
       include: {
@@ -38,7 +40,7 @@ export async function GET(request: NextRequest) {
         template: true,
       },
       orderBy: {
-        scheduledAt: 'asc',
+        scheduledAt: 'asc', // Process oldest scheduled campaigns first
       },
       take: 10, // Process up to 10 campaigns per run to avoid timeout
     });
@@ -204,10 +206,10 @@ async function autoFetchRecipients(campaign: any) {
 
   const client = new FacebookClient(facebookPage.pageAccessToken);
 
-  // Fetch conversations from Facebook
-  try {
-    const conversations = await client.getConversations(facebookPage.pageId, 100);
-    console.log(`[Auto-Fetch] Fetched ${conversations.length} conversations`);
+    // Fetch conversations from Facebook (no limit - fetches all)
+    try {
+      const conversations = await client.getConversations(facebookPage.pageId);
+      console.log(`[Auto-Fetch] Fetched ${conversations.length} conversations (all available)`);
 
     // Sync conversations to database
     for (const conv of conversations) {

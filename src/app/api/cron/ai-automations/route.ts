@@ -4,6 +4,9 @@ import { generateFollowUpMessage } from '@/lib/ai/google-ai-service';
 import { FacebookClient } from '@/lib/facebook/client';
 import { isContactEligibleForAutomation } from '@/lib/ai/conflict-prevention';
 
+export const dynamic = 'force-dynamic';
+export const maxDuration = 300; // 5 minutes max execution time
+
 // Cron job that runs every minute
 export async function GET(request: NextRequest) {
   try {
