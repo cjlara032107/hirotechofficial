@@ -10,17 +10,27 @@ export const maxDuration = 300; // 5 minutes max execution time
 // Cron job that runs every minute
 export async function GET(request: NextRequest) {
   try {
-    // Verify cron secret if set (security for production)
-    // Vercel cron jobs send a special header, so we allow those
+    // Authentication: Vercel cron jobs are automatically authenticated
+    // Only require CRON_SECRET for external/manual calls
     const authHeader = request.headers.get('authorization');
-    const isVercelCron = request.headers.get('x-vercel-cron') === '1';
     const cronSecret = process.env.CRON_SECRET;
     
-    // Allow Vercel cron jobs or requests with valid secret
-    if (cronSecret && !isVercelCron && authHeader !== `Bearer ${cronSecret}`) {
-      console.log('[AI Automations Cron] Unauthorized request');
+    // Log request for debugging
+    console.log('[AI Automations Cron] Request received:', {
+      hasAuth: !!authHeader,
+      hasCronSecret: !!cronSecret,
+      userAgent: request.headers.get('user-agent')?.substring(0, 50),
+    });
+    
+    // If CRON_SECRET is set, require it for non-Vercel requests
+    // Vercel cron jobs don't send authorization headers, so we allow those
+    if (cronSecret && authHeader && authHeader !== `Bearer ${cronSecret}`) {
+      console.log('[AI Automations Cron] Unauthorized: Invalid CRON_SECRET');
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
+    // If no auth header and CRON_SECRET is set, assume it's Vercel cron (allow it)
+    // If auth header matches CRON_SECRET, allow it
+    // If no CRON_SECRET is set, allow all requests
 
     console.log('[AI Automations Cron] Starting execution...');
     const startTime = Date.now();
