@@ -208,11 +208,38 @@ export async function GET(request: NextRequest) {
           },
           select: {
             contactId: true,
+            executedAt: true,
+            recipientName: true,
+          },
+          orderBy: {
+            executedAt: 'desc',
           },
         });
 
-        const recentContactIds = recentExecutions.map(e => e.contactId);
+        // Create a map of contactId -> last execution time
+        const recentContactMap = new Map<string, Date>();
+        for (const exec of recentExecutions) {
+          if (!recentContactMap.has(exec.contactId)) {
+            recentContactMap.set(exec.contactId, exec.executedAt);
+          }
+        }
+
+        const recentContactIds = Array.from(recentContactMap.keys());
         const beforeCooldownFilter = eligibleContacts.length;
+        
+        // Log which contacts are in cooldown
+        const contactsInCooldown = eligibleContacts.filter(c => recentContactIds.includes(c.id));
+        if (contactsInCooldown.length > 0) {
+          console.log(`[AI Automations Cron] Contacts in cooldown:`);
+          for (const contact of contactsInCooldown) {
+            const lastExecTime = recentContactMap.get(contact.id);
+            const hoursAgo = lastExecTime 
+              ? Math.round((now.getTime() - lastExecTime.getTime()) / (60 * 60 * 1000) * 10) / 10
+              : 0;
+            console.log(`  - ${contact.firstName} (${contact.id}): last messaged ${hoursAgo}h ago`);
+          }
+        }
+        
         eligibleContacts = eligibleContacts.filter(c => !recentContactIds.includes(c.id));
         console.log(`[AI Automations Cron] After cooldown filter: ${eligibleContacts.length} contacts (${recentContactIds.length} in cooldown)`);
 
