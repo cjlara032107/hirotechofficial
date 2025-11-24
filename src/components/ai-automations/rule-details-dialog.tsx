@@ -106,6 +106,8 @@ export function RuleDetailsDialog({
     
     setLoading(true);
     setError(null);
+    // Reset pagination when refreshing
+    setCurrentPage({ eligible: 1, scheduled: 1, stopped: 1 });
     
     try {
       const response = await fetch(`/api/ai-automations/${ruleId}/details`);
@@ -283,12 +285,22 @@ export function RuleDetailsDialog({
 
             {/* Next Message Due Summary */}
             {(() => {
+              // Get contacts that are not eligible yet (either time interval not passed or in cooldown)
               const upcomingContacts = contacts
-                .filter(c => !c.isStopped && !c.isEligible)
-                .sort((a, b) => a.nextTriggerTime.localeCompare(b.nextTriggerTime));
+                .filter(c => !c.isStopped && (!c.isEligible || c.isInCooldown))
+                .sort((a, b) => {
+                  // Sort by cooldown expiration if in cooldown, otherwise by next trigger time
+                  const aTime = a.isInCooldown && a.cooldownExpiresAt 
+                    ? new Date(a.cooldownExpiresAt).getTime()
+                    : new Date(a.nextTriggerTime).getTime();
+                  const bTime = b.isInCooldown && b.cooldownExpiresAt
+                    ? new Date(b.cooldownExpiresAt).getTime()
+                    : new Date(b.nextTriggerTime).getTime();
+                  return aTime - bTime;
+                });
               
               const nextUpcoming = upcomingContacts[0];
-              const eligibleNow = contacts.filter(c => c.isEligible && !c.isStopped).length;
+              const eligibleNow = contacts.filter(c => c.isEligible && !c.isStopped && !c.isInCooldown).length;
 
               if (nextUpcoming) {
                 return (
@@ -302,7 +314,9 @@ export function RuleDetailsDialog({
                           {format(new Date(nextUpcoming.nextTriggerTime), 'MMM d, yyyy h:mm a')}
                         </div>
                         <div className="text-xs text-muted-foreground mt-1">
-                          {nextUpcoming.firstName} {nextUpcoming.lastName} • {formatTimeUntil(nextUpcoming.timeUntilTriggerMs)} from now
+                          {nextUpcoming.firstName} {nextUpcoming.lastName} • {nextUpcoming.isInCooldown 
+                            ? `${formatTimeUntil(nextUpcoming.timeUntilTriggerMs)} until cooldown expires`
+                            : `${formatTimeUntil(nextUpcoming.timeUntilTriggerMs)} until trigger`}
                         </div>
                       </div>
                       {eligibleNow > 0 && (
@@ -337,7 +351,14 @@ export function RuleDetailsDialog({
             })()}
 
             {/* Contacts Tabs */}
-            <Tabs defaultValue="eligible" className="w-full">
+            <Tabs 
+              defaultValue="eligible" 
+              className="w-full"
+              onValueChange={(value) => {
+                // Reset pagination when switching tabs
+                setCurrentPage({ eligible: 1, scheduled: 1, stopped: 1 });
+              }}
+            >
               <TabsList className="grid w-full grid-cols-3">
                 <TabsTrigger value="eligible">
                   Eligible ({eligibleContacts.length})
@@ -370,12 +391,12 @@ export function RuleDetailsDialog({
                       )}
                     </div>
                   </ScrollArea>
-                  {totalPagesEligible > 1 && (
+                  {eligibleContacts.length > 0 && totalPagesEligible > 1 && (
                     <div className="flex items-center justify-between border-t pt-4">
                       <p className="text-sm text-muted-foreground">
                         Showing {(currentPage.eligible - 1) * itemsPerPage + 1} to{' '}
                         {Math.min(currentPage.eligible * itemsPerPage, eligibleContacts.length)} of{' '}
-                        {eligibleContacts.length} contacts
+                        {eligibleContacts.length} contact{eligibleContacts.length !== 1 ? 's' : ''}
                       </p>
                       <div className="flex items-center gap-2">
                         <Button
@@ -425,12 +446,12 @@ export function RuleDetailsDialog({
                       )}
                     </div>
                   </ScrollArea>
-                  {totalPagesScheduled > 1 && (
+                  {ineligibleContacts.length > 0 && totalPagesScheduled > 1 && (
                     <div className="flex items-center justify-between border-t pt-4">
                       <p className="text-sm text-muted-foreground">
                         Showing {(currentPage.scheduled - 1) * itemsPerPage + 1} to{' '}
                         {Math.min(currentPage.scheduled * itemsPerPage, ineligibleContacts.length)} of{' '}
-                        {ineligibleContacts.length} contacts
+                        {ineligibleContacts.length} contact{ineligibleContacts.length !== 1 ? 's' : ''}
                       </p>
                       <div className="flex items-center gap-2">
                         <Button
@@ -480,12 +501,12 @@ export function RuleDetailsDialog({
                       )}
                     </div>
                   </ScrollArea>
-                  {totalPagesStopped > 1 && (
+                  {stoppedContacts.length > 0 && totalPagesStopped > 1 && (
                     <div className="flex items-center justify-between border-t pt-4">
                       <p className="text-sm text-muted-foreground">
                         Showing {(currentPage.stopped - 1) * itemsPerPage + 1} to{' '}
                         {Math.min(currentPage.stopped * itemsPerPage, stoppedContacts.length)} of{' '}
-                        {stoppedContacts.length} contacts
+                        {stoppedContacts.length} contact{stoppedContacts.length !== 1 ? 's' : ''}
                       </p>
                       <div className="flex items-center gap-2">
                         <Button

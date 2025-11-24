@@ -251,19 +251,33 @@ export async function GET(
       };
     });
 
-    // Sort contacts: eligible first, then by next trigger time
+    // Sort contacts: eligible first (excluding cooldown), then by next eligible time
     contactsData.sort((a, b) => {
-      if (a.isEligible !== b.isEligible) {
-        return a.isEligible ? -1 : 1;
-      }
+      // Stopped contacts go last
       if (a.isStopped !== b.isStopped) {
         return a.isStopped ? 1 : -1;
       }
-      return a.nextTriggerTime.localeCompare(b.nextTriggerTime);
+      
+      // Eligible contacts (not in cooldown) go first
+      const aIsActuallyEligible = a.isEligible && !a.isInCooldown;
+      const bIsActuallyEligible = b.isEligible && !b.isInCooldown;
+      if (aIsActuallyEligible !== bIsActuallyEligible) {
+        return aIsActuallyEligible ? -1 : 1;
+      }
+      
+      // For non-eligible contacts, sort by next eligible time (cooldown expiration or trigger time)
+      const aNextTime = a.isInCooldown && a.cooldownExpiresAt
+        ? new Date(a.cooldownExpiresAt).getTime()
+        : new Date(a.nextTriggerTime).getTime();
+      const bNextTime = b.isInCooldown && b.cooldownExpiresAt
+        ? new Date(b.cooldownExpiresAt).getTime()
+        : new Date(b.nextTriggerTime).getTime();
+      
+      return aNextTime - bNextTime;
     });
 
-    // Calculate statistics
-    const eligibleCount = contactsData.filter(c => c.isEligible && !c.isStopped).length;
+    // Calculate statistics (accounting for cooldown)
+    const eligibleCount = contactsData.filter(c => c.isEligible && !c.isStopped && !c.isInCooldown).length;
     const stoppedCount = contactsData.filter(c => c.isStopped).length;
     const totalMatching = contactsData.length;
 
