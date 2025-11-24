@@ -6,10 +6,11 @@ import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Input } from '@/components/ui/input';
-import { Plus, Play, Pause, Trash2, Clock, MessageSquare, TrendingUp, Edit2, Search, X } from 'lucide-react';
+import { Plus, Play, Pause, Trash2, Clock, MessageSquare, TrendingUp, Edit2, Search, X, Info } from 'lucide-react';
 import { toast } from 'sonner';
 import { CreateRuleDialog } from '@/components/ai-automations/create-rule-dialog';
 import { EditRuleDialog } from '@/components/ai-automations/edit-rule-dialog';
+import { RuleDetailsDialog } from '@/components/ai-automations/rule-details-dialog';
 
 interface Rule {
   id: string;
@@ -54,6 +55,8 @@ export default function AIAutomationsPage() {
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
   const [editDialogOpen, setEditDialogOpen] = useState(false);
   const [editingRule, setEditingRule] = useState<Rule | null>(null);
+  const [detailsDialogOpen, setDetailsDialogOpen] = useState(false);
+  const [viewingRuleId, setViewingRuleId] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedRules, setSelectedRules] = useState<Set<string>>(new Set());
 
@@ -211,6 +214,11 @@ export default function AIAutomationsPage() {
     setEditDialogOpen(true);
   };
 
+  const handleViewDetails = (ruleId: string) => {
+    setViewingRuleId(ruleId);
+    setDetailsDialogOpen(true);
+  };
+
   const handleSelectAll = (checked: boolean) => {
     if (checked) {
       setSelectedRules(new Set(filteredRules.map(r => r.id)));
@@ -353,6 +361,14 @@ export default function AIAutomationsPage() {
           onOpenChange={setEditDialogOpen}
           rule={editingRule}
           onSuccess={fetchRules}
+        />
+      )}
+
+      {viewingRuleId && (
+        <RuleDetailsDialog
+          open={detailsDialogOpen}
+          onOpenChange={setDetailsDialogOpen}
+          ruleId={viewingRuleId}
         />
       )}
 
@@ -515,6 +531,14 @@ export default function AIAutomationsPage() {
 
                   {/* Actions */}
                   <div className="flex gap-2">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => handleViewDetails(rule.id)}
+                      title="View details"
+                    >
+                      <Info className="w-4 h-4" />
+                    </Button>
                     <Button
                       variant="outline"
                       size="sm"
