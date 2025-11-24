@@ -186,6 +186,7 @@ export async function POST(request: NextRequest) {
 
     let sent = 0;
     let failed = 0;
+    const failureReasons: Array<{ contactName: string; reason: string }> = [];
 
     // Process each eligible contact
     for (const contact of eligibleContacts) {
@@ -199,14 +200,19 @@ export async function POST(request: NextRequest) {
         );
 
         if (!eligibilityCheck.eligible) {
-          console.log(`[AI Automations] Contact ${contact.id} not eligible: ${eligibilityCheck.reason}`);
+          const contactName = `${contact.firstName} ${contact.lastName || ''}`.trim();
+          const reason = eligibilityCheck.reason || 'Unknown eligibility issue';
+          console.log(`[AI Automations] Contact ${contactName} (${contact.id}) not eligible: ${reason}`);
+          failureReasons.push({ contactName, reason });
           failed++;
           continue;
         }
 
         const conversation = contact.conversations[0];
         if (!conversation) {
-          console.log(`[AI Automations] No conversation found for contact: ${contact.id}`);
+          const contactName = `${contact.firstName} ${contact.lastName || ''}`.trim();
+          console.log(`[AI Automations] No conversation found for contact: ${contactName} (${contact.id})`);
+          failureReasons.push({ contactName, reason: 'No conversation found' });
           failed++;
           continue;
         }
@@ -223,7 +229,9 @@ export async function POST(request: NextRequest) {
         });
 
         if (messages.length === 0) {
-          console.log(`[AI Automations] No messages in conversation: ${conversation.id}`);
+          const contactName = `${contact.firstName} ${contact.lastName || ''}`.trim();
+          console.log(`[AI Automations] No messages in conversation: ${conversation.id} for contact ${contactName}`);
+          failureReasons.push({ contactName, reason: 'No messages in conversation' });
           failed++;
           continue;
         }
@@ -383,15 +391,27 @@ export async function POST(request: NextRequest) {
 
     console.log(`[AI Automations] Execution complete: ${sent} sent, ${failed} failed`);
 
+    // Group failure reasons for better reporting
+    const reasonCounts = new Map<string, number>();
+    failureReasons.forEach(({ reason }) => {
+      reasonCounts.set(reason, (reasonCounts.get(reason) || 0) + 1);
+    });
+
+    const reasonSummary = Array.from(reasonCounts.entries())
+      .map(([reason, count]) => `${count} contact(s): ${reason}`)
+      .join('; ');
+
     return NextResponse.json({
       success: true,
       sent,
       failed,
       total: eligibleContacts.length,
+      failureReasons: failureReasons.length > 0 ? failureReasons : undefined,
+      reasonSummary: reasonSummary || undefined,
       message: sent > 0 
         ? `Successfully sent ${sent} message(s). ${failed > 0 ? `${failed} failed.` : ''}`
         : failed > 0
-        ? `No messages sent. ${failed} contact(s) failed eligibility checks.`
+        ? `No messages sent. ${failed} contact(s) failed: ${reasonSummary || 'eligibility checks'}`
         : 'No eligible contacts found.',
     });
   } catch (error) {

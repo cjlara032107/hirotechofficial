@@ -200,7 +200,15 @@ export default function AIAutomationsPage() {
         if (data.sent > 0) {
           toast.success(`✅ Success! Sent ${data.sent} message(s)${data.failed > 0 ? `. ${data.failed} failed.` : ''}`);
         } else if (data.failed > 0) {
-          toast.warning(`⚠️ No messages sent. ${data.failed} contact(s) failed eligibility checks. ${data.message || ''}`);
+          // Show detailed failure reasons
+          const failureDetails = data.failureReasons && data.failureReasons.length > 0
+            ? `\n\nReasons:\n${data.failureReasons.slice(0, 5).map((fr: { contactName: string; reason: string }) => `• ${fr.contactName}: ${fr.reason}`).join('\n')}${data.failureReasons.length > 5 ? `\n... and ${data.failureReasons.length - 5} more` : ''}`
+            : '';
+          
+          toast.warning(
+            `⚠️ No messages sent. ${data.failed} contact(s) failed.${data.reasonSummary ? `\n\n${data.reasonSummary}` : ''}${failureDetails}`,
+            { duration: 8000 }
+          );
         } else {
           toast.info(`ℹ️ ${data.message || 'No eligible contacts found. Check time interval, tags, or cooldown period.'}`);
         }
