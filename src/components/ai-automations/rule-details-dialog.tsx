@@ -22,6 +22,8 @@ import {
   MessageSquare,
   Loader2,
   RefreshCw,
+  ChevronLeft,
+  ChevronRight,
 } from 'lucide-react';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { ScrollArea } from '@/components/ui/scroll-area';
@@ -96,6 +98,8 @@ export function RuleDetailsDialog({
     ineligibleCount: 0,
   });
   const [error, setError] = useState<string | null>(null);
+  const [currentPage, setCurrentPage] = useState({ eligible: 1, scheduled: 1, stopped: 1 });
+  const itemsPerPage = 10;
 
   const fetchDetails = async () => {
     if (!ruleId) return;
@@ -126,6 +130,8 @@ export function RuleDetailsDialog({
   useEffect(() => {
     if (open && ruleId) {
       fetchDetails();
+      // Reset pagination when opening dialog
+      setCurrentPage({ eligible: 1, scheduled: 1, stopped: 1 });
     }
   }, [open, ruleId]);
 
@@ -160,6 +166,25 @@ export function RuleDetailsDialog({
   const eligibleContacts = contacts.filter(c => c.isEligible && !c.isStopped && !c.isInCooldown);
   const ineligibleContacts = contacts.filter(c => (!c.isEligible || c.isInCooldown) && !c.isStopped);
   const stoppedContacts = contacts.filter(c => c.isStopped);
+
+  // Pagination calculations
+  const getPaginatedContacts = (contactList: ContactData[], page: number) => {
+    const startIndex = (page - 1) * itemsPerPage;
+    const endIndex = startIndex + itemsPerPage;
+    return contactList.slice(startIndex, endIndex);
+  };
+
+  const getTotalPages = (contactList: ContactData[]) => {
+    return Math.max(1, Math.ceil(contactList.length / itemsPerPage));
+  };
+
+  const paginatedEligible = getPaginatedContacts(eligibleContacts, currentPage.eligible);
+  const paginatedScheduled = getPaginatedContacts(ineligibleContacts, currentPage.scheduled);
+  const paginatedStopped = getPaginatedContacts(stoppedContacts, currentPage.stopped);
+
+  const totalPagesEligible = getTotalPages(eligibleContacts);
+  const totalPagesScheduled = getTotalPages(ineligibleContacts);
+  const totalPagesStopped = getTotalPages(stoppedContacts);
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -326,66 +351,168 @@ export function RuleDetailsDialog({
               </TabsList>
 
               <TabsContent value="eligible" className="mt-4">
-                <ScrollArea className="h-[400px]">
-                  <div className="space-y-2">
-                    {eligibleContacts.length === 0 ? (
-                      <div className="text-center py-8 text-muted-foreground">
-                        No eligible contacts at this time
+                <div className="space-y-4">
+                  <ScrollArea className="h-[400px]">
+                    <div className="space-y-2">
+                      {eligibleContacts.length === 0 ? (
+                        <div className="text-center py-8 text-muted-foreground">
+                          No eligible contacts at this time
+                        </div>
+                      ) : (
+                        paginatedEligible.map(contact => (
+                          <ContactCard
+                            key={contact.id}
+                            contact={contact}
+                            formatTimeUntil={formatTimeUntil}
+                            getContactInitials={getContactInitials}
+                          />
+                        ))
+                      )}
+                    </div>
+                  </ScrollArea>
+                  {totalPagesEligible > 1 && (
+                    <div className="flex items-center justify-between border-t pt-4">
+                      <p className="text-sm text-muted-foreground">
+                        Showing {(currentPage.eligible - 1) * itemsPerPage + 1} to{' '}
+                        {Math.min(currentPage.eligible * itemsPerPage, eligibleContacts.length)} of{' '}
+                        {eligibleContacts.length} contacts
+                      </p>
+                      <div className="flex items-center gap-2">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => setCurrentPage(prev => ({ ...prev, eligible: Math.max(1, prev.eligible - 1) }))}
+                          disabled={currentPage.eligible === 1}
+                        >
+                          <ChevronLeft className="h-4 w-4" />
+                          Previous
+                        </Button>
+                        <span className="text-sm">
+                          Page {currentPage.eligible} of {totalPagesEligible}
+                        </span>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => setCurrentPage(prev => ({ ...prev, eligible: Math.min(totalPagesEligible, prev.eligible + 1) }))}
+                          disabled={currentPage.eligible === totalPagesEligible}
+                        >
+                          Next
+                          <ChevronRight className="h-4 w-4" />
+                        </Button>
                       </div>
-                    ) : (
-                      eligibleContacts.map(contact => (
-                        <ContactCard
-                          key={contact.id}
-                          contact={contact}
-                          formatTimeUntil={formatTimeUntil}
-                          getContactInitials={getContactInitials}
-                        />
-                      ))
-                    )}
-                  </div>
-                </ScrollArea>
+                    </div>
+                  )}
+                </div>
               </TabsContent>
 
               <TabsContent value="scheduled" className="mt-4">
-                <ScrollArea className="h-[400px]">
-                  <div className="space-y-2">
-                    {ineligibleContacts.length === 0 ? (
-                      <div className="text-center py-8 text-muted-foreground">
-                        No scheduled contacts
+                <div className="space-y-4">
+                  <ScrollArea className="h-[400px]">
+                    <div className="space-y-2">
+                      {ineligibleContacts.length === 0 ? (
+                        <div className="text-center py-8 text-muted-foreground">
+                          No scheduled contacts
+                        </div>
+                      ) : (
+                        paginatedScheduled.map(contact => (
+                          <ContactCard
+                            key={contact.id}
+                            contact={contact}
+                            formatTimeUntil={formatTimeUntil}
+                            getContactInitials={getContactInitials}
+                          />
+                        ))
+                      )}
+                    </div>
+                  </ScrollArea>
+                  {totalPagesScheduled > 1 && (
+                    <div className="flex items-center justify-between border-t pt-4">
+                      <p className="text-sm text-muted-foreground">
+                        Showing {(currentPage.scheduled - 1) * itemsPerPage + 1} to{' '}
+                        {Math.min(currentPage.scheduled * itemsPerPage, ineligibleContacts.length)} of{' '}
+                        {ineligibleContacts.length} contacts
+                      </p>
+                      <div className="flex items-center gap-2">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => setCurrentPage(prev => ({ ...prev, scheduled: Math.max(1, prev.scheduled - 1) }))}
+                          disabled={currentPage.scheduled === 1}
+                        >
+                          <ChevronLeft className="h-4 w-4" />
+                          Previous
+                        </Button>
+                        <span className="text-sm">
+                          Page {currentPage.scheduled} of {totalPagesScheduled}
+                        </span>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => setCurrentPage(prev => ({ ...prev, scheduled: Math.min(totalPagesScheduled, prev.scheduled + 1) }))}
+                          disabled={currentPage.scheduled === totalPagesScheduled}
+                        >
+                          Next
+                          <ChevronRight className="h-4 w-4" />
+                        </Button>
                       </div>
-                    ) : (
-                      ineligibleContacts.map(contact => (
-                        <ContactCard
-                          key={contact.id}
-                          contact={contact}
-                          formatTimeUntil={formatTimeUntil}
-                          getContactInitials={getContactInitials}
-                        />
-                      ))
-                    )}
-                  </div>
-                </ScrollArea>
+                    </div>
+                  )}
+                </div>
               </TabsContent>
 
               <TabsContent value="stopped" className="mt-4">
-                <ScrollArea className="h-[400px]">
-                  <div className="space-y-2">
-                    {stoppedContacts.length === 0 ? (
-                      <div className="text-center py-8 text-muted-foreground">
-                        No stopped contacts
+                <div className="space-y-4">
+                  <ScrollArea className="h-[400px]">
+                    <div className="space-y-2">
+                      {stoppedContacts.length === 0 ? (
+                        <div className="text-center py-8 text-muted-foreground">
+                          No stopped contacts
+                        </div>
+                      ) : (
+                        paginatedStopped.map(contact => (
+                          <ContactCard
+                            key={contact.id}
+                            contact={contact}
+                            formatTimeUntil={formatTimeUntil}
+                            getContactInitials={getContactInitials}
+                          />
+                        ))
+                      )}
+                    </div>
+                  </ScrollArea>
+                  {totalPagesStopped > 1 && (
+                    <div className="flex items-center justify-between border-t pt-4">
+                      <p className="text-sm text-muted-foreground">
+                        Showing {(currentPage.stopped - 1) * itemsPerPage + 1} to{' '}
+                        {Math.min(currentPage.stopped * itemsPerPage, stoppedContacts.length)} of{' '}
+                        {stoppedContacts.length} contacts
+                      </p>
+                      <div className="flex items-center gap-2">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => setCurrentPage(prev => ({ ...prev, stopped: Math.max(1, prev.stopped - 1) }))}
+                          disabled={currentPage.stopped === 1}
+                        >
+                          <ChevronLeft className="h-4 w-4" />
+                          Previous
+                        </Button>
+                        <span className="text-sm">
+                          Page {currentPage.stopped} of {totalPagesStopped}
+                        </span>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => setCurrentPage(prev => ({ ...prev, stopped: Math.min(totalPagesStopped, prev.stopped + 1) }))}
+                          disabled={currentPage.stopped === totalPagesStopped}
+                        >
+                          Next
+                          <ChevronRight className="h-4 w-4" />
+                        </Button>
                       </div>
-                    ) : (
-                      stoppedContacts.map(contact => (
-                        <ContactCard
-                          key={contact.id}
-                          contact={contact}
-                          formatTimeUntil={formatTimeUntil}
-                          getContactInitials={getContactInitials}
-                        />
-                      ))
-                    )}
-                  </div>
-                </ScrollArea>
+                    </div>
+                  )}
+                </div>
               </TabsContent>
             </Tabs>
 
