@@ -254,6 +254,61 @@ export function RuleDetailsDialog({
               </Card>
             </div>
 
+            {/* Next Message Due Summary */}
+            {(() => {
+              const upcomingContacts = contacts
+                .filter(c => !c.isStopped && !c.isEligible)
+                .sort((a, b) => a.nextTriggerTime.localeCompare(b.nextTriggerTime));
+              
+              const nextUpcoming = upcomingContacts[0];
+              const eligibleNow = contacts.filter(c => c.isEligible && !c.isStopped).length;
+
+              if (nextUpcoming) {
+                return (
+                  <Card className="p-4 bg-primary/5 border-primary/20">
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <div className="text-sm font-medium text-muted-foreground mb-1">
+                          Next Message Due
+                        </div>
+                        <div className="text-lg font-bold">
+                          {format(new Date(nextUpcoming.nextTriggerTime), 'MMM d, yyyy h:mm a')}
+                        </div>
+                        <div className="text-xs text-muted-foreground mt-1">
+                          {nextUpcoming.firstName} {nextUpcoming.lastName} • {formatTimeUntil(nextUpcoming.timeUntilTriggerMs)} from now
+                        </div>
+                      </div>
+                      {eligibleNow > 0 && (
+                        <div className="text-right">
+                          <div className="text-2xl font-bold text-green-600">{eligibleNow}</div>
+                          <div className="text-xs text-muted-foreground">Ready now</div>
+                        </div>
+                      )}
+                    </div>
+                  </Card>
+                );
+              } else if (eligibleNow > 0) {
+                return (
+                  <Card className="p-4 bg-green-500/10 border-green-500/20">
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <div className="text-sm font-medium text-green-600 mb-1">
+                          Messages Ready to Send
+                        </div>
+                        <div className="text-lg font-bold text-green-600">
+                          {eligibleNow} contact{eligibleNow !== 1 ? 's' : ''} eligible now
+                        </div>
+                        <div className="text-xs text-muted-foreground mt-1">
+                          Will be sent on next cron run (every minute)
+                        </div>
+                      </div>
+                    </div>
+                  </Card>
+                );
+              }
+              return null;
+            })()}
+
             {/* Contacts Tabs */}
             <Tabs defaultValue="eligible" className="w-full">
               <TabsList className="grid w-full grid-cols-3">
@@ -391,6 +446,12 @@ function ContactCard({ contact, formatTimeUntil, getContactInitials }: ContactCa
               {contact.isEligible
                 ? `Eligible for ${formatTimeUntil(contact.timeSinceEligibleMs)}`
                 : `Triggers in ${formatTimeUntil(contact.timeUntilTriggerMs)}`}
+            </div>
+            <div className="flex items-center gap-1 mt-2 p-2 bg-muted/50 rounded border border-border/50">
+              <Calendar className="w-3 h-3 text-primary" />
+              <span className="font-medium text-foreground">
+                Next message due: {format(new Date(contact.nextTriggerTime), 'MMM d, yyyy h:mm a')}
+              </span>
             </div>
             {contact.stopInfo && (
               <div className="flex items-center gap-1 text-red-600">
