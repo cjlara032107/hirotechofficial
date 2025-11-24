@@ -216,13 +216,29 @@ export async function POST(request: NextRequest) {
           continue;
         }
 
-        const conversation = contact.conversations[0];
+        // Get or create conversation
+        let conversation = contact.conversations[0];
         if (!conversation) {
-          const contactName = `${contact.firstName} ${contact.lastName || ''}`.trim();
-          console.log(`[AI Automations] No conversation found for contact: ${contactName} (${contact.id})`);
-          failureReasons.push({ contactName, reason: 'No conversation found' });
-          failed++;
-          continue;
+          // Create conversation if it doesn't exist (for contacts with messengerPSID)
+          if (contact.messengerPSID && contact.facebookPageId) {
+            console.log(`[AI Automations] Creating conversation for contact: ${contact.firstName} (${contact.id})`);
+            conversation = await prisma.conversation.create({
+              data: {
+                contactId: contact.id,
+                facebookPageId: contact.facebookPageId,
+                platform: 'MESSENGER',
+                status: 'OPEN',
+                lastMessageAt: new Date(),
+              },
+            });
+            console.log(`[AI Automations] Created conversation: ${conversation.id}`);
+          } else {
+            const contactName = `${contact.firstName} ${contact.lastName || ''}`.trim();
+            console.log(`[AI Automations] No conversation found and cannot create (missing messengerPSID or facebookPageId) for contact: ${contactName} (${contact.id})`);
+            failureReasons.push({ contactName, reason: 'No conversation found and cannot create (missing messengerPSID or facebookPageId)' });
+            failed++;
+            continue;
+          }
         }
 
         // Get conversation history
@@ -236,20 +252,19 @@ export async function POST(request: NextRequest) {
           take: 20,
         });
 
+        // If no messages, we can still send (new conversation), but AI won't have history
         if (messages.length === 0) {
-          const contactName = `${contact.firstName} ${contact.lastName || ''}`.trim();
-          console.log(`[AI Automations] No messages in conversation: ${conversation.id} for contact ${contactName}`);
-          failureReasons.push({ contactName, reason: 'No messages in conversation' });
-          failed++;
-          continue;
+          console.log(`[AI Automations] No messages in conversation: ${conversation.id} - will send without history`);
         }
 
-        // Format messages for AI
-        const conversationHistory = messages.reverse().map(msg => ({
-          from: msg.isFromBusiness ? 'Business' : contact.firstName || 'Customer',
-          text: msg.content,
-          timestamp: msg.createdAt,
-        }));
+        // Format messages for AI (or use empty array if no history)
+        const conversationHistory = messages.length > 0
+          ? messages.reverse().map(msg => ({
+              from: msg.isFromBusiness ? 'Business' : contact.firstName || 'Customer',
+              text: msg.content,
+              timestamp: msg.createdAt,
+            }))
+          : []; // Empty history for new conversations
 
         // Generate AI message
         const aiResult = await generateFollowUpMessage(
