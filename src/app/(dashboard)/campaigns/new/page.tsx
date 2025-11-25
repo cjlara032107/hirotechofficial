@@ -465,7 +465,7 @@ export default function NewCampaignPage() {
           const generateData = await generateRes.json();
           aiMessagesMap = generateData.aiMessagesMap || {};
           
-          toast.success(`Generated ${generateData.generatedCount || Object.keys(aiMessagesMap).length} unique personalized messages`);
+          toast.success(`Generated ${generateData.generatedCount || Object.keys(aiMessagesMap || {}).length} unique personalized messages`);
         } catch (error) {
           console.error('[AI Generation] Fatal error:', error);
           toast.error('Failed to generate some personalized messages. Campaign will use template messages.');
