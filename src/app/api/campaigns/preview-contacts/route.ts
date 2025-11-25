@@ -22,35 +22,62 @@ export async function POST(request: NextRequest) {
       platform,
       targetTags,
       targetingType = 'ALL_CONTACTS',
+      targetContactIds,
     } = body;
-
-    if (!facebookPageId || !platform) {
-      return NextResponse.json(
-        { error: 'Facebook page ID and platform are required' },
-        { status: 400 }
-      );
-    }
-
-    // Verify the page belongs to the user's organization
-    const page = await prisma.facebookPage.findFirst({
-      where: {
-        id: facebookPageId,
-        organizationId: validatedSession.user.organizationId,
-      },
-    });
-
-    if (!page) {
-      return NextResponse.json(
-        { error: 'Facebook page not found or access denied' },
-        { status: 404 }
-      );
-    }
 
     let contacts: any[] = [];
 
     // Get contacts based on targeting type
     switch (targetingType) {
+      case 'SPECIFIC_CONTACTS':
+        if (!targetContactIds || targetContactIds.length === 0) {
+          return NextResponse.json(
+            { error: 'Contact IDs are required for SPECIFIC_CONTACTS targeting' },
+            { status: 400 }
+          );
+        }
+        
+        // Fetch specific contacts by IDs
+        contacts = await prisma.contact.findMany({
+          where: {
+            id: { in: targetContactIds },
+            organizationId: validatedSession.user.organizationId,
+          },
+          include: {
+            facebookPage: {
+              select: {
+                id: true,
+                pageName: true,
+                instagramUsername: true,
+              },
+            },
+          },
+        });
+        break;
+
       case 'TAGS':
+        if (!facebookPageId || !platform) {
+          return NextResponse.json(
+            { error: 'Facebook page ID and platform are required for TAGS targeting' },
+            { status: 400 }
+          );
+        }
+
+        // Verify the page belongs to the user's organization
+        const page = await prisma.facebookPage.findFirst({
+          where: {
+            id: facebookPageId,
+            organizationId: validatedSession.user.organizationId,
+          },
+        });
+
+        if (!page) {
+          return NextResponse.json(
+            { error: 'Facebook page not found or access denied' },
+            { status: 404 }
+          );
+        }
+
         if (!targetTags || targetTags.length === 0) {
           // If no tags, get all contacts
           contacts = await prisma.contact.findMany({
@@ -74,6 +101,28 @@ export async function POST(request: NextRequest) {
 
       case 'ALL_CONTACTS':
       default:
+        if (!facebookPageId || !platform) {
+          return NextResponse.json(
+            { error: 'Facebook page ID and platform are required' },
+            { status: 400 }
+          );
+        }
+
+        // Verify the page belongs to the user's organization
+        const allContactsPage = await prisma.facebookPage.findFirst({
+          where: {
+            id: facebookPageId,
+            organizationId: validatedSession.user.organizationId,
+          },
+        });
+
+        if (!allContactsPage) {
+          return NextResponse.json(
+            { error: 'Facebook page not found or access denied' },
+            { status: 404 }
+          );
+        }
+
         contacts = await prisma.contact.findMany({
           where: {
             organizationId: validatedSession.user.organizationId,
@@ -83,16 +132,19 @@ export async function POST(request: NextRequest) {
         break;
     }
 
-    // Filter by platform capability
-    const targetContacts = contacts.filter((contact) => {
-      if (platform === 'MESSENGER') {
-        return contact.hasMessenger && contact.messengerPSID;
-      }
-      if (platform === 'INSTAGRAM') {
-        return contact.hasInstagram && contact.instagramSID;
-      }
-      return false;
-    });
+    // Filter by platform capability (only for non-SPECIFIC_CONTACTS targeting)
+    let targetContacts = contacts;
+    if (targetingType !== 'SPECIFIC_CONTACTS' && platform) {
+      targetContacts = contacts.filter((contact) => {
+        if (platform === 'MESSENGER') {
+          return contact.hasMessenger && contact.messengerPSID;
+        }
+        if (platform === 'INSTAGRAM') {
+          return contact.hasInstagram && contact.instagramSID;
+        }
+        return false;
+      });
+    }
 
     // Return contact preview data
     const previewContacts = targetContacts.map((contact) => ({
@@ -106,6 +158,8 @@ export async function POST(request: NextRequest) {
       hasInstagram: contact.hasInstagram,
       aiContext: contact.aiContext || null,
       lastInteraction: contact.lastInteraction || null,
+      facebookPageId: contact.facebookPageId || (contact.facebookPage?.id || null),
+      facebookPage: contact.facebookPage || null,
     }));
 
     return NextResponse.json({

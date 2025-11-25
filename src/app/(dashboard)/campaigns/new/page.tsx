@@ -57,8 +57,26 @@ export default function NewCampaignPage() {
     if (preselectedTags) {
       setSelectedTags([preselectedTags]);
     }
+    
+    // Handle preselected contacts from URL
+    const preselectedContacts = searchParams.get('contacts');
+    if (preselectedContacts) {
+      const contactIds = preselectedContacts.split(',').filter(Boolean);
+      if (contactIds.length > 0) {
+        // Wait for pages to load, then fetch preselected contacts
+        if (facebookPages.length > 0) {
+          fetchPreselectedContacts(contactIds);
+        } else {
+          // Wait a bit for pages to load
+          const timer = setTimeout(() => {
+            fetchPreselectedContacts(contactIds);
+          }, 500);
+          return () => clearTimeout(timer);
+        }
+      }
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [facebookPages]);
 
   // Fetch target contacts when settings change
   useEffect(() => {
@@ -125,6 +143,65 @@ export default function NewCampaignPage() {
       toast.error(err.message || 'An error occurred while loading Facebook pages');
     } finally {
       setLoadingPages(false);
+    }
+  };
+
+  const fetchPreselectedContacts = async (contactIds: string[]) => {
+    setLoadingContacts(true);
+    try {
+      // Fetch contact details for preselected contacts
+      const response = await fetch('/api/campaigns/preview-contacts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          targetingType: 'SPECIFIC_CONTACTS',
+          targetContactIds: contactIds,
+        }),
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || 'Failed to fetch contacts');
+      }
+
+      const data = await response.json();
+      if (data.contacts && data.contacts.length > 0) {
+        setTargetContacts(data.contacts);
+        // Auto-select the first page if contacts have the same page
+        const firstContact = data.contacts[0];
+        if (firstContact.facebookPageId) {
+          // Wait for facebookPages to load, then set the page
+          if (facebookPages.length > 0) {
+            const matchingPage = facebookPages.find(p => p.id === firstContact.facebookPageId);
+            if (matchingPage) {
+              setSelectedPageId(matchingPage.id);
+            }
+          } else {
+            // If pages haven't loaded yet, wait a bit and try again
+            setTimeout(() => {
+              const matchingPage = facebookPages.find(p => p.id === firstContact.facebookPageId);
+              if (matchingPage) {
+                setSelectedPageId(matchingPage.id);
+              }
+            }, 500);
+          }
+        }
+        // Determine platform from contacts
+        const hasMessenger = data.contacts.some((c: any) => c.hasMessenger);
+        const hasInstagram = data.contacts.some((c: any) => c.hasInstagram);
+        if (hasMessenger && !hasInstagram) {
+          setPlatform('MESSENGER');
+        } else if (hasInstagram && !hasMessenger) {
+          setPlatform('INSTAGRAM');
+        }
+        toast.success(`Loaded ${data.contacts.length} selected contact(s)`);
+      }
+    } catch (error) {
+      console.error('Error fetching preselected contacts:', error);
+      const err = error as Error;
+      toast.error(err.message || 'Failed to load preselected contacts');
+    } finally {
+      setLoadingContacts(false);
     }
   };
 
@@ -318,8 +395,12 @@ export default function NewCampaignPage() {
         .filter((contact) => !excludedContactIds.has(contact.id))
         .map((contact) => contact.id);
 
-      // If contacts were excluded, use SPECIFIC_CONTACTS targeting
-      const finalTargetingType = excludedContactIds.size > 0 
+      // Check if contacts were preselected from URL
+      const preselectedContacts = searchParams.get('contacts');
+      const hasPreselectedContacts = preselectedContacts && preselectedContacts.split(',').length > 0;
+
+      // If contacts were preselected or excluded, use SPECIFIC_CONTACTS targeting
+      const finalTargetingType = (hasPreselectedContacts || excludedContactIds.size > 0)
         ? 'SPECIFIC_CONTACTS' 
         : (selectedTags.length === 0 ? 'ALL_CONTACTS' : 'TAGS');
 

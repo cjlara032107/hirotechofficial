@@ -42,9 +42,11 @@ import {
   ArrowUpDown,
   AlertCircle,
   Sparkles,
+  Plus,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { useQueryState } from 'nuqs';
+import { useRouter } from 'next/navigation';
 
 interface Contact {
   id: string;
@@ -223,6 +225,7 @@ const ContactRow = memo(function ContactRow({
 });
 
 export function ContactsTable({ contacts, tags, pipelines, isLoading }: ContactsTableProps) {
+  const router = useRouter();
   const searchParams = useSearchParams();
   const queryClient = useQueryClient();
   const [isPending, startTransition] = useTransition();
@@ -486,6 +489,20 @@ export function ContactsTable({ contacts, tags, pipelines, isLoading }: Contacts
             </div>
 
             <div className="flex items-center gap-2">
+              <Button
+                variant="default"
+                size="sm"
+                onClick={() => {
+                  const contactIds = Array.from(selectedIds);
+                  const params = new URLSearchParams();
+                  params.set('contacts', contactIds.join(','));
+                  router.push(`/campaigns/new?${params.toString()}`);
+                }}
+                className="bg-primary hover:bg-primary/90"
+              >
+                <Plus className="h-4 w-4 mr-2" />
+                Create Campaign
+              </Button>
               <Button
                 variant="outline"
                 size="sm"
