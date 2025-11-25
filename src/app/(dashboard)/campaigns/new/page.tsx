@@ -52,6 +52,7 @@ export default function NewCampaignPage() {
   const [hasPreselectedContacts, setHasPreselectedContacts] = useState(false);
   const fetchingContactsRef = useRef(false);
   const preselectedContactsLoadedRef = useRef(false);
+  const isSettingPreselectedRef = useRef(false);
 
   // Fetch tags and pages on mount
   useEffect(() => {
@@ -83,25 +84,33 @@ export default function NewCampaignPage() {
 
   // Fetch target contacts when settings change (only if not using preselected contacts)
   useEffect(() => {
+    // Don't fetch if we're currently setting preselected contacts
+    if (isSettingPreselectedRef.current) {
+      return;
+    }
+    
     // Don't fetch if we have preselected contacts already loaded
     if (hasPreselectedContacts && targetContacts.length > 0) {
       return;
     }
     
     // Don't fetch if already loading
-    if (loadingContacts) {
+    if (loadingContacts || fetchingContactsRef.current) {
       return;
     }
     
     if (selectedPageId && platform) {
       // Small delay to ensure state is updated
       const timer = setTimeout(() => {
-        fetchTargetContacts();
+        // Double-check we're not setting preselected contacts
+        if (!isSettingPreselectedRef.current && !hasPreselectedContacts) {
+          fetchTargetContacts();
+        }
       }, 100);
       return () => clearTimeout(timer);
     } else {
       // Only clear if we don't have preselected contacts
-      if (!hasPreselectedContacts) {
+      if (!hasPreselectedContacts && !isSettingPreselectedRef.current) {
         setTargetContacts([]);
       }
     }
@@ -164,10 +173,11 @@ export default function NewCampaignPage() {
 
   const fetchPreselectedContacts = async (contactIds: string[]) => {
     // Prevent multiple calls
-    if (hasPreselectedContacts || fetchingContactsRef.current) {
+    if (hasPreselectedContacts || fetchingContactsRef.current || isSettingPreselectedRef.current) {
       return;
     }
     
+    isSettingPreselectedRef.current = true;
     fetchingContactsRef.current = true;
     setLoadingContacts(true);
     try {
@@ -190,26 +200,19 @@ export default function NewCampaignPage() {
       if (data.contacts && data.contacts.length > 0) {
         // Only update if we don't already have these contacts loaded
         if (!hasPreselectedContacts) {
+          // Set contacts first
           setTargetContacts(data.contacts);
           setHasPreselectedContacts(true);
           
           // Auto-select the first page if contacts have the same page
           const firstContact = data.contacts[0];
-          if (firstContact.facebookPageId) {
-            // Wait for facebookPages to load, then set the page
-            if (facebookPages.length > 0) {
-              const matchingPage = facebookPages.find(p => p.id === firstContact.facebookPageId);
-              if (matchingPage) {
-                setSelectedPageId(matchingPage.id);
-              }
-            } else {
-              // If pages haven't loaded yet, wait a bit and try again
+          if (firstContact.facebookPageId && facebookPages.length > 0) {
+            const matchingPage = facebookPages.find(p => p.id === firstContact.facebookPageId);
+            if (matchingPage) {
+              // Use a small delay to batch state updates and prevent triggering other useEffects
               setTimeout(() => {
-                const matchingPage = facebookPages.find(p => p.id === firstContact.facebookPageId);
-                if (matchingPage) {
-                  setSelectedPageId(matchingPage.id);
-                }
-              }, 500);
+                setSelectedPageId(matchingPage.id);
+              }, 50);
             }
           }
           
@@ -217,21 +220,35 @@ export default function NewCampaignPage() {
           const hasMessenger = data.contacts.some((c: any) => c.hasMessenger);
           const hasInstagram = data.contacts.some((c: any) => c.hasInstagram);
           if (hasMessenger && !hasInstagram) {
-            setPlatform('MESSENGER');
+            setTimeout(() => {
+              setPlatform('MESSENGER');
+            }, 50);
           } else if (hasInstagram && !hasMessenger) {
-            setPlatform('INSTAGRAM');
+            setTimeout(() => {
+              setPlatform('INSTAGRAM');
+            }, 50);
           }
+          
+          // Mark that we're done setting preselected contacts after a delay
+          setTimeout(() => {
+            isSettingPreselectedRef.current = false;
+          }, 200);
           
           // Only show toast once - use a unique ID to prevent duplicates
           toast.success(`Loaded ${data.contacts.length} selected contact(s)`, {
             id: 'preselected-contacts-loaded', // Unique ID prevents duplicate toasts
           });
+        } else {
+          isSettingPreselectedRef.current = false;
         }
+      } else {
+        isSettingPreselectedRef.current = false;
       }
     } catch (error) {
       console.error('Error fetching preselected contacts:', error);
       const err = error as Error;
       toast.error(err.message || 'Failed to load preselected contacts');
+      isSettingPreselectedRef.current = false;
     } finally {
       setLoadingContacts(false);
       fetchingContactsRef.current = false;
@@ -242,8 +259,16 @@ export default function NewCampaignPage() {
     if (!selectedPageId || !platform) return;
     
     // Prevent multiple simultaneous calls
-    if (loadingContacts) return;
+    if (loadingContacts || fetchingContactsRef.current || isSettingPreselectedRef.current) {
+      return;
+    }
+    
+    // Don't fetch if we have preselected contacts
+    if (hasPreselectedContacts && targetContacts.length > 0) {
+      return;
+    }
 
+    fetchingContactsRef.current = true;
     setLoadingContacts(true);
     try {
       const response = await fetch('/api/campaigns/preview-contacts', {
