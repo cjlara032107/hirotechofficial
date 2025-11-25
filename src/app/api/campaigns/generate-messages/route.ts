@@ -31,12 +31,8 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    if (!templateMessage) {
-      return NextResponse.json(
-        { error: 'Template message is required' },
-        { status: 400 }
-      );
-    }
+    // Use default template if not provided (for AI-only generation)
+    const finalTemplateMessage = templateMessage || 'Hello {firstName}! I wanted to reach out to you.';
 
     // Fetch all contacts and verify they belong to the user's organization
     const contacts = await prisma.contact.findMany({
@@ -97,7 +93,7 @@ export async function POST(request: NextRequest) {
           const context = {
             contactName: contact.firstName,
             conversationHistory,
-            templateMessage,
+            templateMessage: finalTemplateMessage,
             customInstructions: customInstructions || undefined,
           };
 
@@ -106,7 +102,7 @@ export async function POST(request: NextRequest) {
         } catch (error) {
           console.error(`[AI Generation] Failed for contact ${contact.id}:`, error);
           // Fallback to template with variable replacement
-          const fallbackMessage = templateMessage
+          const fallbackMessage = finalTemplateMessage
             .replace(/\{firstName\}/g, contact.firstName)
             .replace(/\{lastName\}/g, contact.lastName || '')
             .replace(/\{name\}/g, `${contact.firstName} ${contact.lastName || ''}`.trim());
@@ -116,9 +112,9 @@ export async function POST(request: NextRequest) {
 
       await Promise.all(batchPromises);
       
-      // Rate limit delay between batches
+      // Rate limit delay between batches (reduced for faster generation)
       if (i + BATCH_SIZE < contacts.length) {
-        await new Promise((resolve) => setTimeout(resolve, 1000));
+        await new Promise((resolve) => setTimeout(resolve, 500));
       }
     }
 

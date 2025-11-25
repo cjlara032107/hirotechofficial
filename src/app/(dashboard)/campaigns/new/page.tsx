@@ -61,7 +61,7 @@ export default function NewCampaignPage() {
       setSelectedTags([preselectedTags]);
     }
     
-    // Handle preselected contacts from URL (only once)
+    // Handle preselected contacts from URL (only once on mount)
     if (!preselectedContactsLoadedRef.current) {
       const preselectedContacts = searchParams.get('contacts');
       if (preselectedContacts) {
@@ -74,7 +74,7 @@ export default function NewCampaignPage() {
           } else {
             // Wait a bit for pages to load
             const timer = setTimeout(() => {
-              if (!hasPreselectedContacts) {
+              if (!hasPreselectedContacts && !fetchingContactsRef.current) {
                 fetchPreselectedContacts(contactIds);
               }
             }, 500);
@@ -84,7 +84,7 @@ export default function NewCampaignPage() {
       }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [facebookPages]);
+  }, []); // Only run once on mount
 
   // Fetch target contacts when settings change (only if not using preselected contacts)
   useEffect(() => {
@@ -463,32 +463,43 @@ export default function NewCampaignPage() {
       // Generate AI messages if personalization is enabled
       let aiMessagesMap: Record<string, string> | null = null;
       if (useAiPersonalization && finalTargetContactIds.length > 0) {
-        toast.info(`Generating personalized messages for ${finalTargetContactIds.length} contact(s)...`);
+        const loadingToast = toast.loading(`Generating personalized messages for ${finalTargetContactIds.length} contact(s)...`);
         
         try {
+          console.log('[AI Generation] Starting generation for contacts:', finalTargetContactIds);
+          console.log('[AI Generation] Template content:', templateContent);
+          
           // Call API endpoint to generate messages server-side
           const generateRes = await fetch('/api/campaigns/generate-messages', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
               contactIds: finalTargetContactIds,
-              templateMessage: templateContent,
+              templateMessage: templateContent || 'Hello {firstName}! I wanted to reach out to you.',
               customInstructions: aiCustomInstructions || undefined,
             }),
           });
 
           if (!generateRes.ok) {
-            const errorData = await generateRes.json();
+            const errorData = await generateRes.json().catch(() => ({ error: 'Unknown error' }));
+            console.error('[AI Generation] API error:', errorData);
             throw new Error(errorData.error || 'Failed to generate messages');
           }
 
           const generateData = await generateRes.json();
+          console.log('[AI Generation] Response:', generateData);
+          
           aiMessagesMap = generateData.aiMessagesMap || {};
           
-          toast.success(`Generated ${generateData.generatedCount || Object.keys(aiMessagesMap || {}).length} unique personalized messages`);
+          if (Object.keys(aiMessagesMap).length > 0) {
+            toast.success(`Generated ${Object.keys(aiMessagesMap).length} unique personalized messages`, { id: loadingToast });
+          } else {
+            toast.error('No messages were generated. Using template messages.', { id: loadingToast });
+          }
         } catch (error) {
           console.error('[AI Generation] Fatal error:', error);
-          toast.error('Failed to generate some personalized messages. Campaign will use template messages.');
+          const err = error as Error;
+          toast.error(`Failed to generate messages: ${err.message}. Campaign will use template messages.`, { id: loadingToast });
           // Continue with campaign creation
         }
       }
