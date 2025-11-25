@@ -38,6 +38,7 @@ export async function GET(
     }
 
     // Recalculate metrics from actual message counts for accuracy
+    // This ensures metrics are always accurate even if webhooks haven't updated yet
     const messageCounts = await prisma.message.groupBy({
       by: ['status'],
       where: {
@@ -49,18 +50,23 @@ export async function GET(
     });
 
     // Calculate accurate counts
+    // Sent = all messages that were attempted (SENT, DELIVERED, READ, FAILED)
+    // This includes messages that were sent but may have failed
     const actualSentCount = messageCounts
-      .filter(m => m.status === 'SENT' || m.status === 'DELIVERED' || m.status === 'READ')
+      .filter(m => ['SENT', 'DELIVERED', 'READ', 'FAILED'].includes(m.status))
       .reduce((sum, m) => sum + m._count.status, 0);
     
+    // Delivered = messages that reached the recipient (DELIVERED or READ)
     const actualDeliveredCount = messageCounts
-      .filter(m => m.status === 'DELIVERED' || m.status === 'READ')
+      .filter(m => ['DELIVERED', 'READ'].includes(m.status))
       .reduce((sum, m) => sum + m._count.status, 0);
     
+    // Read = messages that were read by the recipient
     const actualReadCount = messageCounts
       .filter(m => m.status === 'READ')
       .reduce((sum, m) => sum + m._count.status, 0);
     
+    // Failed = messages that failed to send
     const actualFailedCount = messageCounts
       .filter(m => m.status === 'FAILED')
       .reduce((sum, m) => sum + m._count.status, 0);

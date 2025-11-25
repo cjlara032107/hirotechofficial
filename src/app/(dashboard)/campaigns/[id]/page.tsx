@@ -267,13 +267,19 @@ export default function CampaignDetailPage() {
     ? Math.min((campaign.sentCount / campaign.totalRecipients) * 100, 100)
     : 0;
 
-  const deliveryRate = campaign.sentCount > 0
-    ? ((campaign.deliveredCount / campaign.sentCount) * 100).toFixed(1)
-    : 0;
+  // Calculate delivery rate: delivered / sent (exclude failed from sent count for accuracy)
+  // Sent count includes failed, so we calculate: delivered / (sent - failed) for true delivery rate
+  const effectiveSentCount = campaign.sentCount - campaign.failedCount;
+  const deliveryRate = effectiveSentCount > 0
+    ? ((campaign.deliveredCount / effectiveSentCount) * 100).toFixed(1)
+    : campaign.sentCount > 0
+    ? '0.0'
+    : '0';
 
+  // Calculate read rate: read / delivered
   const readRate = campaign.deliveredCount > 0
     ? ((campaign.readCount / campaign.deliveredCount) * 100).toFixed(1)
-    : 0;
+    : '0';
 
   return (
     <div className="space-y-6">
