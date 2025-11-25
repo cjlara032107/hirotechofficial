@@ -141,10 +141,11 @@ export default function CampaignDetailPage() {
       const currentStatus = currentCampaign?.status;
       const useAiPersonalization = (currentCampaign as any)?.useAiPersonalization;
       const aiMessagesMap = (currentCampaign as any)?.aiMessagesMap;
+      const campaignData = currentCampaign as any;
       const hasTargetContacts = currentCampaign && (
-        (currentCampaign.targetContactIds && currentCampaign.targetContactIds.length > 0) || 
-        (currentCampaign.targetTags && currentCampaign.targetTags.length > 0) ||
-        currentCampaign.targetingType === 'ALL_CONTACTS'
+        (campaignData.targetContactIds && campaignData.targetContactIds.length > 0) || 
+        (campaignData.targetTags && campaignData.targetTags.length > 0) ||
+        campaignData.targetingType === 'ALL_CONTACTS'
       );
       
       const isGenerating = useAiPersonalization && 
