@@ -104,9 +104,10 @@ export default function CampaignDetailPage() {
         // 3. aiMessagesMap is null or empty
         const useAiPersonalization = (data as any).useAiPersonalization;
         const aiMessagesMap = (data as any).aiMessagesMap;
-        const hasTargetContacts = (data.targetContactIds && data.targetContactIds.length > 0) || 
-                                  (data.targetTags && data.targetTags.length > 0) ||
-                                  data.targetingType === 'ALL_CONTACTS';
+        const campaignData = data as any;
+        const hasTargetContacts = (campaignData.targetContactIds && campaignData.targetContactIds.length > 0) || 
+                                  (campaignData.targetTags && campaignData.targetTags.length > 0) ||
+                                  campaignData.targetingType === 'ALL_CONTACTS';
         
         const generating = useAiPersonalization && 
                           hasTargetContacts && 
