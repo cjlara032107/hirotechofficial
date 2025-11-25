@@ -53,6 +53,7 @@ export default function NewCampaignPage() {
   const fetchingContactsRef = useRef(false);
   const preselectedContactsLoadedRef = useRef(false);
 
+  // Fetch tags and pages on mount
   useEffect(() => {
     fetchTags();
     fetchFacebookPages();
@@ -60,31 +61,25 @@ export default function NewCampaignPage() {
     if (preselectedTags) {
       setSelectedTags([preselectedTags]);
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Handle preselected contacts from URL (only once, after pages load)
+  useEffect(() => {
+    if (preselectedContactsLoadedRef.current || facebookPages.length === 0) {
+      return;
+    }
     
-    // Handle preselected contacts from URL (only once on mount)
-    if (!preselectedContactsLoadedRef.current) {
-      const preselectedContacts = searchParams.get('contacts');
-      if (preselectedContacts) {
-        const contactIds = preselectedContacts.split(',').filter(Boolean);
-        if (contactIds.length > 0) {
-          preselectedContactsLoadedRef.current = true;
-          // Wait for pages to load, then fetch preselected contacts
-          if (facebookPages.length > 0) {
-            fetchPreselectedContacts(contactIds);
-          } else {
-            // Wait a bit for pages to load
-            const timer = setTimeout(() => {
-              if (!hasPreselectedContacts && !fetchingContactsRef.current) {
-                fetchPreselectedContacts(contactIds);
-              }
-            }, 500);
-            return () => clearTimeout(timer);
-          }
-        }
+    const preselectedContacts = searchParams.get('contacts');
+    if (preselectedContacts) {
+      const contactIds = preselectedContacts.split(',').filter(Boolean);
+      if (contactIds.length > 0 && !hasPreselectedContacts && !fetchingContactsRef.current) {
+        preselectedContactsLoadedRef.current = true;
+        fetchPreselectedContacts(contactIds);
       }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []); // Only run once on mount
+  }, [facebookPages.length]); // Only when pages are loaded
 
   // Fetch target contacts when settings change (only if not using preselected contacts)
   useEffect(() => {
@@ -227,8 +222,10 @@ export default function NewCampaignPage() {
             setPlatform('INSTAGRAM');
           }
           
-          // Only show toast once
-          toast.success(`Loaded ${data.contacts.length} selected contact(s)`);
+          // Only show toast once - use a unique ID to prevent duplicates
+          toast.success(`Loaded ${data.contacts.length} selected contact(s)`, {
+            id: 'preselected-contacts-loaded', // Unique ID prevents duplicate toasts
+          });
         }
       }
     } catch (error) {
@@ -460,52 +457,9 @@ export default function NewCampaignPage() {
         ? 'SPECIFIC_CONTACTS' 
         : (selectedTags.length === 0 ? 'ALL_CONTACTS' : 'TAGS');
 
-      // Generate AI messages if personalization is enabled
-      let aiMessagesMap: Record<string, string> | null = null;
-      if (useAiPersonalization && finalTargetContactIds.length > 0) {
-        const loadingToast = toast.loading(`Generating personalized messages for ${finalTargetContactIds.length} contact(s)...`);
-        
-        try {
-          console.log('[AI Generation] Starting generation for contacts:', finalTargetContactIds);
-          console.log('[AI Generation] Template content:', templateContent);
-          
-          // Call API endpoint to generate messages server-side
-          const generateRes = await fetch('/api/campaigns/generate-messages', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              contactIds: finalTargetContactIds,
-              templateMessage: templateContent || 'Hello {firstName}! I wanted to reach out to you.',
-              customInstructions: aiCustomInstructions || undefined,
-            }),
-          });
-
-          if (!generateRes.ok) {
-            const errorData = await generateRes.json().catch(() => ({ error: 'Unknown error' }));
-            console.error('[AI Generation] API error:', errorData);
-            throw new Error(errorData.error || 'Failed to generate messages');
-          }
-
-          const generateData = await generateRes.json();
-          console.log('[AI Generation] Response:', generateData);
-          
-          aiMessagesMap = generateData.aiMessagesMap || {};
-          
-          if (aiMessagesMap && Object.keys(aiMessagesMap).length > 0) {
-            toast.success(`Generated ${Object.keys(aiMessagesMap).length} unique personalized messages`, { id: loadingToast });
-          } else {
-            toast.error('No messages were generated. Using template messages.', { id: loadingToast });
-          }
-        } catch (error) {
-          console.error('[AI Generation] Fatal error:', error);
-          const err = error as Error;
-          toast.error(`Failed to generate messages: ${err.message}. Campaign will use template messages.`, { id: loadingToast });
-          // Continue with campaign creation
-        }
-      }
-
-      // Create campaign - if no tags selected, target all contacts
-      const campaignRes = await fetch('/api/campaigns', {
+      // Use background job API for campaign creation with AI messages
+      // This allows generation to continue even if user navigates away
+      const campaignRes = await fetch('/api/campaigns/create-with-messages', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -518,10 +472,10 @@ export default function NewCampaignPage() {
           targetTags: selectedTags,
           targetContactIds: finalTargetingType === 'SPECIFIC_CONTACTS' ? finalTargetContactIds : undefined,
           scheduledAt,
-          autoFetchEnabled: isScheduled ? autoFetchEnabled : false, // Only enable for scheduled campaigns
+          autoFetchEnabled: isScheduled ? autoFetchEnabled : false,
           useAiPersonalization: useAiPersonalization || undefined,
           aiCustomInstructions: useAiPersonalization && aiCustomInstructions ? aiCustomInstructions : undefined,
-          aiMessagesMap: aiMessagesMap || undefined, // Include generated messages
+          templateContent: templateContent, // Pass template for background generation
         }),
       });
 
