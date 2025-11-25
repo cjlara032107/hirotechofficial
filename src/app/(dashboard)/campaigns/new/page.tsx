@@ -51,6 +51,7 @@ export default function NewCampaignPage() {
   const [loadingPreview, setLoadingPreview] = useState(false);
   const [hasPreselectedContacts, setHasPreselectedContacts] = useState(false);
   const fetchingContactsRef = useRef(false);
+  const preselectedContactsLoadedRef = useRef(false);
 
   useEffect(() => {
     fetchTags();
@@ -60,20 +61,25 @@ export default function NewCampaignPage() {
       setSelectedTags([preselectedTags]);
     }
     
-    // Handle preselected contacts from URL
-    const preselectedContacts = searchParams.get('contacts');
-    if (preselectedContacts) {
-      const contactIds = preselectedContacts.split(',').filter(Boolean);
-      if (contactIds.length > 0) {
-        // Wait for pages to load, then fetch preselected contacts
-        if (facebookPages.length > 0) {
-          fetchPreselectedContacts(contactIds);
-        } else {
-          // Wait a bit for pages to load
-          const timer = setTimeout(() => {
+    // Handle preselected contacts from URL (only once)
+    if (!preselectedContactsLoadedRef.current) {
+      const preselectedContacts = searchParams.get('contacts');
+      if (preselectedContacts) {
+        const contactIds = preselectedContacts.split(',').filter(Boolean);
+        if (contactIds.length > 0) {
+          preselectedContactsLoadedRef.current = true;
+          // Wait for pages to load, then fetch preselected contacts
+          if (facebookPages.length > 0) {
             fetchPreselectedContacts(contactIds);
-          }, 500);
-          return () => clearTimeout(timer);
+          } else {
+            // Wait a bit for pages to load
+            const timer = setTimeout(() => {
+              if (!hasPreselectedContacts) {
+                fetchPreselectedContacts(contactIds);
+              }
+            }, 500);
+            return () => clearTimeout(timer);
+          }
         }
       }
     }
@@ -162,6 +168,12 @@ export default function NewCampaignPage() {
   };
 
   const fetchPreselectedContacts = async (contactIds: string[]) => {
+    // Prevent multiple calls
+    if (hasPreselectedContacts || fetchingContactsRef.current) {
+      return;
+    }
+    
+    fetchingContactsRef.current = true;
     setLoadingContacts(true);
     try {
       // Fetch contact details for preselected contacts
@@ -181,36 +193,43 @@ export default function NewCampaignPage() {
 
       const data = await response.json();
       if (data.contacts && data.contacts.length > 0) {
-        setTargetContacts(data.contacts);
-        setHasPreselectedContacts(true);
-        // Auto-select the first page if contacts have the same page
-        const firstContact = data.contacts[0];
-        if (firstContact.facebookPageId) {
-          // Wait for facebookPages to load, then set the page
-          if (facebookPages.length > 0) {
-            const matchingPage = facebookPages.find(p => p.id === firstContact.facebookPageId);
-            if (matchingPage) {
-              setSelectedPageId(matchingPage.id);
-            }
-          } else {
-            // If pages haven't loaded yet, wait a bit and try again
-            setTimeout(() => {
+        // Only update if we don't already have these contacts loaded
+        if (!hasPreselectedContacts) {
+          setTargetContacts(data.contacts);
+          setHasPreselectedContacts(true);
+          
+          // Auto-select the first page if contacts have the same page
+          const firstContact = data.contacts[0];
+          if (firstContact.facebookPageId) {
+            // Wait for facebookPages to load, then set the page
+            if (facebookPages.length > 0) {
               const matchingPage = facebookPages.find(p => p.id === firstContact.facebookPageId);
               if (matchingPage) {
                 setSelectedPageId(matchingPage.id);
               }
-            }, 500);
+            } else {
+              // If pages haven't loaded yet, wait a bit and try again
+              setTimeout(() => {
+                const matchingPage = facebookPages.find(p => p.id === firstContact.facebookPageId);
+                if (matchingPage) {
+                  setSelectedPageId(matchingPage.id);
+                }
+              }, 500);
+            }
           }
+          
+          // Determine platform from contacts
+          const hasMessenger = data.contacts.some((c: any) => c.hasMessenger);
+          const hasInstagram = data.contacts.some((c: any) => c.hasInstagram);
+          if (hasMessenger && !hasInstagram) {
+            setPlatform('MESSENGER');
+          } else if (hasInstagram && !hasMessenger) {
+            setPlatform('INSTAGRAM');
+          }
+          
+          // Only show toast once
+          toast.success(`Loaded ${data.contacts.length} selected contact(s)`);
         }
-        // Determine platform from contacts
-        const hasMessenger = data.contacts.some((c: any) => c.hasMessenger);
-        const hasInstagram = data.contacts.some((c: any) => c.hasInstagram);
-        if (hasMessenger && !hasInstagram) {
-          setPlatform('MESSENGER');
-        } else if (hasInstagram && !hasMessenger) {
-          setPlatform('INSTAGRAM');
-        }
-        toast.success(`Loaded ${data.contacts.length} selected contact(s)`);
       }
     } catch (error) {
       console.error('Error fetching preselected contacts:', error);
@@ -218,6 +237,7 @@ export default function NewCampaignPage() {
       toast.error(err.message || 'Failed to load preselected contacts');
     } finally {
       setLoadingContacts(false);
+      fetchingContactsRef.current = false;
     }
   };
 
