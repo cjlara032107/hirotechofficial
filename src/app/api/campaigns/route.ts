@@ -106,7 +106,11 @@ export async function POST(request: NextRequest) {
         // AI Personalization
         ...(useAiPersonalization !== undefined && { useAiPersonalization }),
         ...(aiCustomInstructions && { aiCustomInstructions }),
-        ...(aiMessagesMap && { aiMessagesMap }),
+        ...(aiMessagesMap && { 
+          aiMessagesMap: typeof aiMessagesMap === 'string' 
+            ? JSON.parse(aiMessagesMap) 
+            : aiMessagesMap 
+        }),
       } as any, // Type assertion needed for fields that may not be in generated types yet
     });
 

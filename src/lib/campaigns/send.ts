@@ -478,8 +478,25 @@ export async function startCampaign(campaignId: string) {
   console.log('🚀 Using fast parallel sending mode - NO rate limiting');
   
   // Generate AI messages if personalization is enabled but messages haven't been generated yet
-  let aiMessagesMap = (campaign as any).aiMessagesMap as Record<string, string> | null;
+  let aiMessagesMap: Record<string, string> | null = null;
+  
+  // Parse aiMessagesMap from JSON if it exists
+  if ((campaign as any).aiMessagesMap) {
+    if (typeof (campaign as any).aiMessagesMap === 'string') {
+      try {
+        aiMessagesMap = JSON.parse((campaign as any).aiMessagesMap);
+      } catch (e) {
+        console.error('[AI Messages] Failed to parse aiMessagesMap from string:', e);
+        aiMessagesMap = null;
+      }
+    } else if (typeof (campaign as any).aiMessagesMap === 'object') {
+      aiMessagesMap = (campaign as any).aiMessagesMap as Record<string, string>;
+    }
+  }
+  
   const useAiPersonalization = (campaign as any).useAiPersonalization;
+  
+  console.log(`[AI Messages] useAiPersonalization: ${useAiPersonalization}, aiMessagesMap exists: ${!!aiMessagesMap}, keys: ${aiMessagesMap ? Object.keys(aiMessagesMap).length : 0}`);
   
   if (useAiPersonalization && (!aiMessagesMap || Object.keys(aiMessagesMap).length === 0)) {
     console.log(`🤖 Generating AI-personalized messages for ${targetContacts.length} contacts...`);
@@ -565,9 +582,12 @@ export async function startCampaign(campaignId: string) {
     // Use AI-generated message if available, otherwise use template
     if (useAiMessages && aiMessagesMap && aiMessagesMap[contact.id]) {
       messageContent = aiMessagesMap[contact.id];
-      console.log(`✨ Using AI message for ${contact.firstName}: "${messageContent.substring(0, 50)}..."`);
+      console.log(`✨ Using AI message for ${contact.firstName} (${contact.id}): "${messageContent.substring(0, 50)}..."`);
     } else {
       // Fallback to template with variable replacement
+      if (useAiMessages && aiMessagesMap) {
+        console.log(`⚠️ AI message not found for contact ${contact.id} (${contact.firstName}), using template. Available keys: ${Object.keys(aiMessagesMap).join(', ')}`);
+      }
       messageContent = campaign.template?.content || '';
       messageContent = messageContent
         .replace(/\{firstName\}/g, contact.firstName)
