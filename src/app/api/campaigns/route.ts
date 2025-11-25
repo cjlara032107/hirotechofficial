@@ -65,6 +65,7 @@ export async function POST(request: NextRequest) {
       // AI Personalization fields
       useAiPersonalization,
       aiCustomInstructions,
+      aiMessagesMap,
     } = body;
 
     // Determine campaign status based on scheduling
@@ -105,6 +106,7 @@ export async function POST(request: NextRequest) {
         // AI Personalization
         ...(useAiPersonalization !== undefined && { useAiPersonalization }),
         ...(aiCustomInstructions && { aiCustomInstructions }),
+        ...(aiMessagesMap && { aiMessagesMap }),
       } as any, // Type assertion needed for fields that may not be in generated types yet
     });
 

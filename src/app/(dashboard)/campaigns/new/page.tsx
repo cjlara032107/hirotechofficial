@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import { Button } from '@/components/ui/button';
@@ -50,6 +50,7 @@ export default function NewCampaignPage() {
   const [previewMessage, setPreviewMessage] = useState<string | null>(null);
   const [loadingPreview, setLoadingPreview] = useState(false);
   const [hasPreselectedContacts, setHasPreselectedContacts] = useState(false);
+  const fetchingContactsRef = useRef(false);
 
   useEffect(() => {
     fetchTags();
@@ -86,6 +87,11 @@ export default function NewCampaignPage() {
       return;
     }
     
+    // Don't fetch if already loading
+    if (loadingContacts) {
+      return;
+    }
+    
     if (selectedPageId && platform) {
       // Small delay to ensure state is updated
       const timer = setTimeout(() => {
@@ -99,7 +105,7 @@ export default function NewCampaignPage() {
       }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedPageId, platform, selectedTags, hasPreselectedContacts]);
+  }, [selectedPageId, platform, selectedTags]);
 
   const fetchTags = async () => {
     try {
@@ -217,6 +223,9 @@ export default function NewCampaignPage() {
 
   const fetchTargetContacts = async () => {
     if (!selectedPageId || !platform) return;
+    
+    // Prevent multiple simultaneous calls
+    if (loadingContacts) return;
 
     setLoadingContacts(true);
     try {
@@ -246,6 +255,7 @@ export default function NewCampaignPage() {
       toast.error(err.message || 'Failed to load target contacts');
     } finally {
       setLoadingContacts(false);
+      fetchingContactsRef.current = false;
     }
   };
 
@@ -430,7 +440,76 @@ export default function NewCampaignPage() {
         ? 'SPECIFIC_CONTACTS' 
         : (selectedTags.length === 0 ? 'ALL_CONTACTS' : 'TAGS');
 
-          // Create campaign - if no tags selected, target all contacts
+      // Generate AI messages if personalization is enabled
+      let aiMessagesMap: Record<string, string> | null = null;
+      if (useAiPersonalization && finalTargetContactIds.length > 0) {
+        toast.info(`Generating personalized messages for ${finalTargetContactIds.length} contact(s)...`);
+        
+        try {
+          const { GoogleAIService } = await import('@/lib/ai/google-ai-service');
+          const aiService = new GoogleAIService();
+          const BATCH_SIZE = 3; // Smaller batch for better UX during creation
+          
+          aiMessagesMap = {};
+          const finalContacts = targetContacts.filter((contact) => !excludedContactIds.has(contact.id));
+          
+          for (let i = 0; i < finalContacts.length; i += BATCH_SIZE) {
+            const batch = finalContacts.slice(i, i + BATCH_SIZE);
+            
+            const batchPromises = batch.map(async (contact) => {
+              try {
+                // Fetch conversation history
+                const messagesRes = await fetch(`/api/contacts/${contact.id}/messages?limit=10`);
+                let conversationHistory: Array<{ from: string; message: string; timestamp: string }> = [];
+                
+                if (messagesRes.ok) {
+                  const messagesData = await messagesRes.json();
+                  conversationHistory = (messagesData.messages || [])
+                    .reverse()
+                    .map((msg: any) => ({
+                      from: msg.isFromBusiness ? 'Business' : contact.firstName,
+                      message: msg.content,
+                      timestamp: msg.createdAt || new Date().toISOString(),
+                    }));
+                }
+                
+                const context = {
+                  contactName: contact.firstName,
+                  conversationHistory,
+                  templateMessage: templateContent,
+                  customInstructions: aiCustomInstructions || undefined,
+                };
+
+                const personalizedMessage = await aiService.generatePersonalizedMessage(context);
+                aiMessagesMap![contact.id] = personalizedMessage;
+              } catch (error) {
+                console.error(`[AI Generation] Failed for contact ${contact.id}:`, error);
+                // Fallback to template
+                const fallbackMessage = templateContent
+                  .replace(/\{firstName\}/g, contact.firstName)
+                  .replace(/\{lastName\}/g, contact.lastName || '')
+                  .replace(/\{name\}/g, `${contact.firstName} ${contact.lastName || ''}`.trim());
+                aiMessagesMap![contact.id] = fallbackMessage;
+              }
+            });
+
+            await Promise.all(batchPromises);
+            
+            // Rate limit delay between batches
+            if (i + BATCH_SIZE < finalContacts.length) {
+              await new Promise((resolve) => setTimeout(resolve, 1000));
+            }
+          }
+          
+          toast.success(`Generated ${Object.keys(aiMessagesMap).length} unique personalized messages`);
+        } catch (error) {
+          console.error('[AI Generation] Fatal error:', error);
+          toast.error('Failed to generate some personalized messages. Campaign will use template messages.');
+          // Continue with campaign creation
+        }
+      }
+
+      // Create campaign - if no tags selected, target all contacts
       const campaignRes = await fetch('/api/campaigns', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -447,6 +526,7 @@ export default function NewCampaignPage() {
           autoFetchEnabled: isScheduled ? autoFetchEnabled : false, // Only enable for scheduled campaigns
           useAiPersonalization: useAiPersonalization || undefined,
           aiCustomInstructions: useAiPersonalization && aiCustomInstructions ? aiCustomInstructions : undefined,
+          aiMessagesMap: aiMessagesMap || undefined, // Include generated messages
         }),
       });
 
