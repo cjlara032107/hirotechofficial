@@ -555,7 +555,7 @@ export async function startCampaign(campaignId: string) {
   
   const useAiMessages = useAiPersonalization && aiMessagesMap;
   
-  if (useAiMessages) {
+  if (useAiMessages && aiMessagesMap) {
     console.log(`📝 Using AI-personalized messages for ${Object.keys(aiMessagesMap).length} contacts`);
   }
   
