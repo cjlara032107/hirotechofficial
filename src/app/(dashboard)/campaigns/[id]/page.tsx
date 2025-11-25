@@ -71,6 +71,7 @@ export default function CampaignDetailPage() {
   const [resending, setResending] = useState(false);
   const [showCancelDialog, setShowCancelDialog] = useState(false);
   const [showResendDialog, setShowResendDialog] = useState(false);
+  const [isGeneratingMessages, setIsGeneratingMessages] = useState(false);
   
   // Use ref to avoid stale closure in interval
   const campaignRef = useRef(campaign);
@@ -95,6 +96,29 @@ export default function CampaignDetailPage() {
 
       if (response.ok) {
         setCampaign(data);
+        
+        // Check if message generation is in progress
+        // Generation is in progress if:
+        // 1. AI personalization is enabled
+        // 2. Campaign has target contacts
+        // 3. aiMessagesMap is null or empty
+        const useAiPersonalization = (data as any).useAiPersonalization;
+        const aiMessagesMap = (data as any).aiMessagesMap;
+        const hasTargetContacts = (data.targetContactIds && data.targetContactIds.length > 0) || 
+                                  (data.targetTags && data.targetTags.length > 0) ||
+                                  data.targetingType === 'ALL_CONTACTS';
+        
+        const generating = useAiPersonalization && 
+                          hasTargetContacts && 
+                          (!aiMessagesMap || Object.keys(aiMessagesMap || {}).length === 0) &&
+                          data.status === 'DRAFT'; // Only show for draft campaigns
+        
+        setIsGeneratingMessages(generating);
+        
+        // Show notification when generation completes
+        if (useAiPersonalization && hasTargetContacts && aiMessagesMap && Object.keys(aiMessagesMap).length > 0 && isGeneratingMessages) {
+          toast.success(`AI message generation complete! ${Object.keys(aiMessagesMap).length} personalized messages ready.`);
+        }
       } else {
         toast.error(data.error || 'Failed to fetch campaign');
       }
@@ -110,17 +134,31 @@ export default function CampaignDetailPage() {
   useEffect(() => {
     fetchCampaign();
     
-    // Poll for updates if campaign is sending or recently completed
+    // Poll for updates if campaign is sending, generating messages, or recently completed
     // Using ref to access current campaign status without triggering re-renders
     const interval = setInterval(() => {
       const currentCampaign = campaignRef.current;
       const currentStatus = currentCampaign?.status;
+      const useAiPersonalization = (currentCampaign as any)?.useAiPersonalization;
+      const aiMessagesMap = (currentCampaign as any)?.aiMessagesMap;
+      const hasTargetContacts = currentCampaign && (
+        (currentCampaign.targetContactIds && currentCampaign.targetContactIds.length > 0) || 
+        (currentCampaign.targetTags && currentCampaign.targetTags.length > 0) ||
+        currentCampaign.targetingType === 'ALL_CONTACTS'
+      );
       
-      // Poll if sending, or if recently completed (to catch final state)
-      if (currentStatus === 'SENDING' || (currentStatus === 'COMPLETED' && currentCampaign && !(currentCampaign as any).completedAt)) {
+      const isGenerating = useAiPersonalization && 
+                          hasTargetContacts && 
+                          (!aiMessagesMap || Object.keys(aiMessagesMap || {}).length === 0) &&
+                          currentStatus === 'DRAFT';
+      
+      // Poll if sending, generating messages, or recently completed
+      if (currentStatus === 'SENDING' || 
+          isGenerating || 
+          (currentStatus === 'COMPLETED' && currentCampaign && !(currentCampaign as any).completedAt)) {
         fetchCampaign();
       }
-    }, 1000); // Poll every 1 second for real-time updates during sending
+    }, 2000); // Poll every 2 seconds for real-time updates
 
     return () => clearInterval(interval);
   }, [params.id, fetchCampaign]); // Now includes fetchCampaign which is stable due to useCallback
@@ -283,6 +321,21 @@ export default function CampaignDetailPage() {
 
   return (
     <div className="space-y-6">
+      {/* Message Generation Status Indicator */}
+      {isGeneratingMessages && (
+        <div className="bg-blue-50 dark:bg-blue-950 border border-blue-200 dark:border-blue-800 rounded-lg p-4 flex items-center gap-3">
+          <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-blue-600"></div>
+          <div className="flex-1">
+            <p className="text-sm font-medium text-blue-900 dark:text-blue-100">
+              Generating AI personalized messages...
+            </p>
+            <p className="text-xs text-blue-700 dark:text-blue-300 mt-1">
+              This may take a few moments. You can navigate away - generation will continue in the background.
+            </p>
+          </div>
+        </div>
+      )}
+      
       {/* Header */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-4">
