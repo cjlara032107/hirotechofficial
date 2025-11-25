@@ -475,7 +475,7 @@ export function EditRuleDialog({ open, onOpenChange, rule, onSuccess }: EditRule
                   {isShortInterval && (
                     <p className="text-xs text-amber-600 dark:text-amber-400 mt-2 flex items-center gap-1">
                       <AlertCircle className="w-3 h-3" />
-                      Note: A 12-hour cooldown applies between messages to the same contact, regardless of interval
+                      Short intervals will restart after each automated send. Contacts must wait for the full interval before the next message.
                     </p>
                   )}
                 </div>

@@ -149,30 +149,6 @@ export async function POST(request: NextRequest) {
     const stoppedIds = stoppedContactIds.map(s => s.contactId);
     eligibleContacts = eligibleContacts.filter(c => !stoppedIds.includes(c.id));
 
-    // Check cooldown - don't send to same contact within last 12 hours (unless bypassed for manual testing)
-    let recentContactIds: string[] = [];
-    if (!bypassCooldown) {
-      const cooldownDate = new Date(now.getTime() - 12 * 60 * 60 * 1000);
-      const recentExecutions = await prisma.aIAutomationExecution.findMany({
-        where: {
-          ruleId: rule.id,
-          executedAt: {
-            gte: cooldownDate,
-          },
-          status: 'sent',
-        },
-        select: {
-          contactId: true,
-        },
-      });
-
-      recentContactIds = recentExecutions.map(e => e.contactId);
-      eligibleContacts = eligibleContacts.filter(c => !recentContactIds.includes(c.id));
-      console.log(`[AI Automations] Cooldown check: ${recentContactIds.length} contacts in cooldown period`);
-    } else {
-      console.log(`[AI Automations] Cooldown check bypassed for manual testing`);
-    }
-
     console.log(`[AI Automations] Found ${eligibleContacts.length} eligible contacts after filters`);
 
     if (eligibleContacts.length === 0) {
@@ -181,11 +157,10 @@ export async function POST(request: NextRequest) {
         sent: 0,
         failed: 0,
         total: 0,
-        message: 'No eligible contacts found. Check: time interval, tags, stopped contacts, or cooldown period.',
+        message: 'No eligible contacts found. Check: time interval, tags, or stopped contacts.',
         details: {
           totalBeforeFilters,
           stoppedCount: stoppedIds.length,
-          recentExecutionsCount: recentContactIds.length,
         },
       });
     }
@@ -351,6 +326,17 @@ export async function POST(request: NextRequest) {
               facebookMessageId: result.data?.message_id,
               executedAt: new Date(),
             },
+          });
+
+          // Update contact timestamps so interval is respected
+          await prisma.contact.update({
+            where: { id: contact.id },
+            data: { lastInteraction: new Date() },
+          });
+
+          await prisma.conversation.update({
+            where: { id: conversation.id },
+            data: { lastMessageAt: new Date(), status: 'OPEN' },
           });
 
           // Save message to database

@@ -154,35 +154,6 @@ export async function GET(
       executionsByContact.get(execution.contactId)!.push(execution);
     }
 
-    // Check cooldown period (12 hours)
-    const cooldownMs = 12 * 60 * 60 * 1000;
-    const cooldownDate = new Date(now.getTime() - cooldownMs);
-    const recentExecutionsForCooldown = await prisma.aIAutomationExecution.findMany({
-      where: {
-        ruleId: rule.id,
-        executedAt: {
-          gte: cooldownDate,
-        },
-        status: 'sent',
-        contactId: {
-          in: matchingContacts.map(c => c.id),
-        },
-      },
-      select: {
-        contactId: true,
-        executedAt: true,
-      },
-    });
-
-    // Create map of contactId -> last execution time (for cooldown)
-    const lastExecutionByContact = new Map<string, Date>();
-    for (const exec of recentExecutionsForCooldown) {
-      const existing = lastExecutionByContact.get(exec.contactId);
-      if (!existing || exec.executedAt > existing) {
-        lastExecutionByContact.set(exec.contactId, exec.executedAt);
-      }
-    }
-
     // Process contacts and calculate trigger times
     const contactsData = matchingContacts.map(contact => {
       const lastInteraction = contact.lastInteraction || contact.createdAt;
@@ -191,29 +162,15 @@ export async function GET(
       const stopInfo = stoppedMap.get(contact.id);
       const executions = executionsByContact.get(contact.id) || [];
       
-      // Check if contact is in cooldown
-      const lastExecution = lastExecutionByContact.get(contact.id);
-      const isInCooldown = lastExecution !== undefined;
-      const cooldownExpiresAt = lastExecution 
-        ? new Date(lastExecution.getTime() + cooldownMs)
-        : null;
-      
-      // Contact is eligible if:
-      // 1. Time interval has passed (now >= nextTriggerTime)
-      // 2. Not stopped
-      // 3. Not in cooldown (or cooldown has expired)
+      // Contact is eligible if time interval has passed and they're not stopped
       const timeIntervalPassed = now >= nextTriggerTime;
-      const cooldownExpired = !isInCooldown || (cooldownExpiresAt && now >= cooldownExpiresAt);
-      const isEligible = timeIntervalPassed && !isStopped && cooldownExpired;
+      const isEligible = timeIntervalPassed && !isStopped;
 
       // Calculate time until trigger or time since eligible
       let timeUntilTrigger = 0;
       let timeSinceEligible = 0;
       
-      if (isInCooldown && cooldownExpiresAt && now < cooldownExpiresAt) {
-        // In cooldown - show time until cooldown expires
-        timeUntilTrigger = Math.max(0, cooldownExpiresAt.getTime() - now.getTime());
-      } else if (timeIntervalPassed) {
+      if (timeIntervalPassed) {
         // Time interval passed, eligible (or was eligible)
         timeSinceEligible = Math.max(0, now.getTime() - nextTriggerTime.getTime());
       } else {
@@ -231,8 +188,6 @@ export async function GET(
         nextTriggerTime: nextTriggerTime.toISOString(),
         isEligible,
         isStopped,
-        isInCooldown,
-        cooldownExpiresAt: cooldownExpiresAt?.toISOString() || null,
         stopInfo: stopInfo ? {
           reason: stopInfo.stoppedReason,
           followUpsSent: stopInfo.followUpsSent,
@@ -251,33 +206,19 @@ export async function GET(
       };
     });
 
-    // Sort contacts: eligible first (excluding cooldown), then by next eligible time
+    // Sort contacts: eligible first, then by next trigger time
     contactsData.sort((a, b) => {
-      // Stopped contacts go last
       if (a.isStopped !== b.isStopped) {
         return a.isStopped ? 1 : -1;
       }
-      
-      // Eligible contacts (not in cooldown) go first
-      const aIsActuallyEligible = a.isEligible && !a.isInCooldown;
-      const bIsActuallyEligible = b.isEligible && !b.isInCooldown;
-      if (aIsActuallyEligible !== bIsActuallyEligible) {
-        return aIsActuallyEligible ? -1 : 1;
+      if (a.isEligible !== b.isEligible) {
+        return a.isEligible ? -1 : 1;
       }
-      
-      // For non-eligible contacts, sort by next eligible time (cooldown expiration or trigger time)
-      const aNextTime = a.isInCooldown && a.cooldownExpiresAt
-        ? new Date(a.cooldownExpiresAt).getTime()
-        : new Date(a.nextTriggerTime).getTime();
-      const bNextTime = b.isInCooldown && b.cooldownExpiresAt
-        ? new Date(b.cooldownExpiresAt).getTime()
-        : new Date(b.nextTriggerTime).getTime();
-      
-      return aNextTime - bNextTime;
+      return a.nextTriggerTime.localeCompare(b.nextTriggerTime);
     });
 
     // Calculate statistics (accounting for cooldown)
-    const eligibleCount = contactsData.filter(c => c.isEligible && !c.isStopped && !c.isInCooldown).length;
+    const eligibleCount = contactsData.filter(c => c.isEligible && !c.isStopped).length;
     const stoppedCount = contactsData.filter(c => c.isStopped).length;
     const totalMatching = contactsData.length;
 

@@ -196,56 +196,9 @@ export async function GET(request: NextRequest) {
         eligibleContacts = eligibleContacts.filter(c => !stoppedIds.includes(c.id));
         console.log(`[AI Automations Cron] After stopped filter: ${eligibleContacts.length} contacts (${stoppedIds.length} stopped)`);
 
-        // Check cooldown - don't send to same contact within last 12 hours
-        const cooldownDate = new Date(now.getTime() - 12 * 60 * 60 * 1000);
-        const recentExecutions = await prisma.aIAutomationExecution.findMany({
-          where: {
-            ruleId: rule.id,
-            executedAt: {
-              gte: cooldownDate,
-            },
-            status: 'sent',
-          },
-          select: {
-            contactId: true,
-            executedAt: true,
-            recipientName: true,
-          },
-          orderBy: {
-            executedAt: 'desc',
-          },
-        });
-
-        // Create a map of contactId -> last execution time
-        const recentContactMap = new Map<string, Date>();
-        for (const exec of recentExecutions) {
-          if (!recentContactMap.has(exec.contactId)) {
-            recentContactMap.set(exec.contactId, exec.executedAt);
-          }
-        }
-
-        const recentContactIds = Array.from(recentContactMap.keys());
-        const beforeCooldownFilter = eligibleContacts.length;
-        
-        // Log which contacts are in cooldown
-        const contactsInCooldown = eligibleContacts.filter(c => recentContactIds.includes(c.id));
-        if (contactsInCooldown.length > 0) {
-          console.log(`[AI Automations Cron] Contacts in cooldown:`);
-          for (const contact of contactsInCooldown) {
-            const lastExecTime = recentContactMap.get(contact.id);
-            const hoursAgo = lastExecTime 
-              ? Math.round((now.getTime() - lastExecTime.getTime()) / (60 * 60 * 1000) * 10) / 10
-              : 0;
-            console.log(`  - ${contact.firstName} (${contact.id}): last messaged ${hoursAgo}h ago`);
-          }
-        }
-        
-        eligibleContacts = eligibleContacts.filter(c => !recentContactIds.includes(c.id));
-        console.log(`[AI Automations Cron] After cooldown filter: ${eligibleContacts.length} contacts (${recentContactIds.length} in cooldown)`);
-
         if (eligibleContacts.length === 0) {
           console.log(`[AI Automations Cron] Rule "${rule.name}" - No eligible contacts after all filters`);
-          console.log(`[AI Automations Cron] Filter summary: ${beforeTagFilter} initial → ${beforeStoppedFilter} after tags → ${beforeCooldownFilter} after stopped → 0 after cooldown`);
+          console.log(`[AI Automations Cron] Filter summary: ${beforeTagFilter} initial → ${beforeStoppedFilter} after tags → 0 after stopped`);
           continue;
         }
 
@@ -420,6 +373,16 @@ export async function GET(request: NextRequest) {
                   facebookMessageId: result.data?.message_id,
                   executedAt: new Date(),
                 },
+              });
+
+              // Update contact activity timestamps so the interval is respected
+              await prisma.contact.update({
+                where: { id: contact.id },
+                data: { lastInteraction: new Date() },
+              });
+              await prisma.conversation.update({
+                where: { id: conversation.id },
+                data: { lastMessageAt: new Date(), status: 'OPEN' },
               });
 
               // Save message to database
