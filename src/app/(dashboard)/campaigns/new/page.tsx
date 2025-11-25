@@ -491,7 +491,7 @@ export default function NewCampaignPage() {
           
           aiMessagesMap = generateData.aiMessagesMap || {};
           
-          if (Object.keys(aiMessagesMap).length > 0) {
+          if (aiMessagesMap && Object.keys(aiMessagesMap).length > 0) {
             toast.success(`Generated ${Object.keys(aiMessagesMap).length} unique personalized messages`, { id: loadingToast });
           } else {
             toast.error('No messages were generated. Using template messages.', { id: loadingToast });
