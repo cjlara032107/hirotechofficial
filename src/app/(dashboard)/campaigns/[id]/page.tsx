@@ -538,7 +538,7 @@ export default function CampaignDetailPage() {
                 <p className="text-2xl font-bold text-red-600">
                   {campaign.sentCount > 0 
                     ? ((campaign.failedCount / campaign.sentCount) * 100).toFixed(1) 
-                    : 0}%
+                    : '0.0'}%
                 </p>
                 <p className="text-xs text-muted-foreground">
                   {campaign.failedCount} failed deliveries
