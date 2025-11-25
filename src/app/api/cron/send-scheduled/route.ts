@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/db';
 import { startCampaign, getTargetContacts } from '@/lib/campaigns/send';
-import { analyzeConversation } from '@/lib/ai/google-ai-service';
+import { GoogleAIService } from '@/lib/ai/google-ai-service';
 import { FacebookClient } from '@/lib/facebook/client';
 
 export const dynamic = 'force-dynamic';
@@ -330,30 +330,14 @@ async function generateAIMessages(campaign: any, contacts: any[]): Promise<Recor
           const templateContent = campaign.template?.content || 'Hello {firstName}!';
           const context = {
             contactName: contact.firstName,
-            conversationHistory,
+            conversationHistory: conversationHistory.reverse(), // Reverse to chronological order
             templateMessage: templateContent,
-            customInstructions: campaign.aiCustomInstructions || '',
+            customInstructions: campaign.aiCustomInstructions || undefined,
           };
 
-          // Generate personalized message using AI conversation analyzer
-          const aiInsights = await analyzeConversation(
-            conversationHistory.map(msg => ({
-              from: msg.from,
-              text: msg.message,
-              timestamp: new Date(msg.timestamp)
-            }))
-          );
-          
-          // Create personalized message based on AI insights and template
-          let personalizedMessage = templateContent
-            .replace(/\{firstName\}/g, contact.firstName)
-            .replace(/\{lastName\}/g, contact.lastName || '')
-            .replace(/\{name\}/g, `${contact.firstName} ${contact.lastName || ''}`.trim());
-          
-          // Add AI-generated context if available
-          if (aiInsights) {
-            personalizedMessage = `${personalizedMessage}\n\n${aiInsights}`;
-          }
+          // Use GoogleAIService to generate personalized message
+          const aiService = new GoogleAIService();
+          const personalizedMessage = await aiService.generatePersonalizedMessage(context);
           
           aiMessagesMap[contact.id] = personalizedMessage;
           

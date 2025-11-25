@@ -477,9 +477,83 @@ export async function startCampaign(campaignId: string) {
 
   console.log('🚀 Using fast parallel sending mode - NO rate limiting');
   
-  // Check if we have AI-generated messages to use
-  const aiMessagesMap = (campaign as any).aiMessagesMap as Record<string, string> | null;
-  const useAiMessages = (campaign as any).useAiPersonalization && aiMessagesMap;
+  // Generate AI messages if personalization is enabled but messages haven't been generated yet
+  let aiMessagesMap = (campaign as any).aiMessagesMap as Record<string, string> | null;
+  const useAiPersonalization = (campaign as any).useAiPersonalization;
+  
+  if (useAiPersonalization && (!aiMessagesMap || Object.keys(aiMessagesMap).length === 0)) {
+    console.log(`🤖 Generating AI-personalized messages for ${targetContacts.length} contacts...`);
+    try {
+      const { GoogleAIService } = await import('@/lib/ai/google-ai-service');
+      const aiService = new GoogleAIService();
+      const BATCH_SIZE = 5;
+      
+      aiMessagesMap = {};
+      
+      for (let i = 0; i < targetContacts.length; i += BATCH_SIZE) {
+        const batch = targetContacts.slice(i, i + BATCH_SIZE);
+        
+        const batchPromises = batch.map(async (contact) => {
+          try {
+            // Fetch conversation history
+            const messages = await prisma.message.findMany({
+              where: { contactId: contact.id },
+              orderBy: { createdAt: 'desc' },
+              take: 10,
+            });
+
+            const conversationHistory = messages
+              .reverse()
+              .map((msg) => ({
+                from: msg.isFromBusiness ? 'Business' : contact.firstName,
+                message: msg.content,
+                timestamp: msg.createdAt.toISOString(),
+              }));
+
+            const templateContent = campaign.template?.content || 'Hello {firstName}!';
+            const context = {
+              contactName: contact.firstName,
+              conversationHistory,
+              templateMessage: templateContent,
+              customInstructions: (campaign as any).aiCustomInstructions || undefined,
+            };
+
+            const personalizedMessage = await aiService.generatePersonalizedMessage(context);
+            aiMessagesMap![contact.id] = personalizedMessage;
+          } catch (error) {
+            console.error(`[AI Generation] Failed for contact ${contact.id}:`, error);
+            // Fallback to template
+            const fallbackMessage = (campaign.template?.content || 'Hello!')
+              .replace(/\{firstName\}/g, contact.firstName)
+              .replace(/\{lastName\}/g, contact.lastName || '')
+              .replace(/\{name\}/g, `${contact.firstName} ${contact.lastName || ''}`.trim());
+            aiMessagesMap![contact.id] = fallbackMessage;
+          }
+        });
+
+        await Promise.all(batchPromises);
+        
+        // Rate limit delay between batches
+        if (i + BATCH_SIZE < targetContacts.length) {
+          await new Promise((resolve) => setTimeout(resolve, 2000));
+        }
+      }
+      
+      // Save generated messages to campaign
+      await prisma.campaign.update({
+        where: { id: campaignId },
+        data: { aiMessagesMap: aiMessagesMap as any },
+      });
+      
+      console.log(`✅ Generated ${Object.keys(aiMessagesMap).length} AI-personalized messages`);
+    } catch (error) {
+      console.error('[AI Generation] Fatal error:', error);
+      // Continue with template messages
+      aiMessagesMap = null;
+    }
+  }
+  
+  const useAiMessages = useAiPersonalization && aiMessagesMap;
   
   if (useAiMessages) {
     console.log(`📝 Using AI-personalized messages for ${Object.keys(aiMessagesMap).length} contacts`);

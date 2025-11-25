@@ -104,6 +104,8 @@ export async function POST(request: NextRequest) {
       tags: contact.tags || [],
       hasMessenger: contact.hasMessenger,
       hasInstagram: contact.hasInstagram,
+      aiContext: contact.aiContext || null,
+      lastInteraction: contact.lastInteraction || null,
     }));
 
     return NextResponse.json({
@@ -119,4 +121,7 @@ export async function POST(request: NextRequest) {
     );
   }
 }
+
+
+
 

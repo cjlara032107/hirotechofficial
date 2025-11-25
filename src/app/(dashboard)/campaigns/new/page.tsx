@@ -14,7 +14,7 @@ import { Checkbox } from '@/components/ui/checkbox';
 import { Switch } from '@/components/ui/switch';
 import { toast } from 'sonner';
 import { MESSAGE_TAGS } from '@/lib/facebook/message-tags';
-import { CalendarIcon, Clock, Search, X, Users, Loader2, RefreshCw } from 'lucide-react';
+import { CalendarIcon, Clock, Search, X, Users, Loader2, RefreshCw, Sparkles, Eye } from 'lucide-react';
 
 export default function NewCampaignPage() {
   const router = useRouter();
@@ -44,6 +44,11 @@ export default function NewCampaignPage() {
   const [excludedContactIds, setExcludedContactIds] = useState<Set<string>>(new Set());
   const [searchQuery, setSearchQuery] = useState('');
   const [loadingContacts, setLoadingContacts] = useState(false);
+  const [useAiPersonalization, setUseAiPersonalization] = useState(false);
+  const [aiCustomInstructions, setAiCustomInstructions] = useState('');
+  const [previewingContactId, setPreviewingContactId] = useState<string | null>(null);
+  const [previewMessage, setPreviewMessage] = useState<string | null>(null);
+  const [loadingPreview, setLoadingPreview] = useState(false);
 
   useEffect(() => {
     fetchTags();
@@ -194,6 +199,43 @@ export default function NewCampaignPage() {
   const displayedContacts = filteredContacts;
   const excludedCount = excludedContactIds.size;
 
+  const handlePreviewPersonalizedMessage = async (contactId: string) => {
+    if (!messageContent) {
+      toast.error('Please enter a message template first');
+      return;
+    }
+
+    setPreviewingContactId(contactId);
+    setLoadingPreview(true);
+    setPreviewMessage(null);
+
+    try {
+      const response = await fetch('/api/campaigns/preview-personalized-message', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contactId,
+          templateMessage: messageContent,
+          customInstructions: aiCustomInstructions || undefined,
+        }),
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || 'Failed to generate preview');
+      }
+
+      const data = await response.json();
+      setPreviewMessage(data.personalizedMessage);
+    } catch (error) {
+      console.error('Error generating preview:', error);
+      const err = error as Error;
+      toast.error(err.message || 'Failed to generate personalized message preview');
+    } finally {
+      setLoadingPreview(false);
+    }
+  };
+
   const handleCreate = async () => {
     if (!name || !messageContent) {
       toast.error('Please fill in all required fields');
@@ -281,7 +323,7 @@ export default function NewCampaignPage() {
         ? 'SPECIFIC_CONTACTS' 
         : (selectedTags.length === 0 ? 'ALL_CONTACTS' : 'TAGS');
 
-      // Create campaign - if no tags selected, target all contacts
+          // Create campaign - if no tags selected, target all contacts
       const campaignRes = await fetch('/api/campaigns', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -296,6 +338,8 @@ export default function NewCampaignPage() {
           targetContactIds: finalTargetingType === 'SPECIFIC_CONTACTS' ? finalTargetContactIds : undefined,
           scheduledAt,
           autoFetchEnabled: isScheduled ? autoFetchEnabled : false, // Only enable for scheduled campaigns
+          useAiPersonalization: useAiPersonalization || undefined,
+          aiCustomInstructions: useAiPersonalization && aiCustomInstructions ? aiCustomInstructions : undefined,
         }),
       });
 
@@ -527,6 +571,61 @@ export default function NewCampaignPage() {
             </p>
           </div>
 
+          {/* AI Personalization Section */}
+          <div className="space-y-4 pt-2 border-t border-border/50">
+            <div className="flex items-center space-x-3">
+              <Switch
+                id="ai-personalization"
+                checked={useAiPersonalization}
+                onCheckedChange={setUseAiPersonalization}
+              />
+              <div className="flex-1">
+                <Label 
+                  htmlFor="ai-personalization" 
+                  className="text-sm font-semibold cursor-pointer flex items-center gap-2"
+                >
+                  <Sparkles className="h-4 w-4 text-primary" />
+                  AI Personalization
+                </Label>
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  Generate personalized messages for each contact based on their conversation history and context
+                </p>
+              </div>
+            </div>
+
+            {useAiPersonalization && (
+              <div className="ml-8 space-y-4 p-4 bg-muted/30 rounded-xl border border-border/50">
+                <div className="space-y-2.5">
+                  <Label className="text-sm font-semibold">Custom Prompt Instructions (Optional)</Label>
+                  <Textarea
+                    value={aiCustomInstructions}
+                    onChange={(e) => setAiCustomInstructions(e.target.value)}
+                    placeholder="e.g., Keep the tone professional, mention their last purchase, or focus on their specific interests..."
+                    rows={4}
+                    className="rounded-xl border-border/50 resize-none focus-visible:ring-primary/30"
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Provide additional instructions to customize how AI generates personalized messages. 
+                    The AI will use the contact's conversation history and context to create unique messages for each recipient.
+                  </p>
+                </div>
+
+                <div className="p-3 bg-blue-50/50 border border-blue-200/50 rounded-lg space-y-2">
+                  <p className="text-xs text-blue-900">
+                    ✨ <strong>How it works:</strong> The AI will analyze each contact's conversation history, 
+                    AI context, and your template message to create a personalized version that feels natural and relevant.
+                  </p>
+                  {aiCustomInstructions && (
+                    <p className="text-xs text-blue-900">
+                      📝 <strong>Custom instructions:</strong> Your prompt will guide the AI to follow specific 
+                      tone, style, or content requirements when generating messages.
+                    </p>
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
+
           {/* Target Contacts Preview */}
           {selectedPageId ? (
             <div className="space-y-4 pt-2 border-t border-border/50">
@@ -624,46 +723,78 @@ export default function NewCampaignPage() {
                       displayedContacts.map((contact) => (
                         <div
                           key={contact.id}
-                          className="p-4 hover:bg-accent/50 transition-colors flex items-center justify-between"
+                          className="p-4 hover:bg-accent/50 transition-colors"
                         >
-                          <div className="flex-1 min-w-0">
-                            <div className="flex items-center gap-2 mb-1">
-                              <p className="font-semibold text-sm truncate">
-                                {contact.firstName} {contact.lastName}
-                              </p>
-                              {contact.tags && contact.tags.length > 0 && (
-                                <div className="flex gap-1 flex-wrap">
-                                  {contact.tags.slice(0, 2).map((tag) => (
-                                    <Badge key={tag} variant="secondary" className="text-xs">
-                                      {tag}
-                                    </Badge>
-                                  ))}
-                                  {contact.tags.length > 2 && (
-                                    <Badge variant="secondary" className="text-xs">
-                                      +{contact.tags.length - 2}
-                                    </Badge>
-                                  )}
-                                </div>
-                              )}
+                          <div className="flex items-center justify-between mb-2">
+                            <div className="flex-1 min-w-0">
+                              <div className="flex items-center gap-2 mb-1">
+                                <p className="font-semibold text-sm truncate">
+                                  {contact.firstName} {contact.lastName}
+                                </p>
+                                {contact.tags && contact.tags.length > 0 && (
+                                  <div className="flex gap-1 flex-wrap">
+                                    {contact.tags.slice(0, 2).map((tag) => (
+                                      <Badge key={tag} variant="secondary" className="text-xs">
+                                        {tag}
+                                      </Badge>
+                                    ))}
+                                    {contact.tags.length > 2 && (
+                                      <Badge variant="secondary" className="text-xs">
+                                        +{contact.tags.length - 2}
+                                      </Badge>
+                                    )}
+                                  </div>
+                                )}
+                              </div>
+                              <div className="flex gap-4 text-xs text-muted-foreground">
+                                {contact.email && (
+                                  <span className="truncate">{contact.email}</span>
+                                )}
+                                {contact.phone && (
+                                  <span className="truncate">{contact.phone}</span>
+                                )}
+                              </div>
                             </div>
-                            <div className="flex gap-4 text-xs text-muted-foreground">
-                              {contact.email && (
-                                <span className="truncate">{contact.email}</span>
+                            <div className="flex items-center gap-2 ml-4">
+                              {useAiPersonalization && messageContent && (
+                                <Button
+                                  type="button"
+                                  variant="outline"
+                                  size="sm"
+                                  onClick={() => handlePreviewPersonalizedMessage(contact.id)}
+                                  disabled={loadingPreview && previewingContactId === contact.id}
+                                  className="h-8 text-xs"
+                                >
+                                  {loadingPreview && previewingContactId === contact.id ? (
+                                    <>
+                                      <Loader2 className="h-3 w-3 animate-spin mr-1" />
+                                      Generating...
+                                    </>
+                                  ) : (
+                                    <>
+                                      <Eye className="h-3 w-3 mr-1" />
+                                      Preview
+                                    </>
+                                  )}
+                                </Button>
                               )}
-                              {contact.phone && (
-                                <span className="truncate">{contact.phone}</span>
-                              )}
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="sm"
+                                onClick={() => handleRemoveContact(contact.id)}
+                                className="h-8 w-8 p-0 text-destructive hover:text-destructive hover:bg-destructive/10"
+                              >
+                                <X className="h-4 w-4" />
+                              </Button>
                             </div>
                           </div>
-                          <Button
-                            type="button"
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => handleRemoveContact(contact.id)}
-                            className="ml-4 h-8 w-8 p-0 text-destructive hover:text-destructive hover:bg-destructive/10"
-                          >
-                            <X className="h-4 w-4" />
-                          </Button>
+                          {previewingContactId === contact.id && previewMessage && (
+                            <div className="mt-3 p-3 bg-primary/5 border border-primary/20 rounded-lg">
+                              <p className="text-xs font-semibold text-primary mb-2">AI Personalized Preview:</p>
+                              <p className="text-sm text-foreground whitespace-pre-wrap">{previewMessage}</p>
+                            </div>
+                          )}
                         </div>
                       ))
                     )}
