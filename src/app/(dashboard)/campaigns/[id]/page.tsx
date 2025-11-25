@@ -75,6 +75,7 @@ export default function CampaignDetailPage() {
   
   // Use ref to avoid stale closure in interval
   const campaignRef = useRef(campaign);
+  const wasGeneratingRef = useRef(false); // Track previous generation state
 
   // Update ref whenever campaign changes
   useEffect(() => {
@@ -114,12 +115,25 @@ export default function CampaignDetailPage() {
                           (!aiMessagesMap || Object.keys(aiMessagesMap || {}).length === 0) &&
                           data.status === 'DRAFT'; // Only show for draft campaigns
         
-        setIsGeneratingMessages(generating);
+        // Detect transition from generating to complete
+        const wasGenerating = wasGeneratingRef.current;
+        const isNowComplete = !generating && wasGenerating && 
+                             useAiPersonalization && 
+                             hasTargetContacts && 
+                             aiMessagesMap && 
+                             Object.keys(aiMessagesMap).length > 0;
         
-        // Show notification when generation completes
-        if (useAiPersonalization && hasTargetContacts && aiMessagesMap && Object.keys(aiMessagesMap).length > 0 && isGeneratingMessages) {
-          toast.success(`AI message generation complete! ${Object.keys(aiMessagesMap).length} personalized messages ready.`);
+        // Show notification when generation completes (transition from generating to complete)
+        if (isNowComplete) {
+          const messageCount = Object.keys(aiMessagesMap).length;
+          toast.success(`✅ AI message generation complete! ${messageCount} personalized message${messageCount !== 1 ? 's' : ''} ready. You can now start the campaign.`, {
+            duration: 6000,
+          });
         }
+        
+        // Update state and ref
+        setIsGeneratingMessages(generating);
+        wasGeneratingRef.current = generating;
       } else {
         toast.error(data.error || 'Failed to fetch campaign');
       }
