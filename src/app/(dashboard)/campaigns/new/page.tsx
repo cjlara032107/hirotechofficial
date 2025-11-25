@@ -489,7 +489,12 @@ export default function NewCampaignPage() {
         const campaign = await campaignRes.json();
         const recipientCount = targetContacts.length - excludedContactIds.size;
         
-        if (isScheduled && scheduledAt) {
+        // Show appropriate message based on whether AI generation is in progress
+        if (campaign.messageGenerationInProgress) {
+          toast.success('Campaign created! AI messages are being generated in the background. You can navigate away safely.', {
+            duration: 6000,
+          });
+        } else if (isScheduled && scheduledAt) {
           if (recipientCount > 0) {
             toast.success(`Campaign scheduled successfully! It will be sent to ${recipientCount} contact${recipientCount !== 1 ? 's' : ''} at the scheduled time.`);
           } else {
