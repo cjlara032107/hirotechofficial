@@ -514,10 +514,10 @@ export default function NewCampaignPage() {
         const campaign = await campaignRes.json();
         const recipientCount = targetContacts.length - excludedContactIds.size;
         
-        // Show appropriate message based on whether AI generation is in progress
+        // Show success message immediately and allow navigation
         if (campaign.messageGenerationInProgress) {
           toast.success('Campaign created! AI messages are being generated in the background. You can navigate away safely.', {
-            duration: 6000,
+            duration: 8000,
           });
         } else if (isScheduled && scheduledAt) {
           if (recipientCount > 0) {
@@ -532,7 +532,15 @@ export default function NewCampaignPage() {
             toast.success('Campaign created successfully!');
           }
         }
+        
+        // Reset creating state immediately to allow navigation
+        setCreating(false);
+        
+        // Navigate immediately - background jobs will continue
         router.push(`/campaigns/${campaign.id}`);
+        
+        // Don't wait for anything else - return immediately
+        return;
       } else {
         const data = await campaignRes.json();
         toast.error(data.error || 'Failed to create campaign');
@@ -541,9 +549,10 @@ export default function NewCampaignPage() {
       console.error('Error creating campaign:', error);
       const err = error as Error;
       toast.error(err.message || 'An error occurred while creating campaign');
-    } finally {
       setCreating(false);
     }
+    // Note: setCreating(false) is called before navigation in success case
+    // to allow immediate navigation without waiting
   };
 
   return (

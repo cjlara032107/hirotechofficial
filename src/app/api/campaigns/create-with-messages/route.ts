@@ -78,9 +78,17 @@ export async function POST(request: NextRequest) {
       } as any,
     });
 
+    // Return response immediately - don't wait for background jobs
+    const response = NextResponse.json({
+      ...campaign,
+      messageGenerationInProgress: useAiPersonalization && targetContactIds && targetContactIds.length > 0,
+    });
+
     // If AI personalization is enabled, generate messages in background
+    // This runs after the response is sent, so user doesn't have to wait
     if (useAiPersonalization && targetContactIds && targetContactIds.length > 0) {
       // Start background generation (don't await - let it run in background)
+      // This continues even if the user navigates away or closes the browser
       generateAIMessagesInBackground(
         campaign.id,
         targetContactIds,
@@ -91,10 +99,7 @@ export async function POST(request: NextRequest) {
       });
     }
 
-    return NextResponse.json({
-      ...campaign,
-      messageGenerationInProgress: useAiPersonalization && targetContactIds && targetContactIds.length > 0,
-    });
+    return response;
   } catch (error) {
     const err = error as Error;
     console.error('Create campaign with messages error:', err);
