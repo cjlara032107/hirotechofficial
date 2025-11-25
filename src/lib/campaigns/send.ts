@@ -563,7 +563,7 @@ export async function startCampaign(campaignId: string) {
     let messageContent: string;
     
     // Use AI-generated message if available, otherwise use template
-    if (useAiMessages && aiMessagesMap[contact.id]) {
+    if (useAiMessages && aiMessagesMap && aiMessagesMap[contact.id]) {
       messageContent = aiMessagesMap[contact.id];
       console.log(`✨ Using AI message for ${contact.firstName}: "${messageContent.substring(0, 50)}..."`);
     } else {
