@@ -105,6 +105,14 @@ Summary:`;
       }, Usage: ${JSON.stringify(completion.usage || {})}`
     );
 
+    // Check for error in response (API returned error object)
+    // Check if error property exists (even if empty string)
+    if ('error' in completion && (completion as any).error !== undefined) {
+      const errorMsg = (completion as any).error?.message || (completion as any).error || 'Unknown API error';
+      console.error(`[NVIDIA] API returned error in conversation analysis response: ${errorMsg}. Full response:`, JSON.stringify(completion, null, 2));
+      return null;
+    }
+
     // Check if choices array exists and has items
     if (!completion.choices || completion.choices.length === 0) {
       console.error('[NVIDIA] No choices in response. Full response:', JSON.stringify(completion, null, 2));
@@ -299,9 +307,45 @@ Respond ONLY with valid JSON (no markdown, no explanation):
       ],
     });
 
+    // Check for error in response (API returned error object)
+    // Check if error property exists (even if empty string)
+    if ('error' in completion && (completion as any).error !== undefined) {
+      const errorMsg = (completion as any).error?.message || (completion as any).error || 'Unknown API error';
+      console.error(`[NVIDIA] API returned error in response: ${errorMsg}. Full response:`, JSON.stringify(completion, null, 2));
+      
+      // Retry with different API key if available
+      if (retries > 0) {
+        console.log(`[NVIDIA] Retrying with different API key (${retries} retries remaining)...`);
+        await sleep(1000); // Brief delay before retry
+        return generateFollowUpMessage(
+          contactName,
+          conversationHistory,
+          customPrompt,
+          languageStyle,
+          retries - 1
+        );
+      }
+      
+      return null;
+    }
+
     // Check if choices array exists and has items
     if (!completion.choices || completion.choices.length === 0) {
       console.error('[NVIDIA] No choices in response for follow-up message. Full response:', JSON.stringify(completion, null, 2));
+      
+      // Retry with different API key if available
+      if (retries > 0) {
+        console.log(`[NVIDIA] Retrying with different API key (${retries} retries remaining)...`);
+        await sleep(1000); // Brief delay before retry
+        return generateFollowUpMessage(
+          contactName,
+          conversationHistory,
+          customPrompt,
+          languageStyle,
+          retries - 1
+        );
+      }
+      
       return null;
     }
 
@@ -532,6 +576,14 @@ Respond ONLY with valid JSON (no markdown, no explanation):
       }, Usage: ${JSON.stringify(completion.usage || {})}`
     );
 
+    // Check for error in response (API returned error object)
+    // Check if error property exists (even if empty string)
+    if ('error' in completion && (completion as any).error !== undefined) {
+      const errorMsg = (completion as any).error?.message || (completion as any).error || 'Unknown API error';
+      console.error(`[NVIDIA] API returned error in stage recommendation response: ${errorMsg}. Full response:`, JSON.stringify(completion, null, 2));
+      return null;
+    }
+
     // Check if choices array exists and has items
     if (!completion.choices || completion.choices.length === 0) {
       console.error('[NVIDIA] No choices in response for stage recommendation. Full response:', JSON.stringify(completion, null, 2));
@@ -674,11 +726,15 @@ export class GoogleAIService {
         ? `\n\nCustom Instructions: ${context.customInstructions}`
         : '';
 
-      const prompt = `Generate a personalized follow-up message for ${context.contactName}.
+      // If no template message, generate from scratch based on context
+      const templateSection = context.templateMessage && context.templateMessage.trim()
+        ? `Template Message: ${context.templateMessage}\n\n`
+        : '';
 
-Template Message: ${context.templateMessage}
+      const prompt = templateSection
+        ? `Generate a personalized follow-up message for ${context.contactName}.
 
-Previous Conversation History:
+${templateSection}Previous Conversation History:
 ${historyText}${customInstructions}
 
 Create a natural, personalized version of the template message that:
@@ -687,6 +743,21 @@ Create a natural, personalized version of the template message that:
 3. Maintains the intent and key information from the template
 4. Uses a conversational, friendly tone
 5. Is concise and engaging (2-4 sentences)
+
+Respond with ONLY the personalized message text (no JSON, no markdown, no explanation).`
+        : `Generate a personalized follow-up message for ${context.contactName} based on their conversation history and context.
+
+Previous Conversation History:
+${historyText}${customInstructions}
+
+Create a natural, personalized message that:
+1. References specific points from the conversation history (if available)
+2. Feels personal and tailored to ${context.contactName}
+3. Uses a conversational, friendly tone
+4. Is concise and engaging (2-4 sentences)
+5. Provides value and encourages engagement
+
+${customInstructions ? 'Follow the custom instructions provided above.' : ''}
 
 Respond with ONLY the personalized message text (no JSON, no markdown, no explanation).`;
 
@@ -699,6 +770,17 @@ Respond with ONLY the personalized message text (no JSON, no markdown, no explan
           },
         ],
       });
+
+      // Check for error in response (API returned error object)
+      // Check if error property exists (even if empty string)
+      if ('error' in completion && (completion as any).error !== undefined) {
+        const errorMsg = (completion as any).error?.message || (completion as any).error || 'Unknown API error';
+        console.error(`[NVIDIA] API returned error in personalized message response: ${errorMsg}. Full response:`, JSON.stringify(completion, null, 2));
+        // Fallback to template
+        return context.templateMessage
+          .replace(/\{firstName\}/g, context.contactName)
+          .replace(/\{name\}/g, context.contactName);
+      }
 
       // Check if choices array exists and has items
       if (!completion.choices || completion.choices.length === 0) {

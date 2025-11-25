@@ -49,6 +49,7 @@ export default function NewCampaignPage() {
   const [previewingContactId, setPreviewingContactId] = useState<string | null>(null);
   const [previewMessage, setPreviewMessage] = useState<string | null>(null);
   const [loadingPreview, setLoadingPreview] = useState(false);
+  const [hasPreselectedContacts, setHasPreselectedContacts] = useState(false);
 
   useEffect(() => {
     fetchTags();
@@ -78,8 +79,13 @@ export default function NewCampaignPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [facebookPages]);
 
-  // Fetch target contacts when settings change
+  // Fetch target contacts when settings change (only if not using preselected contacts)
   useEffect(() => {
+    // Don't fetch if we have preselected contacts already loaded
+    if (hasPreselectedContacts && targetContacts.length > 0) {
+      return;
+    }
+    
     if (selectedPageId && platform) {
       // Small delay to ensure state is updated
       const timer = setTimeout(() => {
@@ -87,10 +93,13 @@ export default function NewCampaignPage() {
       }, 100);
       return () => clearTimeout(timer);
     } else {
-      setTargetContacts([]);
+      // Only clear if we don't have preselected contacts
+      if (!hasPreselectedContacts) {
+        setTargetContacts([]);
+      }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedPageId, platform, selectedTags]);
+  }, [selectedPageId, platform, selectedTags, hasPreselectedContacts]);
 
   const fetchTags = async () => {
     try {
@@ -167,6 +176,7 @@ export default function NewCampaignPage() {
       const data = await response.json();
       if (data.contacts && data.contacts.length > 0) {
         setTargetContacts(data.contacts);
+        setHasPreselectedContacts(true);
         // Auto-select the first page if contacts have the same page
         const firstContact = data.contacts[0];
         if (firstContact.facebookPageId) {
@@ -277,7 +287,12 @@ export default function NewCampaignPage() {
   const excludedCount = excludedContactIds.size;
 
   const handlePreviewPersonalizedMessage = async (contactId: string) => {
-    if (!messageContent) {
+    // Use message content or default template when AI personalization is enabled
+    const templateMessage = messageContent || (useAiPersonalization 
+      ? 'Hello {firstName}! I wanted to reach out to you.' 
+      : '');
+    
+    if (!templateMessage) {
       toast.error('Please enter a message template first');
       return;
     }
@@ -292,7 +307,7 @@ export default function NewCampaignPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           contactId,
-          templateMessage: messageContent,
+          templateMessage: templateMessage,
           customInstructions: aiCustomInstructions || undefined,
         }),
       });
@@ -314,8 +329,14 @@ export default function NewCampaignPage() {
   };
 
   const handleCreate = async () => {
-    if (!name || !messageContent) {
-      toast.error('Please fill in all required fields');
+    if (!name) {
+      toast.error('Please enter a campaign name');
+      return;
+    }
+
+    // Message content is only required if AI personalization is disabled
+    if (!useAiPersonalization && !messageContent) {
+      toast.error('Please enter a message or enable AI personalization');
       return;
     }
 
@@ -347,13 +368,18 @@ export default function NewCampaignPage() {
     setCreating(true);
 
     try {
+      // Use message content or default template when AI personalization is enabled
+      const templateContent = messageContent || (useAiPersonalization 
+        ? 'Hello {firstName}! I wanted to reach out to you.' 
+        : '');
+      
       // First create template
       const templateRes = await fetch('/api/templates', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           name: `${name} Template`,
-          content: messageContent,
+          content: templateContent,
           platform,
         }),
       });
@@ -636,20 +662,36 @@ export default function NewCampaignPage() {
           </div>
 
           <div className="space-y-2.5">
-            <Label className="text-sm font-semibold">Message Content *</Label>
+            <Label className="text-sm font-semibold">
+              Message Content {useAiPersonalization ? '(Optional)' : '*'}
+            </Label>
+            {useAiPersonalization && (
+              <div className="p-3 bg-blue-50/50 border border-blue-200/50 rounded-lg mb-2">
+                <p className="text-xs text-blue-900">
+                  💡 <strong>AI Personalization Enabled:</strong> You can leave this empty and AI will generate unique messages for each contact based on their conversation history and context. 
+                  Or provide a template message that AI will personalize for each contact.
+                </p>
+              </div>
+            )}
             <Textarea
               value={messageContent}
               onChange={(e) => setMessageContent(e.target.value)}
-              placeholder="Enter your message... Use {firstName}, {lastName} for personalization"
+              placeholder={
+                useAiPersonalization 
+                  ? "Optional: Enter a template message for AI to personalize, or leave empty for AI to generate from scratch..."
+                  : "Enter your message... Use {firstName}, {lastName} for personalization"
+              }
               rows={6}
               className="rounded-xl border-border/50 resize-none focus-visible:ring-primary/30"
             />
-            <p className="text-xs text-muted-foreground mt-2 flex items-center gap-1.5">
-              <span className="font-medium">Available variables:</span>
-              <code className="px-1.5 py-0.5 rounded bg-muted text-foreground">{'{firstName}'}</code>
-              <code className="px-1.5 py-0.5 rounded bg-muted text-foreground">{'{lastName}'}</code>
-              <code className="px-1.5 py-0.5 rounded bg-muted text-foreground">{'{name}'}</code>
-            </p>
+            {!useAiPersonalization && (
+              <p className="text-xs text-muted-foreground mt-2 flex items-center gap-1.5">
+                <span className="font-medium">Available variables:</span>
+                <code className="px-1.5 py-0.5 rounded bg-muted text-foreground">{'{firstName}'}</code>
+                <code className="px-1.5 py-0.5 rounded bg-muted text-foreground">{'{lastName}'}</code>
+                <code className="px-1.5 py-0.5 rounded bg-muted text-foreground">{'{name}'}</code>
+              </p>
+            )}
           </div>
 
           {/* AI Personalization Section */}
@@ -837,7 +879,7 @@ export default function NewCampaignPage() {
                               </div>
                             </div>
                             <div className="flex items-center gap-2 ml-4">
-                              {useAiPersonalization && messageContent && (
+                              {useAiPersonalization && (
                                 <Button
                                   type="button"
                                   variant="outline"
