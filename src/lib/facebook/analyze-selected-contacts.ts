@@ -424,6 +424,8 @@ export async function analyzeSelectedContacts(
           // Step 5: Update contact with AI context, contact info, and best contact times
           try {
             // Build update data - only include new fields if they exist in database
+            const hasContactInfo = !!contactInfo && Object.keys(contactInfo).length > 0;
+            const hasBestContactTimes = !!replyTimeAnalysis;
             const updateData: any = {
               aiContext: analysis.summary,
               aiContextUpdatedAt: new Date(),
@@ -441,6 +443,14 @@ export async function analyzeSelectedContacts(
               where: { id: contact.id },
               data: updateData,
             });
+            
+            // Log success if contactInfo was saved
+            if (hasContactInfo) {
+              console.log(`[Analyze Selected] ✅ Successfully saved contact info for ${contact.id}`);
+            }
+            if (hasBestContactTimes) {
+              console.log(`[Analyze Selected] ✅ Successfully saved best contact times for ${contact.id}`);
+            }
           } catch (dbError: unknown) {
             // Handle database connection errors
             const dbErrorObj = dbError as { code?: string; message?: string };
@@ -452,7 +462,22 @@ export async function analyzeSelectedContacts(
             
             // Handle missing column error (P2022) - try update without new fields
             if (dbErrorObj?.code === 'P2022' || dbErrorObj?.message?.includes('does not exist')) {
-              console.warn(`[Analyze Selected] New columns not found in database for contact ${contact.id}, updating without them`);
+              console.warn(`[Analyze Selected] ⚠️ New columns not found in database for contact ${contact.id}, updating without them`);
+              
+              // CRITICAL: Log if we're losing extracted data
+              if (contactInfo && Object.keys(contactInfo).length > 0) {
+                console.error(`[Analyze Selected] 🚨 CRITICAL: Contact info was extracted but NOT SAVED due to missing database column!`);
+                console.error(`[Analyze Selected] Contact ID: ${contact.id}`);
+                console.error(`[Analyze Selected] Extracted contactInfo:`, JSON.stringify(contactInfo, null, 2));
+                console.error(`[Analyze Selected] Action required: Run migration (apply-production-migration.sql) to add contactInfo column`);
+                console.error(`[Analyze Selected] Migration file: apply-production-migration.sql`);
+              }
+              if (replyTimeAnalysis) {
+                console.error(`[Analyze Selected] 🚨 CRITICAL: Best contact times were analyzed but NOT SAVED due to missing database column!`);
+                console.error(`[Analyze Selected] Contact ID: ${contact.id}`);
+                console.error(`[Analyze Selected] Action required: Run migration (apply-production-migration.sql) to add bestContactTimes column`);
+              }
+              
               try {
                 // Fallback: update only existing fields
                 await prisma.contact.update({
@@ -463,6 +488,7 @@ export async function analyzeSelectedContacts(
                   },
                 });
                 console.log(`[Analyze Selected] Successfully updated contact ${contact.id} without new fields`);
+                console.warn(`[Analyze Selected] ⚠️ WARNING: Contact info and best contact times were NOT saved. Please run database migration.`);
               } catch (fallbackError) {
                 console.error(`[Analyze Selected] Fallback update also failed for contact ${contact.id}:`, fallbackError);
                 incrementFailed('Database schema mismatch. Please run migration.', contact.id);
