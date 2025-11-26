@@ -128,45 +128,222 @@ async function processBatch(
   updateMode: string
 ): Promise<void> {
   try {
-    // Bulk update AI context for all contacts in batch (single transaction)
-    // Process updates sequentially within transaction to reduce connection usage
+    // OPTIMIZATION: Fetch pipeline once (shared across all contacts in batch)
+    const pipeline = await prisma.pipeline.findUnique({
+      where: { id: pipelineId },
+      include: { stages: { orderBy: { order: 'asc' } } }
+    });
+
+    if (!pipeline) {
+      console.error(`[Pipeline Analysis ${jobId}] Pipeline ${pipelineId} not found`);
+      return;
+    }
+
+    // OPTIMIZATION: Fetch all contacts in batch at once
+    const contactIds = batch.map(item => item.contactId);
+    const contacts = await prisma.contact.findMany({
+      where: { id: { in: contactIds } },
+      select: {
+        id: true,
+        pipelineId: true,
+        stageId: true,
+        leadScore: true,
+        stage: {
+          select: {
+            order: true,
+            leadScoreMin: true,
+            name: true
+          }
+        }
+      }
+    });
+
+    const contactMap = new Map(contacts.map(c => [c.id, c]));
+
+    // Filter contacts based on update mode
+    const contactsToProcess = batch.filter(item => {
+      const contact = contactMap.get(item.contactId);
+      if (!contact) return false;
+      if (updateMode === 'SKIP_EXISTING' && contact.pipelineId) {
+        return false; // Skip already assigned
+      }
+      return true;
+    });
+
+    if (contactsToProcess.length === 0) {
+      console.log(`[Pipeline Analysis ${jobId}] All contacts in batch already assigned (SKIP_EXISTING mode)`);
+      // Still update AI context
+      await prisma.$transaction(
+        batch.map(item =>
+          prisma.contact.update({
+            where: { id: item.contactId },
+            data: {
+              aiContext: item.aiContext,
+              aiContextUpdatedAt: new Date(),
+            },
+          })
+        ),
+        { timeout: 30000 }
+      );
+      return;
+    }
+
+    // Import utilities
+    const { shouldPreventDowngrade } = await import('@/lib/pipelines/stage-analyzer');
+    const { LeadStatus } = await import('@prisma/client');
+
+    // Process assignments (calculate stage for each contact)
+    const assignments: Array<{
+      contactId: string;
+      stageId: string;
+      leadScore: number;
+      leadStatus: LeadStatus;
+      fromStageId: string | null;
+    }> = [];
+
+    for (const item of contactsToProcess) {
+      const contact = contactMap.get(item.contactId);
+      if (!contact) continue;
+
+      const aiAnalysis = item.aiAnalysis;
+      const leadScore = aiAnalysis.leadScore;
+      const leadStatus = aiAnalysis.leadStatus || 'NEW';
+      
+      // Find best matching stage (inline logic to avoid database query)
+      let proposedStage: typeof pipeline.stages[0] | undefined;
+
+      // Priority 1: Status-based routing
+      if (leadStatus === 'WON') {
+        proposedStage = pipeline.stages.find(s => s.type === 'WON');
+      } else if (leadStatus === 'LOST') {
+        proposedStage = pipeline.stages.find(s => s.type === 'LOST');
+      }
+
+      // Priority 2: Score-based routing (if no status match)
+      if (!proposedStage) {
+        proposedStage = pipeline.stages.find(stage => 
+          leadScore >= stage.leadScoreMin && 
+          leadScore <= stage.leadScoreMax &&
+          stage.type !== 'WON' &&
+          stage.type !== 'LOST' &&
+          stage.type !== 'ARCHIVED'
+        );
+      }
+
+      // Priority 3: Try exact name match from AI recommendation
+      if (!proposedStage && aiAnalysis.recommendedStage) {
+        proposedStage = pipeline.stages.find(
+          s => s.name.toLowerCase() === aiAnalysis.recommendedStage.toLowerCase()
+        );
+      }
+
+      // Priority 4: Closest match fallback
+      if (!proposedStage) {
+        let closestStage = pipeline.stages[0];
+        let closestDistance = Math.abs((pipeline.stages[0].leadScoreMin + pipeline.stages[0].leadScoreMax) / 2 - leadScore);
+
+        for (const stage of pipeline.stages) {
+          if (stage.type === 'ARCHIVED') continue;
+          const stageMidpoint = (stage.leadScoreMin + stage.leadScoreMax) / 2;
+          const distance = Math.abs(stageMidpoint - leadScore);
+          if (distance < closestDistance) {
+            closestDistance = distance;
+            closestStage = stage;
+          }
+        }
+        proposedStage = closestStage;
+      }
+
+      // Final fallback to first stage (should never happen, but safety check)
+      if (!proposedStage) {
+        proposedStage = pipeline.stages[0];
+      }
+
+      // Check downgrade protection
+      if (proposedStage && contact.stage) {
+        const shouldBlock = shouldPreventDowngrade(
+          contact.stage.order,
+          proposedStage.order,
+          contact.leadScore || 0,
+          aiAnalysis.leadScore,
+          proposedStage.leadScoreMin
+        );
+
+        if (shouldBlock) {
+          continue; // Skip this contact
+        }
+      }
+
+      assignments.push({
+        contactId: item.contactId,
+        stageId: proposedStage.id,
+        leadScore: aiAnalysis.leadScore,
+        leadStatus: (aiAnalysis.leadStatus || 'NEW') as LeadStatus,
+        fromStageId: contact.stageId,
+      });
+    }
+
+    // OPTIMIZATION: Batch all updates in a single transaction
     await prisma.$transaction(
       async (tx) => {
-        // Process updates in smaller chunks (5 at a time) to reduce connection pressure
-        const CHUNK_SIZE = 5;
-        for (let i = 0; i < batch.length; i += CHUNK_SIZE) {
-          const chunk = batch.slice(i, i + CHUNK_SIZE);
-          await Promise.all(
-            chunk.map((item) =>
-              tx.contact.update({
-                where: { id: item.contactId },
-                data: {
-                  aiContext: item.aiContext,
-                  aiContextUpdatedAt: new Date(),
-                },
-              })
-            )
-          );
-        }
+        // Update AI context for all contacts
+        await Promise.all(
+          batch.map(item =>
+            tx.contact.update({
+              where: { id: item.contactId },
+              data: {
+                aiContext: item.aiContext,
+                aiContextUpdatedAt: new Date(),
+              },
+            })
+          )
+        );
+
+        // Update pipeline assignments for contacts that need assignment
+        await Promise.all(
+          assignments.map(assignment =>
+            tx.contact.update({
+              where: { id: assignment.contactId },
+              data: {
+                pipelineId,
+                stageId: assignment.stageId,
+                stageEnteredAt: new Date(),
+                leadScore: assignment.leadScore,
+                leadStatus: assignment.leadStatus,
+              },
+            })
+          )
+        );
+
+        // Create activity logs in batch
+        await Promise.all(
+          assignments.map(assignment => {
+            const item = batch.find(b => b.contactId === assignment.contactId);
+            if (!item) return Promise.resolve();
+            
+            return tx.contactActivity.create({
+              data: {
+                contactId: assignment.contactId,
+                type: 'STAGE_CHANGED',
+                title: 'AI auto-assigned to pipeline',
+                description: item.aiAnalysis.reasoning || 'AI analysis',
+                toStageId: assignment.stageId,
+                fromStageId: assignment.fromStageId || undefined,
+                metadata: {
+                  confidence: item.aiAnalysis.confidence,
+                  aiRecommendation: item.aiAnalysis.recommendedStage,
+                  leadScore: assignment.leadScore,
+                  leadStatus: assignment.leadStatus
+                }
+              }
+            });
+          })
+        );
       },
-      { timeout: 30000 } // 30 second timeout
+      { timeout: 30000 }
     );
 
-    // Assign to pipeline sequentially (one at a time) to prevent pool exhaustion
-    // This is slower but prevents connection pool timeouts
-    for (const item of batch) {
-      try {
-        const { autoAssignContactToPipeline } = await import('@/lib/pipelines/auto-assign');
-        await autoAssignContactToPipeline({
-          contactId: item.contactId,
-          aiAnalysis: item.aiAnalysis,
-          pipelineId,
-          updateMode: updateMode as any,
-        });
-      } catch (error) {
-        console.error(`[Pipeline Analysis ${jobId}] Failed to assign pipeline for contact ${item.contactId}:`, error);
-      }
-    }
+    console.log(`[Pipeline Analysis ${jobId}] Processed batch: ${assignments.length} contacts assigned to pipeline`);
   } catch (error) {
     console.error(`[Pipeline Analysis ${jobId}] Batch processing error:`, error);
     // Fallback: process individually if batch fails
