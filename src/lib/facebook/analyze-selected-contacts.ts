@@ -135,6 +135,7 @@ export async function analyzeSelectedContacts(
       contactInfo: true,
       aiContext: true,
       aiContextUpdatedAt: true,
+      facebookPageId: true,
       facebookPage: {
         include: {
           autoPipeline: {
