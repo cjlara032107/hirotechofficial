@@ -426,7 +426,13 @@ export class FacebookClient {
           }
 
           // For other pagination errors, log but continue with what we have
-          console.warn(`Failed to fetch page, continuing with conversations already fetched`);
+          // Retry once before giving up
+          if (pageCount < 3) {
+            console.warn(`[Facebook API] Retrying page ${pageCount + 1} after error...`);
+            await new Promise(resolve => setTimeout(resolve, 2000)); // Wait 2 seconds before retry
+            continue; // Retry the same page
+          }
+          console.warn(`[Facebook API] Failed to fetch page ${pageCount + 1} after retries, continuing with ${pageCount} pages already fetched`);
           break;
         }
       }

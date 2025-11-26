@@ -331,10 +331,11 @@ async function executeInstantSync(jobId: string, facebookPageId: string, userId:
       const participantMap = new Map<string, { updatedTime: string; name?: string }>();
       let conversationCount = 0;
       const PROCESS_BATCH_SIZE = 50; // Process every 50 conversations
-      const MAX_STREAM_TIME = 10 * 60 * 1000; // 10 minutes max for streaming
+      const MAX_STREAM_TIME = 30 * 60 * 1000; // 30 minutes max for streaming (increased from 10 to handle large pages)
       const PROGRESS_UPDATE_INTERVAL = 10; // Update progress every 10 conversations (reduced from 30)
       const streamStartTime = Date.now();
       let lastProgressUpdate = Date.now();
+      let lastConversationTime = Date.now(); // Track when we last received a conversation
       
       // Initial progress update to show we're actively fetching
       await prisma.syncJob.update({
@@ -386,9 +387,18 @@ async function executeInstantSync(jobId: string, facebookPageId: string, userId:
           return;
         }
         
-        // Check for timeout
+        // Update last conversation time
+        lastConversationTime = Date.now();
+        
+        // Check for overall timeout (only if we've been running for a very long time)
         if (Date.now() - streamStartTime > MAX_STREAM_TIME) {
-          console.warn(`[Instant Sync ${jobId}] ⚠️ Stream timeout reached, processing collected participants...`);
+          console.warn(`[Instant Sync ${jobId}] ⚠️ Stream timeout reached (${MAX_STREAM_TIME / 60000} minutes), processing collected participants...`);
+          break;
+        }
+        
+        // Check for inactivity timeout (if no conversations received for 5 minutes, something might be wrong)
+        if (Date.now() - lastConversationTime > 5 * 60 * 1000) {
+          console.warn(`[Instant Sync ${jobId}] ⚠️ No conversations received for 5 minutes, processing collected participants...`);
           break;
         }
         
