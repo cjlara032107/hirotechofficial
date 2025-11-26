@@ -151,56 +151,56 @@ async function executeBackgroundAnalysis(
     };
 
     if (useIndividualProcessing) {
-      // Process contacts in parallel for small jobs - much faster!
-      console.log(`[Background Analysis ${jobId}] Processing ${contactIds.length} contacts in parallel for maximum speed`);
+      // Process all contacts in a single batch for maximum efficiency!
+      // This is much faster than calling analyzeSelectedContacts 15 times separately
+      console.log(`[Background Analysis ${jobId}] Processing ${contactIds.length} contacts in a single optimized batch`);
       
-      // Process all contacts in parallel, but update progress as each completes
-      const contactPromises = contactIds.map(async (contactId) => {
-        // Check if job was cancelled before starting
-        const job = await prisma.analysisJob.findUnique({
-          where: { id: jobId },
-          select: { status: true },
-        });
-
-        if (job?.status === 'CANCELLED') {
-          return { status: 'cancelled' as const };
-        }
-
-        try {
-          const result = await analyzeSelectedContacts([contactId], organizationId);
-          
-          // Update counts atomically
-          analyzedCount += result.successCount;
-          failedCount += result.failedCount;
-          errors.push(...result.errors);
-          
-          // Update progress after each contact completes (non-blocking)
-          updateProgress(true).catch((err) => {
-            console.error(`[Background Analysis ${jobId}] Failed to update progress:`, err);
-          });
-          
-          return { status: 'success' as const, result };
-        } catch (error) {
-          failedCount++;
-          errors.push({
-            contactId,
-            error: error instanceof Error ? error.message : 'Unknown error',
-          });
-          
-          // Update progress even on failure (non-blocking)
-          updateProgress(true).catch((err) => {
-            console.error(`[Background Analysis ${jobId}] Failed to update progress:`, err);
-          });
-          
-          return { status: 'error' as const, error };
-        }
+      // Check if job was cancelled before starting
+      const job = await prisma.analysisJob.findUnique({
+        where: { id: jobId },
+        select: { status: true },
       });
 
-      // Wait for all contacts to complete
-      await Promise.all(contactPromises);
-      
-      // Final progress update
-      await updateProgress(true);
+      if (job?.status === 'CANCELLED') {
+        console.log(`[Background Analysis ${jobId}] Job was cancelled`);
+        return;
+      }
+
+      try {
+        // Process all contacts at once - analyzeSelectedContacts handles parallel processing internally
+        // This is MUCH faster than calling it 15 times with 1 contact each
+        // Pass progress callback to get real-time updates
+        const result = await analyzeSelectedContacts(
+          contactIds, 
+          organizationId,
+          (analyzed, failed, total) => {
+            // Update counts and progress in real-time
+            analyzedCount = analyzed;
+            failedCount = failed;
+            // Update progress (non-blocking)
+            updateProgress(true).catch((err) => {
+              console.error(`[Background Analysis ${jobId}] Failed to update progress:`, err);
+            });
+          }
+        );
+        
+        analyzedCount = result.successCount;
+        failedCount = result.failedCount;
+        errors.push(...result.errors);
+        
+        // Final progress update
+        await updateProgress(true);
+      } catch (error) {
+        console.error(`[Background Analysis ${jobId}] Batch processing failed:`, error);
+        failedCount = contactIds.length;
+        errors.push(
+          ...contactIds.map((id) => ({
+            contactId: id,
+            error: error instanceof Error ? error.message : 'Unknown error',
+          }))
+        );
+        await updateProgress(true);
+      }
     } else {
       // Process in batches for larger jobs
       const BATCH_SIZE = 50;

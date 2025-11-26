@@ -63,7 +63,8 @@ interface AnalyzeSelectedContactsResult {
  */
 export async function analyzeSelectedContacts(
   contactIds: string[],
-  organizationId: string
+  organizationId: string,
+  onProgress?: (analyzed: number, failed: number, total: number) => void
 ): Promise<AnalyzeSelectedContactsResult> {
   let successCount = 0;
   let failedCount = 0;
@@ -477,10 +478,18 @@ export async function analyzeSelectedContacts(
           }
 
           successCount++;
+          // Call progress callback if provided
+          if (onProgress) {
+            onProgress(successCount, failedCount, contactIds.length);
+          }
         } catch (error) {
           failedCount++;
           const errorMessage = error instanceof Error ? error.message : (typeof error === 'string' ? error : 'Unknown error');
           errors.push({ contactId: contact.id, error: errorMessage });
+          // Call progress callback even on failure
+          if (onProgress) {
+            onProgress(successCount, failedCount, contactIds.length);
+          }
         }
       })
     );
