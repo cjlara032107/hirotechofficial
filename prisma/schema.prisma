@@ -23,6 +23,7 @@ model Organization {
   templates     Template[]
   users         User[]
   analysisJobs  AnalysisJob[]
+  assistantChats AssistantChat[]
 }
 
 model User {
@@ -50,6 +51,7 @@ model User {
   organization          Organization            @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   pageAccesses          PageAccess[]
   analysisJobs          AnalysisJob[]
+  assistantChats       AssistantChat[]
 }
 
 model FacebookPage {
@@ -1048,4 +1050,37 @@ model PageAccess {
   @@unique([userId, pagePath])
   @@index([userId])
   @@index([pagePath])
+}
+
+model AssistantChat {
+  id             String              @id @default(cuid())
+  userId         String
+  organizationId String
+  title          String?              // Auto-generated from first message
+  createdAt      DateTime             @default(now())
+  updatedAt      DateTime             @updatedAt
+  user           User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+  organization   Organization         @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  messages       AssistantMessage[]
+
+  @@index([userId, createdAt])
+  @@index([organizationId])
+}
+
+model AssistantMessage {
+  id          String        @id @default(cuid())
+  chatId      String
+  role        MessageRole   @default(USER)
+  content     String        @db.Text
+  metadata    Json?         // Store sources, citations, etc.
+  createdAt   DateTime      @default(now())
+  chat        AssistantChat @relation(fields: [chatId], references: [id], onDelete: Cascade)
+
+  @@index([chatId, createdAt])
+}
+
+enum MessageRole {
+  USER
+  ASSISTANT
+  SYSTEM
 }
