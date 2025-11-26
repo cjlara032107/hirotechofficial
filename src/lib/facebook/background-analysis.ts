@@ -87,15 +87,51 @@ export async function startBackgroundAnalysis(
       }
       
       // CRITICAL: Check if the job is actually running or completed
-      // If it's PENDING or FAILED, we need to restart it
-      if (exactMatchJob.status === 'COMPLETED' || exactMatchJob.status === 'IN_PROGRESS') {
-        console.log(`[Background Analysis] ✅ Found existing ${exactMatchJob.status} job - returning existing job ID`);
+      // If it's COMPLETED, just return it
+      if (exactMatchJob.status === 'COMPLETED') {
+        console.log(`[Background Analysis] ✅ Found existing COMPLETED job - returning existing job ID`);
         return {
           success: true,
           jobId: exactMatchJob.id,
-          message: exactMatchJob.status === 'COMPLETED' ? 'Analysis already completed' : 'Analysis already in progress',
+          message: 'Analysis already completed',
           cancelledJobs: cancelledJobs.length > 0 ? cancelledJobs : undefined,
         };
+      }
+      
+      // CRITICAL: For IN_PROGRESS jobs, check if they're actually executing
+      // If the job is stuck (no progress for >5 minutes), restart it
+      if (exactMatchJob.status === 'IN_PROGRESS') {
+        const now = new Date();
+        const startedAt = exactMatchJob.startedAt || exactMatchJob.createdAt;
+        const timeSinceStart = now.getTime() - startedAt.getTime();
+        const STUCK_THRESHOLD_MS = 5 * 60 * 1000; // 5 minutes
+        
+        // Check if job is stuck (started >5 minutes ago with no progress)
+        const isStuck = timeSinceStart > STUCK_THRESHOLD_MS && 
+                        exactMatchJob.analyzedContacts === 0 && 
+                        exactMatchJob.failedContacts === 0;
+        
+        if (isStuck) {
+          console.log(`[Background Analysis] ⚠️ Found existing IN_PROGRESS job that appears STUCK`);
+          console.log(`[Background Analysis] Job ID: ${exactMatchJob.id}`);
+          console.log(`[Background Analysis] Started: ${startedAt.toISOString()}, Time since start: ${Math.round(timeSinceStart / 1000)}s`);
+          console.log(`[Background Analysis] Progress: ${exactMatchJob.analyzedContacts}/${exactMatchJob.totalContacts} analyzed`);
+          console.log(`[Background Analysis] 🔄 Restarting stuck job...`);
+          
+          // Fall through to restart logic below
+        } else {
+          // Job appears to be running - return it
+          console.log(`[Background Analysis] ✅ Found existing IN_PROGRESS job that appears to be running`);
+          console.log(`[Background Analysis] Job ID: ${exactMatchJob.id}`);
+          console.log(`[Background Analysis] Progress: ${exactMatchJob.analyzedContacts}/${exactMatchJob.totalContacts} analyzed`);
+          console.log(`[Background Analysis] Time since start: ${Math.round(timeSinceStart / 1000)}s`);
+          return {
+            success: true,
+            jobId: exactMatchJob.id,
+            message: 'Analysis already in progress',
+            cancelledJobs: cancelledJobs.length > 0 ? cancelledJobs : undefined,
+          };
+        }
       }
       
       // CRITICAL: Job is PENDING or FAILED - restart it!
