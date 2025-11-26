@@ -152,7 +152,7 @@ export async function analyzeSelectedContacts(
       }
     }
   }
-  
+
   if (contacts.length === 0) {
     console.warn(`[Analyze Selected] No contacts found for provided IDs:`, contactIds);
     return { successCount: 0, failedCount: 0, errors: [] };
@@ -346,7 +346,6 @@ export async function analyzeSelectedContacts(
             // Extract comprehensive contact information
             analysisLimiter.execute(async () => {
               try {
-                console.log(`[Analyze Selected] 🔍 Starting contact info extraction for ${contact.id}...`);
                 const info = await extractContactInfo(messagesToAnalyze);
                 if (info && Object.keys(info).length > 0) {
                   console.log(`[Analyze Selected] ✅ Successfully extracted contact info for ${contact.id}`);
@@ -359,15 +358,11 @@ export async function analyzeSelectedContacts(
                   if (extractedFields.length > 0) {
                     console.log(`[Analyze Selected] Extracted fields: ${extractedFields.join(', ')}`);
                   }
-                } else {
-                  console.warn(`[Analyze Selected] ⚠️ Contact info extraction returned null or empty for ${contact.id}`);
-                  console.warn(`[Analyze Selected] This usually means: 1) No API key available, 2) No contact info found in messages, or 3) Extraction failed`);
                 }
                 return info;
               } catch (error) {
                 const errorMessage = error instanceof Error ? error.message : String(error);
-                console.error(`[Analyze Selected] ❌ Failed to extract contact info for ${contact.id}:`, errorMessage);
-                console.error(`[Analyze Selected] Stack trace:`, error instanceof Error ? error.stack : 'No stack trace');
+                console.warn(`[Analyze Selected] Failed to extract contact info for ${contact.id}:`, errorMessage);
                 // Don't fail the entire analysis if contact info extraction fails
                 return null;
               }
@@ -460,14 +455,9 @@ export async function analyzeSelectedContacts(
               aiContextUpdatedAt: new Date(),
             };
 
-            // CRITICAL: Always save contactInfo if it exists, even if validation is strict
-            // The UI validation will handle whether to display it
-            // This ensures we don't lose extracted data due to overly strict validation
-            if (contactInfo !== null && contactInfo !== undefined) {
+            // Only add new fields if they have values (will fail gracefully if columns don't exist)
+            if (contactInfo) {
               updateData.contactInfo = contactInfo;
-              console.log(`[Analyze Selected] 💾 Saving contactInfo for ${contact.id}:`, JSON.stringify(contactInfo, null, 2));
-            } else {
-              console.log(`[Analyze Selected] ⚠️ No contactInfo to save for ${contact.id} (extraction returned null/undefined)`);
             }
             if (replyTimeAnalysis) {
               updateData.bestContactTimes = replyTimeAnalysis;

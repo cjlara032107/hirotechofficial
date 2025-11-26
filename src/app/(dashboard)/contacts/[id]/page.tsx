@@ -379,7 +379,6 @@ async function ContactActivity({
       {(() => {
         // Helper function to check if contactInfo has meaningful data
         // This prevents showing an empty card when contactInfo is {} or has no actual data
-        // CRITICAL: Made less strict to catch more cases where data exists
         const hasContactInfoData = (info: unknown): boolean => {
           if (!info || typeof info !== 'object' || info === null) {
             return false;
@@ -392,16 +391,13 @@ async function ContactActivity({
             return true;
           }
           
-          // Check arrays - be more lenient, check for any non-empty array
+          // Check arrays
           const arrayFields = ['phoneNumbers', 'emails', 'businessNames', 'pageLinks', 
             'facebookPages', 'locations', 'occupations', 'companies', 'websites'];
           for (const field of arrayFields) {
             const value = data[field];
             if (Array.isArray(value) && value.length > 0) {
-              // Additional check: ensure at least one element is non-empty string
-              if (value.some(v => typeof v === 'string' && v.trim().length > 0)) {
-                return true;
-              }
+              return true;
             }
           }
           
@@ -410,53 +406,30 @@ async function ContactActivity({
             'occupation', 'company', 'website'];
           for (const field of singleFields) {
             const value = data[field];
-            if (value !== null && value !== undefined && value !== '' && 
-                (typeof value === 'string' ? value.trim().length > 0 : true)) {
+            if (value !== null && value !== undefined && value !== '') {
               return true;
             }
           }
           
-          // Check socialMedia - be more lenient
+          // Check socialMedia
           if (data.socialMedia && typeof data.socialMedia === 'object') {
             const socialValues = Object.values(data.socialMedia);
-            if (socialValues.some(v => {
-              if (v === null || v === undefined || v === '') return false;
-              if (Array.isArray(v)) {
-                return v.length > 0 && v.some(item => typeof item === 'string' && item.trim().length > 0);
-              }
-              if (typeof v === 'string') {
-                return v.trim().length > 0;
-              }
-              return true;
-            })) {
+            if (socialValues.some(v => v !== null && v !== undefined && v !== '' && 
+              (Array.isArray(v) ? v.length > 0 : true))) {
               return true;
             }
           }
           
-          // Check otherInfo - be more lenient
+          // Check otherInfo
           if (data.otherInfo && typeof data.otherInfo === 'object' && 
               Object.keys(data.otherInfo).length > 0) {
-            // Check if any value is non-empty
-            const hasNonEmptyValue = Object.values(data.otherInfo).some(v => {
-              if (v === null || v === undefined || v === '') return false;
-              if (typeof v === 'string') return v.trim().length > 0;
-              if (Array.isArray(v)) return v.length > 0;
-              return true;
-            });
-            if (hasNonEmptyValue) {
-              return true;
-            }
+            return true;
           }
           
           return false;
         };
         
-        const hasData = hasContactInfoData(contact.contactInfo);
-        if (!hasData && contact.contactInfo) {
-          // Log when contactInfo exists but validation fails - helps debug
-          console.log('[Contact Detail Page] ⚠️ contactInfo exists but validation failed:', JSON.stringify(contact.contactInfo, null, 2));
-        }
-        return hasData;
+        return hasContactInfoData(contact.contactInfo);
       })() && (
         <Card>
           <CardHeader>

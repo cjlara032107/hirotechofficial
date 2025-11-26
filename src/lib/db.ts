@@ -74,8 +74,8 @@ export async function connectPrisma(maxRetries = 3, retryDelay = 1000) {
   let lastError: unknown;
   
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
-    try {
-      await ensurePrismaConnected();
+  try {
+    await ensurePrismaConnected();
       // Connection successful
       if (attempt > 1) {
         console.log(`[Prisma] ✅ Connected after ${attempt} attempt(s)`);
@@ -94,10 +94,10 @@ export async function connectPrisma(maxRetries = 3, retryDelay = 1000) {
       if (!isConnectionError || attempt === maxRetries) {
         console.error(`[Prisma] ❌ Failed to connect (attempt ${attempt}/${maxRetries}):`, error);
         // Reset state to allow retry on next call
-        connectionState = 'idle';
-        connectionPromise = undefined;
-        throw error;
-      }
+    connectionState = 'idle';
+    connectionPromise = undefined;
+    throw error;
+  }
       
       // Connection error - retry with exponential backoff
       const delay = retryDelay * Math.pow(2, attempt - 1);

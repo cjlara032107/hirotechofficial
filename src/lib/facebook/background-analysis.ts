@@ -67,188 +67,155 @@ export async function startBackgroundAnalysis(
       }
     }
     
-    // STEP 3: If exact match found, check if it's actually running
-    if (exactMatchJob) {
-      // Cancel other overlapping jobs (but not the exact match)
-      const jobsToCancel = overlappingJobs.filter(j => j.id !== exactMatchJob!.id);
-      if (jobsToCancel.length > 0) {
-        const cancelled = await prisma.analysisJob.updateMany({
-          where: {
-            id: { in: jobsToCancel.map(j => j.id) },
-            status: { in: ['PENDING', 'IN_PROGRESS'] },
-          },
-          data: {
-            status: 'CANCELLED',
-            completedAt: new Date(),
-          },
-        });
-        cancelledJobs = jobsToCancel.map(j => j.id);
-        console.log(`[Background Analysis] 🗑️ Cancelled ${cancelled.count} overlapping job(s) to prevent conflicts`);
-      }
-      
-      // CRITICAL: Check if the job is actually running or completed
-      // If it's COMPLETED, just return it
-      if (exactMatchJob.status === 'COMPLETED') {
-        console.log(`[Background Analysis] ✅ Found existing COMPLETED job - returning existing job ID`);
-        return {
-          success: true,
-          jobId: exactMatchJob.id,
-          message: 'Analysis already completed',
-          cancelledJobs: cancelledJobs.length > 0 ? cancelledJobs : undefined,
-        };
-      }
-      
-      // CRITICAL: For IN_PROGRESS jobs, check if they're actually executing
-      // If the job is stuck (no progress for >5 minutes), restart it
-      if (exactMatchJob.status === 'IN_PROGRESS') {
-        const now = new Date();
-        const startedAt = exactMatchJob.startedAt || exactMatchJob.createdAt;
-        const timeSinceStart = now.getTime() - startedAt.getTime();
-        const STUCK_THRESHOLD_MS = 5 * 60 * 1000; // 5 minutes
-        
-        // Check if job is stuck (started >5 minutes ago with no progress)
-        const isStuck = timeSinceStart > STUCK_THRESHOLD_MS && 
-                        exactMatchJob.analyzedContacts === 0 && 
-                        exactMatchJob.failedContacts === 0;
-        
-        if (isStuck) {
-          console.log(`[Background Analysis] ⚠️ Found existing IN_PROGRESS job that appears STUCK`);
-          console.log(`[Background Analysis] Job ID: ${exactMatchJob.id}`);
-          console.log(`[Background Analysis] Started: ${startedAt.toISOString()}, Time since start: ${Math.round(timeSinceStart / 1000)}s`);
-          console.log(`[Background Analysis] Progress: ${exactMatchJob.analyzedContacts}/${exactMatchJob.totalContacts} analyzed`);
-          console.log(`[Background Analysis] 🔄 Restarting stuck job...`);
-          
-          // Fall through to restart logic below
-        } else {
-          // Job appears to be running - return it
-          console.log(`[Background Analysis] ✅ Found existing IN_PROGRESS job that appears to be running`);
-          console.log(`[Background Analysis] Job ID: ${exactMatchJob.id}`);
-          console.log(`[Background Analysis] Progress: ${exactMatchJob.analyzedContacts}/${exactMatchJob.totalContacts} analyzed`);
-          console.log(`[Background Analysis] Time since start: ${Math.round(timeSinceStart / 1000)}s`);
-          return {
-            success: true,
-            jobId: exactMatchJob.id,
-            message: 'Analysis already in progress',
-            cancelledJobs: cancelledJobs.length > 0 ? cancelledJobs : undefined,
-          };
-        }
-      }
-      
-      // CRITICAL: Job is PENDING or FAILED - restart it!
-      console.log(`[Background Analysis] ⚠️ Found existing ${exactMatchJob.status} job - restarting execution`);
-      console.log(`[Background Analysis] Job ID: ${exactMatchJob.id}`);
-      
-      // Update job status to IN_PROGRESS and restart execution
-      await prisma.analysisJob.update({
-        where: { id: exactMatchJob.id },
-        data: { 
-          status: 'IN_PROGRESS', 
-          startedAt: new Date(),
-          analyzedContacts: 0,
-          failedContacts: 0,
-          errors: undefined,
-        },
-      });
-      
-      // Start background execution for the existing job
-      const backgroundPromise = (async () => {
-        try {
-          console.log(`[Background Analysis ${exactMatchJob.id}] 📍 Restarting background execution`);
-          console.log(`[Background Analysis ${exactMatchJob.id}] ⏱️ Execution started at: ${new Date().toISOString()}`);
-          
-          // CRITICAL: Start the first async operation immediately
-          const dbConnectionPromise = connectPrisma();
-          console.log(`[Background Analysis ${exactMatchJob.id}] 🔄 Database connection initiated`);
-          
-          await dbConnectionPromise;
-          console.log(`[Background Analysis ${exactMatchJob.id}] ✅ Database connection established`);
-          
-          // CRITICAL: Verify job is still active before proceeding
-          const jobCheck = await prisma.analysisJob.findUnique({
-            where: { id: exactMatchJob.id },
-            select: { status: true },
-          });
-          
-          if (jobCheck?.status === 'CANCELLED') {
-            console.log(`[Background Analysis ${exactMatchJob.id}] ⚠️ Job was cancelled, aborting`);
-            return;
-          }
-          
-          console.log(`[Background Analysis ${exactMatchJob.id}] ✅ Job verified active (${jobCheck?.status}), proceeding with analysis`);
-          
-          await executeBackgroundAnalysis(exactMatchJob.id, contactIds, organizationId);
-          console.log(`[Background Analysis ${exactMatchJob.id}] ✅ Background execution completed`);
-        } catch (error) {
-          console.error(`[Background Analysis ${exactMatchJob.id}] ❌ CRITICAL ERROR:`, error);
-          console.error(`[Background Analysis ${exactMatchJob.id}] Error occurred at: ${new Date().toISOString()}`);
-          try {
-            await connectPrisma();
-            await prisma.analysisJob.update({
-              where: { id: exactMatchJob.id },
-              data: {
-                status: 'FAILED',
-                errors: [
-                  {
-                    error: error instanceof Error ? error.message : String(error),
-                    stack: error instanceof Error ? error.stack : undefined,
-                    timestamp: new Date().toISOString(),
-                  },
-                ],
-                completedAt: new Date(),
-              },
-            });
-          } catch (dbError) {
-            console.error(`[Background Analysis ${exactMatchJob.id}] ❌ Failed to update job status:`, dbError);
-          }
-        }
-      })();
-      
-      // Keep promise alive
-      if (typeof globalThis !== 'undefined') {
-        (globalThis as any).__backgroundAnalysisPromises = (globalThis as any).__backgroundAnalysisPromises || new Set();
-        (globalThis as any).__backgroundAnalysisPromises.add(backgroundPromise);
-        backgroundPromise.finally(() => {
-          (globalThis as any).__backgroundAnalysisPromises?.delete(backgroundPromise);
-        });
-      }
-      
-      // Wait a tick to ensure promise starts
-      console.log(`[Background Analysis ${exactMatchJob.id}] ⏳ Waiting for promise to start executing...`);
-      await new Promise<void>((resolve) => {
-        if (typeof process !== 'undefined' && process.nextTick) {
-          process.nextTick(() => {
-            console.log(`[Background Analysis ${exactMatchJob.id}] ✅ Promise chain confirmed active (nextTick)`);
-            setTimeout(() => {
-              console.log(`[Background Analysis ${exactMatchJob.id}] ✅ 500ms delay completed - promise should be executing`);
-              resolve();
-            }, 500);
-          });
-        } else if (typeof setImmediate !== 'undefined') {
-          setImmediate(() => {
-            console.log(`[Background Analysis ${exactMatchJob.id}] ✅ Promise chain confirmed active (setImmediate)`);
-            setTimeout(() => {
-              console.log(`[Background Analysis ${exactMatchJob.id}] ✅ 500ms delay completed - promise should be executing`);
-              resolve();
-            }, 500);
-          });
-        } else {
-          setTimeout(() => {
-            console.log(`[Background Analysis ${exactMatchJob.id}] ✅ Promise chain confirmed active (setTimeout)`);
-            setTimeout(() => {
-              console.log(`[Background Analysis ${exactMatchJob.id}] ✅ 500ms delay completed - promise should be executing`);
-              resolve();
-            }, 500);
-          }, 0);
-        }
-      });
-      
-      return {
-        success: true,
-        jobId: exactMatchJob.id,
-        message: 'Analysis restarted',
-        cancelledJobs: cancelledJobs.length > 0 ? cancelledJobs : undefined,
-      };
-    }
+     // STEP 3: If exact match found, check status and handle accordingly
+     if (exactMatchJob) {
+       // Cancel other overlapping jobs (but not the exact match)
+       const jobsToCancel = overlappingJobs.filter(j => j.id !== exactMatchJob!.id);
+       if (jobsToCancel.length > 0) {
+         const cancelled = await prisma.analysisJob.updateMany({
+           where: {
+             id: { in: jobsToCancel.map(j => j.id) },
+             status: { in: ['PENDING', 'IN_PROGRESS'] },
+           },
+           data: {
+             status: 'CANCELLED',
+             completedAt: new Date(),
+           },
+         });
+         cancelledJobs = jobsToCancel.map(j => j.id);
+         console.log(`[Background Analysis] 🗑️ Cancelled ${cancelled.count} overlapping job(s) to prevent conflicts`);
+       }
+       
+       // If job is COMPLETED, just return it
+       if (exactMatchJob.status === 'COMPLETED') {
+         console.log(`[Background Analysis] ✅ Found existing COMPLETED job - returning existing job ID`);
+         return {
+           success: true,
+           jobId: exactMatchJob.id,
+           message: 'Analysis already completed',
+           cancelledJobs: cancelledJobs.length > 0 ? cancelledJobs : undefined,
+         };
+       }
+       
+       // If job is IN_PROGRESS, check if it's stuck
+       if (exactMatchJob.status === 'IN_PROGRESS') {
+         const now = new Date();
+         const startedAt = exactMatchJob.startedAt || exactMatchJob.createdAt;
+         const timeSinceStart = now.getTime() - startedAt.getTime();
+         const STUCK_THRESHOLD_MS = 5 * 60 * 1000; // 5 minutes
+         
+         // Check if job is stuck (started >5 minutes ago with no progress)
+         const isStuck = timeSinceStart > STUCK_THRESHOLD_MS && 
+                         exactMatchJob.analyzedContacts === 0 && 
+                         exactMatchJob.failedContacts === 0;
+         
+         if (!isStuck) {
+           // Job appears to be running - return it
+           console.log(`[Background Analysis] ✅ Found existing IN_PROGRESS job that appears to be running`);
+           console.log(`[Background Analysis] Job ID: ${exactMatchJob.id}`);
+           console.log(`[Background Analysis] Progress: ${exactMatchJob.analyzedContacts}/${exactMatchJob.totalContacts} analyzed`);
+           return {
+             success: true,
+             jobId: exactMatchJob.id,
+             message: 'Analysis already in progress',
+             cancelledJobs: cancelledJobs.length > 0 ? cancelledJobs : undefined,
+           };
+         } else {
+           // Job is stuck - restart it
+           console.log(`[Background Analysis] ⚠️ Found existing IN_PROGRESS job that appears STUCK`);
+           console.log(`[Background Analysis] Job ID: ${exactMatchJob.id}`);
+           console.log(`[Background Analysis] Started: ${startedAt.toISOString()}, Time since start: ${Math.round(timeSinceStart / 1000)}s`);
+           console.log(`[Background Analysis] 🔄 Restarting stuck job...`);
+         }
+       }
+       
+       // Job is PENDING, FAILED, or STUCK - restart it!
+       console.log(`[Background Analysis] ⚠️ Found existing ${exactMatchJob.status} job - restarting execution`);
+       console.log(`[Background Analysis] Job ID: ${exactMatchJob.id}`);
+       
+       // Update job status to IN_PROGRESS and restart execution
+       await prisma.analysisJob.update({
+         where: { id: exactMatchJob.id },
+         data: { 
+           status: 'IN_PROGRESS', 
+           startedAt: new Date(),
+           analyzedContacts: 0,
+           failedContacts: 0,
+           errors: undefined,
+         },
+       });
+       
+       // Start background execution for the existing job
+       const restartPromise = (async () => {
+         try {
+           console.log(`[Background Analysis ${exactMatchJob.id}] 📍 Restarting background execution`);
+           await connectPrisma();
+           console.log(`[Background Analysis ${exactMatchJob.id}] ✅ Database connection established`);
+           
+           // Verify job is still active
+           const jobCheck = await prisma.analysisJob.findUnique({
+             where: { id: exactMatchJob.id },
+             select: { status: true },
+           });
+           
+           if (jobCheck?.status === 'CANCELLED') {
+             console.log(`[Background Analysis ${exactMatchJob.id}] ⚠️ Job was cancelled, aborting`);
+             return;
+           }
+           
+           await executeBackgroundAnalysis(exactMatchJob.id, contactIds, organizationId);
+           console.log(`[Background Analysis ${exactMatchJob.id}] ✅ Background execution completed`);
+         } catch (error) {
+           console.error(`[Background Analysis ${exactMatchJob.id}] ❌ CRITICAL ERROR:`, error);
+           try {
+             await connectPrisma();
+             await prisma.analysisJob.update({
+               where: { id: exactMatchJob.id },
+               data: {
+                 status: 'FAILED',
+                 errors: [
+                   {
+                     error: error instanceof Error ? error.message : String(error),
+                     stack: error instanceof Error ? error.stack : undefined,
+                     timestamp: new Date().toISOString(),
+                   },
+                 ],
+                 completedAt: new Date(),
+               },
+             });
+           } catch (dbError) {
+             console.error(`[Background Analysis ${exactMatchJob.id}] ❌ Failed to update job status:`, dbError);
+           }
+         }
+       })();
+       
+       // Keep promise alive
+       if (typeof globalThis !== 'undefined') {
+         (globalThis as any).__backgroundAnalysisPromises = (globalThis as any).__backgroundAnalysisPromises || new Set();
+         (globalThis as any).__backgroundAnalysisPromises.add(restartPromise);
+         restartPromise.finally(() => {
+           (globalThis as any).__backgroundAnalysisPromises?.delete(restartPromise);
+         });
+       }
+       
+       // Wait a tick to ensure promise starts
+       await new Promise<void>((resolve) => {
+         if (typeof process !== 'undefined' && process.nextTick) {
+           process.nextTick(() => resolve());
+         } else if (typeof setImmediate !== 'undefined') {
+           setImmediate(() => resolve());
+         } else {
+           setTimeout(() => resolve(), 0);
+         }
+       });
+       
+       return {
+         success: true,
+         jobId: exactMatchJob.id,
+         message: 'Analysis restarted',
+         cancelledJobs: cancelledJobs.length > 0 ? cancelledJobs : undefined,
+       };
+     }
     
     // STEP 4: No exact match - cancel all overlapping PENDING jobs before creating new one
     if (overlappingJobs.length > 0) {
@@ -319,30 +286,11 @@ export async function startBackgroundAnalysis(
       try {
         // CRITICAL: Log immediately to confirm promise is executing
         console.log(`[Background Analysis ${analysisJob.id}] 📍 Inside background promise - starting execution`);
-        console.log(`[Background Analysis ${analysisJob.id}] ⏱️ Execution started at: ${new Date().toISOString()}`);
         
         // CRITICAL: Start the first async operation immediately
         // This ensures the promise is actively executing, not just created
-        // Don't await yet - start it and let it run
-        const dbConnectionPromise = connectPrisma();
-        console.log(`[Background Analysis ${analysisJob.id}] 🔄 Database connection initiated`);
-        
-        // Now await it to ensure it actually starts
-        await dbConnectionPromise;
+        await connectPrisma();
         console.log(`[Background Analysis ${analysisJob.id}] ✅ Database connection established`);
-        
-        // CRITICAL: Verify job is still active before proceeding
-        const jobCheck = await prisma.analysisJob.findUnique({
-          where: { id: analysisJob.id },
-          select: { status: true },
-        });
-        
-        if (jobCheck?.status === 'CANCELLED') {
-          console.log(`[Background Analysis ${analysisJob.id}] ⚠️ Job was cancelled, aborting`);
-          return;
-        }
-        
-        console.log(`[Background Analysis ${analysisJob.id}] ✅ Job verified active (${jobCheck?.status}), proceeding with analysis`);
         
         // Now call the actual analysis function
         await executeBackgroundAnalysis(analysisJob.id, contactIds, organizationId);
@@ -350,7 +298,6 @@ export async function startBackgroundAnalysis(
       } catch (error) {
         console.error(`[Background Analysis ${analysisJob.id}] ❌ CRITICAL ERROR:`, error);
         console.error(`[Background Analysis ${analysisJob.id}] Error stack:`, error instanceof Error ? error.stack : 'No stack trace');
-        console.error(`[Background Analysis ${analysisJob.id}] Error occurred at: ${new Date().toISOString()}`);
         
         // Mark job as failed in database
         try {
@@ -386,48 +333,31 @@ export async function startBackgroundAnalysis(
       });
     }
 
-    // CRITICAL: In Vercel serverless, we need to ensure the promise actually starts executing
-    // The function can terminate immediately after response, so we need to:
-    // 1. Start the promise (already done with IIFE)
-    // 2. Wait long enough for the promise to actually begin executing its first async operation
-    // 3. Use a longer delay (500ms) to ensure Vercel keeps the function alive
-    
-    console.log(`[Background Analysis ${analysisJob.id}] ⏳ Waiting for promise to start executing...`);
-    
-    // CRITICAL: Use a longer delay (500ms) to ensure Vercel doesn't terminate before promise starts
-    // This gives the promise time to actually begin executing its first async operation
+    // CRITICAL: Ensure promise starts executing by waiting for the first microtask
+    // This guarantees the promise chain begins before we return the response
+    // The IIFE above already started the promise, but we wait a tick to ensure it's executing
     await new Promise<void>((resolve) => {
+      // Use process.nextTick if available (Node.js), otherwise setImmediate/setTimeout
+      // This ensures the promise chain has started executing before we return
       if (typeof process !== 'undefined' && process.nextTick) {
         process.nextTick(() => {
           console.log(`[Background Analysis ${analysisJob.id}] ✅ Promise chain confirmed active (nextTick)`);
-          // CRITICAL: Use 500ms delay to ensure Vercel keeps function alive long enough
-          setTimeout(() => {
-            console.log(`[Background Analysis ${analysisJob.id}] ✅ 500ms delay completed - promise should be executing`);
-            resolve();
-          }, 500);
+          resolve();
         });
       } else if (typeof setImmediate !== 'undefined') {
         setImmediate(() => {
           console.log(`[Background Analysis ${analysisJob.id}] ✅ Promise chain confirmed active (setImmediate)`);
-          setTimeout(() => {
-            console.log(`[Background Analysis ${analysisJob.id}] ✅ 500ms delay completed - promise should be executing`);
-            resolve();
-          }, 500);
+          resolve();
         });
       } else {
         setTimeout(() => {
           console.log(`[Background Analysis ${analysisJob.id}] ✅ Promise chain confirmed active (setTimeout)`);
-          setTimeout(() => {
-            console.log(`[Background Analysis ${analysisJob.id}] ✅ 500ms delay completed - promise should be executing`);
-            resolve();
-          }, 500);
+          resolve();
         }, 0);
       }
     });
     
-    console.log(`[Background Analysis ${analysisJob.id}] ✅ Background promise execution started - returning response`);
-    console.log(`[Background Analysis ${analysisJob.id}] ⏱️ Response returning at: ${new Date().toISOString()}`);
-    console.log(`[Background Analysis ${analysisJob.id}] 🔍 If you don't see "📍 Inside background promise" logs, the promise didn't start executing`);
+    console.log(`[Background Analysis] ✅ Background promise execution started - returning response`);
 
     return {
       success: true,

@@ -561,11 +561,11 @@ export function ContactsTable({ contacts, tags, pipelines, isLoading }: Contacts
     // ADDITIONAL SAFETY CHECK: If selectAllPages is false but allContactIds is populated,
     // make sure we're not accidentally using allContactIds instead of selectedIds
     if (!selectAllPages && allContactIds.length > 0) {
-      const selectedArray = Array.from(contactIdsToSend).sort();
-      const allIdsArray = [...allContactIds].sort();
-      const matchesAllIds = selectedArray.length === allIdsArray.length && 
-        selectedArray.every((id, idx) => id === allIdsArray[idx]);
-      
+          const selectedArray = Array.from(contactIdsToSend).sort();
+          const allIdsArray = [...allContactIds].sort();
+          const matchesAllIds = selectedArray.length === allIdsArray.length && 
+            selectedArray.every((id, idx) => id === allIdsArray[idx]);
+          
       if (matchesAllIds && contactIdsToSend.length > 1) {
         console.error('[ContactsTable] 🚨 CRITICAL BUG: selectAllPages=false but selectedIds matches allContactIds!');
         console.error('  This should NEVER happen - clearing allContactIds to prevent incorrect analysis');
@@ -651,10 +651,10 @@ export function ContactsTable({ contacts, tags, pipelines, isLoading }: Contacts
                 duration: 5000,
               });
             } else {
-              toast.info('Analysis started in background', {
-                description: 'You can continue working while contacts are analyzed',
-                duration: 3000,
-              });
+            toast.info('Analysis started in background', {
+              description: 'You can continue working while contacts are analyzed',
+              duration: 3000,
+            });
             }
             // Store job ID for indicator
             if (typeof window !== 'undefined') {
