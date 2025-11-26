@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useTransition, useMemo, memo } from 'react';
+import { useState, useTransition, useMemo, memo, useRef, useEffect } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { useQueryClient } from '@tanstack/react-query';
 import Link from 'next/link';
@@ -236,6 +236,15 @@ export function ContactsTable({ contacts, tags, pipelines, isLoading }: Contacts
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [bulkActionLoading, setBulkActionLoading] = useState(false);
   const [loadingAllIds, setLoadingAllIds] = useState(false);
+  
+  // CRITICAL: Use ref to track current selection to avoid stale closures
+  const selectedIdsRef = useRef<Set<string>>(new Set());
+  
+  // Keep ref in sync with state
+  useEffect(() => {
+    selectedIdsRef.current = selectedIds;
+    console.log('[ContactsTable] selectedIds state updated:', selectedIds.size, 'contact(s)');
+  }, [selectedIds]);
 
   const [sortBy, setSortBy] = useQueryState('sortBy', {
     defaultValue: 'date',
@@ -290,13 +299,17 @@ export function ContactsTable({ contacts, tags, pipelines, isLoading }: Contacts
   async function handleSelectAllPages() {
     const ids = await fetchAllContactIds();
     if (ids.length > 0) {
-      setSelectedIds(new Set(ids));
+      const newSelected = new Set(ids);
+      setSelectedIds(newSelected);
+      selectedIdsRef.current = newSelected; // Update ref immediately
       setSelectAllPages(true);
     }
   }
 
   function handleDeselectAllPages() {
-    setSelectedIds(new Set());
+    const newSelected = new Set();
+    setSelectedIds(newSelected);
+    selectedIdsRef.current = newSelected; // Update ref immediately
     setSelectAllPages(false);
     setAllContactIds([]);
     setTotalContactsCount(0);
@@ -304,62 +317,79 @@ export function ContactsTable({ contacts, tags, pipelines, isLoading }: Contacts
 
   function handleSelectAll(checked: boolean) {
     if (checked) {
-      setSelectedIds(new Set(contacts.map((c) => c.id)));
+      const newSelected = new Set(contacts.map((c) => c.id));
+      setSelectedIds(newSelected);
+      selectedIdsRef.current = newSelected; // Update ref immediately
       setSelectAllPages(false);
     } else {
-      setSelectedIds(new Set());
+      const newSelected = new Set();
+      setSelectedIds(newSelected);
+      selectedIdsRef.current = newSelected; // Update ref immediately
       setSelectAllPages(false);
     }
   }
 
   function handleSelectOne(id: string, checked: boolean) {
-    const newSelected = new Set(selectedIds);
-    if (checked) {
-      newSelected.add(id);
-    } else {
-      newSelected.delete(id);
-    }
-    setSelectedIds(newSelected);
-    
-    // CRITICAL FIX: Reset "select all pages" if user manually changes selection
-    // This ensures that if selectAllPages was true, any manual selection change resets it
-    if (selectAllPages) {
-      // Check if the new selection matches allContactIds
-      const newSelectedArray = Array.from(newSelected);
-      const matchesAllPages = 
-        newSelectedArray.length === allContactIds.length &&
-        newSelectedArray.every(id => allContactIds.includes(id));
-      
-      // If selection doesn't match "all pages" anymore, reset the flag
-      if (!matchesAllPages) {
-        console.log('[ContactsTable] Manual selection change detected, resetting selectAllPages');
-        setSelectAllPages(false);
-        setAllContactIds([]);
-        setTotalContactsCount(0);
+    // Use functional update to avoid stale closures
+    setSelectedIds((prevSelected) => {
+      const newSelected = new Set(prevSelected);
+      if (checked) {
+        newSelected.add(id);
+      } else {
+        newSelected.delete(id);
       }
-    }
+      
+      // CRITICAL: Update ref immediately (before state update completes)
+      selectedIdsRef.current = newSelected;
+      
+      // CRITICAL FIX: Reset "select all pages" if user manually changes selection
+      // This ensures that if selectAllPages was true, any manual selection change resets it
+      if (selectAllPages) {
+        // Check if the new selection matches allContactIds
+        const newSelectedArray = Array.from(newSelected);
+        const matchesAllPages = 
+          newSelectedArray.length === allContactIds.length &&
+          newSelectedArray.every(contactId => allContactIds.includes(contactId));
+        
+        // If selection doesn't match "all pages" anymore, reset the flag
+        if (!matchesAllPages) {
+          console.log('[ContactsTable] Manual selection change detected, resetting selectAllPages. New selection:', newSelectedArray.length, 'contacts');
+          setSelectAllPages(false);
+          setAllContactIds([]);
+          setTotalContactsCount(0);
+        }
+      }
+      
+      console.log(`[ContactsTable] Selection updated: ${newSelected.size} contact(s) selected`, Array.from(newSelected));
+      return newSelected;
+    });
   }
 
   async function handleBulkAction(
     action: string,
     data?: { tags?: string[]; stageId?: string }
   ) {
-    if (selectedIds.size === 0) return;
-
-    // CRITICAL FIX: Ensure we only use manually selected IDs, not "select all pages" IDs
-    // If selectAllPages is true but selectedIds doesn't match allContactIds, reset selectAllPages
-    const contactIdsToSend = Array.from(selectedIds);
+    // CRITICAL: Use ref to get the absolute latest selection value (avoids stale closures)
+    const currentSelectedIds = selectedIdsRef.current;
+    const contactIdsToSend = Array.from(currentSelectedIds);
+    
+    if (contactIdsToSend.length === 0) {
+      console.warn('[ContactsTable] No contacts selected, aborting bulk action');
+      return;
+    }
     
     // Safety check: if selectAllPages is true but selectedIds size doesn't match totalContactsCount,
     // it means user manually changed selection, so reset selectAllPages
     if (selectAllPages && contactIdsToSend.length !== totalContactsCount) {
-      console.warn('[ContactsTable] selectAllPages was true but selection changed, resetting state');
+      console.warn('[ContactsTable] ⚠️ selectAllPages was true but selection changed! Expected:', totalContactsCount, 'Got:', contactIdsToSend.length, 'Resetting selectAllPages flag');
       setSelectAllPages(false);
       setAllContactIds([]);
       setTotalContactsCount(0);
     }
     
-    console.log(`[ContactsTable] Sending bulk action "${action}" for ${contactIdsToSend.length} contact(s):`, contactIdsToSend);
+    console.log(`[ContactsTable] 🚀 Sending bulk action "${action}" for ${contactIdsToSend.length} contact(s)`);
+    console.log(`[ContactsTable] Selected contact IDs:`, contactIdsToSend.slice(0, 10), contactIdsToSend.length > 10 ? `... and ${contactIdsToSend.length - 10} more` : '');
+    console.log(`[ContactsTable] selectAllPages flag:`, selectAllPages, '| totalContactsCount:', totalContactsCount);
 
     try {
       setBulkActionLoading(true);
