@@ -37,6 +37,16 @@ export async function POST(request: NextRequest) {
 
     // Start instant sync (stores contacts immediately, queues AI analysis)
     const result = await startInstantSync(facebookPageId, session.user.id);
+    
+    // CRITICAL: Use Vercel's waitUntil to keep the function alive for background tasks
+    // This ensures the background promise continues executing after the response is sent
+    if ('waitUntil' in request) {
+      // Store the background promise and wait for it
+      const backgroundPromise = (globalThis as any).__activeSyncPromises?.values().next().value;
+      if (backgroundPromise) {
+        (request as any).waitUntil(backgroundPromise);
+      }
+    }
 
     return NextResponse.json(result);
   } catch (error) {
