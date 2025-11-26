@@ -7,8 +7,11 @@ const prismaClientSingleton = () => {
   // Add connection pool parameters if using Supabase pooler
   if (databaseUrl.includes('pooler.supabase.com') && !databaseUrl.includes('connection_limit')) {
     const separator = databaseUrl.includes('?') ? '&' : '?';
-    // Increased timeouts for better reliability
-    databaseUrl = `${databaseUrl}${separator}connection_limit=10&pool_timeout=30&connect_timeout=15`;
+    // Increased limits for better reliability and to prevent pool exhaustion
+    // connection_limit: 20 (increased from 10) - allows more concurrent connections
+    // pool_timeout: 60 (increased from 30) - gives more time to get a connection
+    // connect_timeout: 20 (increased from 15) - more time for initial connection
+    databaseUrl = `${databaseUrl}${separator}connection_limit=20&pool_timeout=60&connect_timeout=20`;
   }
   
   return new PrismaClient({

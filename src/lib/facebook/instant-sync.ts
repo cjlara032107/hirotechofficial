@@ -61,46 +61,23 @@ class ConcurrencyLimiter {
  * Starts an instant sync that stores contacts immediately (< 1 minute)
  * and queues AI analysis as a background job
  */
-export async function startInstantSync(
-  facebookPageId: string,
-  userId: string
-): Promise<InstantSyncResult> {
+/**
+ * Executes the actual instant sync operation
+ */
+async function executeInstantSync(jobId: string, facebookPageId: string, userId: string): Promise<void> {
   const startTime = Date.now();
   
   try {
-    // Check if there's already an active sync job for this page
-    const existingJob = await prisma.syncJob.findFirst({
-      where: {
-        facebookPageId,
-        status: {
-          in: ['PENDING', 'IN_PROGRESS'],
-        },
-      },
-      orderBy: {
-        createdAt: 'desc',
-      },
-    });
-
-    if (existingJob) {
-      return {
-        success: true,
-        jobId: existingJob.id,
-        message: 'Sync already in progress',
-        contactsStored: 0,
-        aiAnalysisQueued: false,
-      };
-    }
-
-    // Create a new sync job
-    const syncJob = await prisma.syncJob.create({
+    // Update job status to in progress
+    await prisma.syncJob.update({
+      where: { id: jobId },
       data: {
-        facebookPageId,
         status: 'IN_PROGRESS',
         startedAt: new Date(),
       },
     });
 
-    console.log(`[Instant Sync ${syncJob.id}] 🚀 Starting instant sync...`);
+    console.log(`[Instant Sync ${jobId}] 🚀 Starting instant sync execution...`);
 
     // Get page info
     const page = await prisma.facebookPage.findUnique({
@@ -248,7 +225,7 @@ export async function startInstantSync(
           contactsStored += toUpdate.length;
         }
       } catch (error) {
-        console.error(`[Instant Sync ${syncJob.id}] Bulk operation failed, falling back to individual operations:`, error);
+        console.error(`[Instant Sync ${jobId}] Bulk operation failed, falling back to individual operations:`, error);
         // Fallback to individual operations
         const contactLimiter = new ConcurrencyLimiter(50);
         await Promise.all(
@@ -299,7 +276,7 @@ export async function startInstantSync(
                 contactIds.push(savedContact.id);
                 contactsStored++;
               } catch (error) {
-                console.error(`[Instant Sync ${syncJob.id}] Failed to store ${platform} contact ${participantId}:`, error);
+                console.error(`[Instant Sync ${jobId}] Failed to store ${platform} contact ${participantId}:`, error);
                 errors.push({
                   platform,
                   id: participantId,
@@ -315,7 +292,7 @@ export async function startInstantSync(
     // Phase 1: Fast contact storage (NO AI ANALYSIS)
     // OPTIMIZATION: Stream conversations and process contacts in batches as they arrive
     try {
-      console.log(`[Instant Sync ${syncJob.id}] Streaming Messenger conversations...`);
+      console.log(`[Instant Sync ${jobId}] Streaming Messenger conversations...`);
       
       // Collect unique participants as we stream conversations
       const participantMap = new Map<string, { updatedTime: string; name?: string }>();
@@ -352,16 +329,16 @@ export async function startInstantSync(
           
           // Update progress (non-blocking)
           prisma.syncJob.update({
-            where: { id: syncJob.id },
+            where: { id: jobId },
             data: {
               syncedContacts: contactsStored,
               totalContacts: contactsStored + participantMap.size, // Estimate
             },
-          }).catch(err => console.error(`[Instant Sync ${syncJob.id}] Failed to update progress:`, err));
+          }).catch(err => console.error(`[Instant Sync ${jobId}] Failed to update progress:`, err));
         }
       }
       
-      console.log(`[Instant Sync ${syncJob.id}] Fetched ${conversationCount} Messenger conversations`);
+      console.log(`[Instant Sync ${jobId}] Fetched ${conversationCount} Messenger conversations`);
 
       // Process any remaining participants
       if (participantMap.size > 0) {
@@ -369,9 +346,9 @@ export async function startInstantSync(
         await processContactBatch(remaining, 'Messenger');
       }
 
-      console.log(`[Instant Sync ${syncJob.id}] ✅ Stored ${contactsStored} Messenger contacts`);
+      console.log(`[Instant Sync ${jobId}] ✅ Stored ${contactsStored} Messenger contacts`);
     } catch (error) {
-      console.error(`[Instant Sync ${syncJob.id}] Failed to fetch Messenger conversations:`, error);
+      console.error(`[Instant Sync ${jobId}] Failed to fetch Messenger conversations:`, error);
       errors.push({
         platform: 'Messenger',
         id: 'conversations',
@@ -383,7 +360,7 @@ export async function startInstantSync(
     // OPTIMIZATION: Stream Instagram conversations and process in batches
     if (page.instagramAccountId) {
       try {
-        console.log(`[Instant Sync ${syncJob.id}] Streaming Instagram conversations...`);
+        console.log(`[Instant Sync ${jobId}] Streaming Instagram conversations...`);
         
         // Collect unique participants as we stream conversations
         const igParticipantMap = new Map<string, { updatedTime: string; name?: string }>();
@@ -418,16 +395,16 @@ export async function startInstantSync(
             
             // Update progress (non-blocking)
             prisma.syncJob.update({
-              where: { id: syncJob.id },
+              where: { id: jobId },
               data: {
                 syncedContacts: contactsStored,
                 totalContacts: contactsStored + igParticipantMap.size, // Estimate
               },
-            }).catch(err => console.error(`[Instant Sync ${syncJob.id}] Failed to update progress:`, err));
+            }).catch(err => console.error(`[Instant Sync ${jobId}] Failed to update progress:`, err));
           }
         }
         
-        console.log(`[Instant Sync ${syncJob.id}] Fetched ${igConversationCount} Instagram conversations`);
+        console.log(`[Instant Sync ${jobId}] Fetched ${igConversationCount} Instagram conversations`);
 
         // Process any remaining Instagram participants
         if (igParticipantMap.size > 0) {
@@ -435,9 +412,9 @@ export async function startInstantSync(
           await processContactBatch(remaining, 'Instagram');
         }
 
-        console.log(`[Instant Sync ${syncJob.id}] ✅ Stored ${contactsStored} total contacts (including Instagram)`);
+        console.log(`[Instant Sync ${jobId}] ✅ Stored ${contactsStored} total contacts (including Instagram)`);
       } catch (error) {
-        console.error(`[Instant Sync ${syncJob.id}] Failed to fetch Instagram conversations:`, error);
+        console.error(`[Instant Sync ${jobId}] Failed to fetch Instagram conversations:`, error);
         errors.push({
           platform: 'Instagram',
           id: 'conversations',
@@ -456,23 +433,23 @@ export async function startInstantSync(
     let aiAnalysisQueued = false;
     if (contactIds.length > 0) {
       try {
-        console.log(`[Instant Sync ${syncJob.id}] 🧠 Queuing AI analysis for ${contactIds.length} contacts...`);
+        console.log(`[Instant Sync ${jobId}] 🧠 Queuing AI analysis for ${contactIds.length} contacts...`);
         await startBackgroundAnalysis(
           contactIds,
           page.organizationId,
           userId
         );
         aiAnalysisQueued = true;
-        console.log(`[Instant Sync ${syncJob.id}] ✅ AI analysis queued successfully`);
+        console.log(`[Instant Sync ${jobId}] ✅ AI analysis queued successfully`);
       } catch (error) {
-        console.error(`[Instant Sync ${syncJob.id}] Failed to queue AI analysis:`, error);
+        console.error(`[Instant Sync ${jobId}] Failed to queue AI analysis:`, error);
         // Don't fail the sync if AI queueing fails
       }
     }
 
     // Mark sync as completed
     await prisma.syncJob.update({
-      where: { id: syncJob.id },
+      where: { id: jobId },
       data: {
         status: 'COMPLETED',
         syncedContacts: contactsStored,
@@ -484,14 +461,88 @@ export async function startInstantSync(
     });
 
     const elapsedTime = ((Date.now() - startTime) / 1000).toFixed(1);
-    console.log(`[Instant Sync ${syncJob.id}] ✅ Completed in ${elapsedTime}s: ${contactsStored} contacts stored, AI analysis queued: ${aiAnalysisQueued}`);
+    console.log(`[Instant Sync ${jobId}] ✅ Completed in ${elapsedTime}s: ${contactsStored} contacts stored, AI analysis queued: ${aiAnalysisQueued}`);
+  } catch (error) {
+    console.error(`[Instant Sync ${jobId}] ❌ Failed:`, error);
+    // Mark job as failed in database
+    try {
+      await prisma.syncJob.update({
+        where: { id: jobId },
+        data: {
+          status: 'FAILED',
+          errors: [
+            {
+              error: error instanceof Error ? error.message : String(error),
+              timestamp: new Date().toISOString(),
+            },
+          ],
+          completedAt: new Date(),
+        },
+      });
+    } catch (dbError) {
+      console.error(`[Instant Sync ${jobId}] ❌ Failed to update job status:`, dbError);
+    }
+    throw error;
+  }
+}
+
+export async function startInstantSync(
+  facebookPageId: string,
+  userId: string
+): Promise<InstantSyncResult> {
+  try {
+    // Check if there's already an active sync job for this page
+    const existingJob = await prisma.syncJob.findFirst({
+      where: {
+        facebookPageId,
+        status: {
+          in: ['PENDING', 'IN_PROGRESS'],
+        },
+      },
+      orderBy: {
+        createdAt: 'desc',
+      },
+    });
+
+    if (existingJob) {
+      return {
+        success: true,
+        jobId: existingJob.id,
+        message: 'Sync already in progress',
+        contactsStored: 0,
+        aiAnalysisQueued: false,
+      };
+    }
+
+    // Create a new sync job
+    const syncJob = await prisma.syncJob.create({
+      data: {
+        facebookPageId,
+        status: 'PENDING',
+      },
+    });
+
+    console.log(`[Instant Sync ${syncJob.id}] 🚀 Starting instant sync...`);
+
+    // Start the sync process asynchronously (don't await)
+    // For Vercel serverless, we need to ensure the promise chain starts before response
+    // Use immediate execution with proper error handling
+    (async () => {
+      try {
+        console.log(`[Instant Sync ${syncJob.id}] 🚀 Starting background execution immediately...`);
+        await executeInstantSync(syncJob.id, facebookPageId, userId);
+      } catch (error) {
+        console.error(`[Instant Sync ${syncJob.id}] ❌ Background execution failed:`, error);
+        // Error handling is done in executeInstantSync
+      }
+    })(); // Immediately invoked async function
 
     return {
       success: true,
       jobId: syncJob.id,
-      message: `Synced ${contactsStored} contacts in ${elapsedTime}s`,
-      contactsStored,
-      aiAnalysisQueued,
+      message: 'Instant sync started',
+      contactsStored: 0,
+      aiAnalysisQueued: false,
     };
   } catch (error) {
     console.error('Failed to start instant sync:', error);

@@ -267,13 +267,13 @@ export function ConnectedPagesList({ onRefresh, onSyncComplete }: ConnectedPages
       },
     }));
 
-    toast.info(`Starting fast sync for ${page.pageName}...`, {
-      description: 'Syncing contacts only (no AI analysis)',
+    toast.info(`Starting instant sync for ${page.pageName}...`, {
+      description: 'Syncing contacts in the background',
       duration: 2000,
     });
 
     try {
-      const response = await fetch('/api/facebook/fast-sync', {
+      const response = await fetch('/api/facebook/sync-instant', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -310,7 +310,7 @@ export function ConnectedPagesList({ onRefresh, onSyncComplete }: ConnectedPages
         },
       }));
 
-      toast.success(`Fast sync started for ${page.pageName}`, {
+      toast.success(`Instant sync started for ${page.pageName}`, {
         description: 'Syncing contacts in the background',
         duration: 3000,
       });

@@ -302,13 +302,13 @@ export class FacebookClient {
             console.log(`[Facebook API] Fetched ${pageCount} pages, ${allConversations.length} Messenger conversations so far...`);
           }
           
-          // Add timeout per page request (20 seconds)
+          // Add timeout per page request (30 seconds - increased from 20 to handle slow Facebook API responses)
           const nextResponse = await Promise.race([
             axios.get(nextUrl, {
-              timeout: 20000, // 20 second timeout per request
+              timeout: 30000, // 30 second timeout per request (increased from 20)
             }),
             new Promise((_, reject) => 
-              setTimeout(() => reject(new Error(`Page ${pageCount} request timed out after 20 seconds`)), 20000)
+              setTimeout(() => reject(new Error(`Page ${pageCount} request timed out after 30 seconds`)), 30000)
             )
           ]) as any;
           
@@ -337,6 +337,8 @@ export class FacebookClient {
           // For timeout or other pagination errors, log but continue with what we have
           if (paginationError.message?.includes('timeout') || paginationError.code === 'ECONNABORTED') {
             console.warn(`[Facebook API] Page ${pageCount} timed out, continuing with ${allConversations.length} conversations already fetched`);
+            // Log warning for monitoring
+            console.warn(`[Facebook API] Failed to fetch page ${pageCount}, continuing with ${allConversations.length} conversations already fetched`);
           } else {
             console.warn(`[Facebook API] Failed to fetch page ${pageCount}, continuing with ${allConversations.length} conversations already fetched`);
           }
@@ -446,7 +448,7 @@ export class FacebookClient {
     try {
       while (hasMore && nextUrl && pageCount < MAX_MESSAGE_PAGES) {
         try {
-          // Add timeout per page (15 seconds)
+          // Add timeout per page (30 seconds - increased from 15 for better reliability)
           const response: any = await Promise.race([
             axios.get(nextUrl, {
               params: {
@@ -454,10 +456,10 @@ export class FacebookClient {
                 fields: 'from,message,created_time',
                 limit: 100, // 100 messages per page
               },
-              timeout: 15000, // 15 second timeout per request
+              timeout: 30000, // 30 second timeout per request (increased from 15)
             }),
             new Promise((_, reject) => 
-              setTimeout(() => reject(new Error(`Message page ${pageCount + 1} request timed out after 15 seconds`)), 15000)
+              setTimeout(() => reject(new Error(`Message page ${pageCount + 1} request timed out after 30 seconds`)), 30000)
             )
           ]) as any;
 
