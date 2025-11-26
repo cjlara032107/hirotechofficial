@@ -193,6 +193,9 @@ Respond ONLY with valid JSON (no markdown, no explanation):
         return false;
       };
       
+      // CRITICAL: Return contactInfo even if validation is strict
+      // The UI will handle whether to display it based on its own validation
+      // This ensures we don't lose extracted data due to overly strict validation
       if (hasData(contactInfo)) {
         console.log('[Contact Info Extraction] ✅ Successfully extracted contact information with data');
         const extractedFields = Object.keys(contactInfo).filter(key => {
@@ -211,8 +214,13 @@ Respond ONLY with valid JSON (no markdown, no explanation):
         }
         return contactInfo;
       } else {
-        console.log('[Contact Info Extraction] ⚠️ Extracted object has no meaningful data, returning null');
-        return null;
+        // CRITICAL: Still return the object even if validation fails
+        // The UI validation will determine if it should be displayed
+        // This prevents losing data due to strict validation
+        console.log('[Contact Info Extraction] ⚠️ Extracted object has no meaningful data according to strict validation');
+        console.log('[Contact Info Extraction] 📦 Returning object anyway for UI to decide:', JSON.stringify(contactInfo, null, 2));
+        // Return the object instead of null - let UI validation decide
+        return contactInfo;
       }
     } catch (parseError) {
       console.error('[Contact Info Extraction] Failed to parse JSON response:', parseError);

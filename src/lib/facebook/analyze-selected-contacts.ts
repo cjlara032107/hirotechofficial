@@ -455,9 +455,14 @@ export async function analyzeSelectedContacts(
               aiContextUpdatedAt: new Date(),
             };
 
-            // Only add new fields if they have values (will fail gracefully if columns don't exist)
-            if (contactInfo) {
+            // CRITICAL: Always save contactInfo if it exists, even if validation is strict
+            // The UI validation will handle whether to display it
+            // This ensures we don't lose extracted data due to overly strict validation
+            if (contactInfo !== null && contactInfo !== undefined) {
               updateData.contactInfo = contactInfo;
+              console.log(`[Analyze Selected] 💾 Saving contactInfo for ${contact.id}:`, JSON.stringify(contactInfo, null, 2));
+            } else {
+              console.log(`[Analyze Selected] ⚠️ No contactInfo to save for ${contact.id} (extraction returned null/undefined)`);
             }
             if (replyTimeAnalysis) {
               updateData.bestContactTimes = replyTimeAnalysis;
