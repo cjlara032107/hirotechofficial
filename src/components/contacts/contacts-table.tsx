@@ -396,13 +396,32 @@ export function ContactsTable({ contacts, tags, pipelines, isLoading }: Contacts
     console.log('  totalContactsCount:', totalContactsCount);
     console.log('  allContactIds length:', allContactIds.length);
     
-    // Use state as source of truth, but validate against ref
+    // CRITICAL: ALWAYS use the actual selectedIds state - never trust flags or refs
+    // This is the single source of truth for what the user actually selected
     let contactIdsToSend = Array.from(stateSelectedIds);
     
     // If ref and state don't match, use the smaller one (more conservative)
     if (refSelectedIds.size !== stateSelectedIds.size) {
       console.warn('[ContactsTable] ⚠️ Ref and state mismatch! Using state as source of truth.');
       contactIdsToSend = Array.from(stateSelectedIds);
+    }
+    
+    // CRITICAL SAFETY: If user only selected 1 contact, ensure we ONLY send that 1 contact
+    // This prevents any edge cases where allContactIds might leak through
+    if (stateSelectedIds.size === 1) {
+      const singleId = Array.from(stateSelectedIds)[0];
+      console.log('[ContactsTable] 🔒 SINGLE SELECTION MODE: User selected exactly 1 contact');
+      console.log(`  Contact ID: ${singleId}`);
+      console.log(`  Ignoring allContactIds (${allContactIds.length} contacts) and selectAllPages flag`);
+      // Force reset any "select all" state
+      if (selectAllPages || allContactIds.length > 0) {
+        console.warn('[ContactsTable] 🚨 Clearing stale selectAllPages state for single selection');
+        setSelectAllPages(false);
+        setAllContactIds([]);
+        setTotalContactsCount(0);
+      }
+      // Ensure we ONLY send the single selected contact
+      contactIdsToSend = [singleId];
     }
     
     // CRITICAL FIX: If selectAllPages is true, we MUST verify the selection matches
@@ -462,10 +481,28 @@ export function ContactsTable({ contacts, tags, pipelines, isLoading }: Contacts
     if (contactIdsToSend.length > 20) {
       console.error('[ContactsTable] 🚨 WARNING: Sending more than 20 contacts! This might be an error.');
       console.error('  Contact IDs being sent:', contactIdsToSend);
+      // If user only selected 1 but we're sending many, something is wrong
+      if (stateSelectedIds.size === 1 && contactIdsToSend.length > 1) {
+        console.error('[ContactsTable] 🚨 CRITICAL BUG: User selected 1 but sending multiple!');
+        console.error('  Forcing to send only the selected contact');
+        contactIdsToSend = Array.from(stateSelectedIds);
+      }
+    }
+    
+    // FINAL HARD LIMIT: If stateSelectedIds says 1, we MUST only send 1
+    if (stateSelectedIds.size === 1 && contactIdsToSend.length !== 1) {
+      console.error('[ContactsTable] 🚨 CRITICAL: State says 1 selected but contactIdsToSend has different count!');
+      console.error(`  stateSelectedIds.size: ${stateSelectedIds.size}`);
+      console.error(`  contactIdsToSend.length: ${contactIdsToSend.length}`);
+      console.error('  FORCING to use only the selected contact');
+      contactIdsToSend = Array.from(stateSelectedIds);
     }
     
     console.log(`[ContactsTable] 🚀 FINAL: Sending bulk action "${action}" for ${contactIdsToSend.length} contact(s)`);
     console.log(`[ContactsTable] Contact IDs being sent:`, contactIdsToSend);
+    console.log(`[ContactsTable] State selectedIds size: ${stateSelectedIds.size}`);
+    console.log(`[ContactsTable] selectAllPages: ${selectAllPages}`);
+    console.log(`[ContactsTable] allContactIds length: ${allContactIds.length}`);
 
     try {
       setBulkActionLoading(true);

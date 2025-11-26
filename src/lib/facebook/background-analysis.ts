@@ -147,6 +147,15 @@ async function executeBackgroundAnalysis(
     console.log(`[Background Analysis ${jobId}] 🔍 DEBUG: executeBackgroundAnalysis called`);
     console.log(`[Background Analysis ${jobId}] Processing ${contactIds.length} contact ID(s):`, contactIds);
     
+    // CRITICAL VALIDATION: If only 1 contact ID was provided, ensure we only process 1
+    if (contactIds.length === 1) {
+      console.log(`[Background Analysis ${jobId}] ✅ SINGLE CONTACT MODE: Processing exactly 1 contact`);
+      console.log(`[Background Analysis ${jobId}] Contact ID: ${contactIds[0]}`);
+    } else if (contactIds.length > 1) {
+      console.log(`[Background Analysis ${jobId}] ⚠️ MULTIPLE CONTACTS: Processing ${contactIds.length} contacts`);
+      console.log(`[Background Analysis ${jobId}] Contact IDs:`, contactIds);
+    }
+    
     // CRITICAL: Ensure database connection is established (required for Vercel serverless)
     await connectPrisma();
     
