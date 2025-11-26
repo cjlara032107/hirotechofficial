@@ -7,7 +7,8 @@ const prismaClientSingleton = () => {
   // Add connection pool parameters if using Supabase pooler
   if (databaseUrl.includes('pooler.supabase.com') && !databaseUrl.includes('connection_limit')) {
     const separator = databaseUrl.includes('?') ? '&' : '?';
-    databaseUrl = `${databaseUrl}${separator}connection_limit=10&pool_timeout=20&connect_timeout=10`;
+    // Increased timeouts for better reliability
+    databaseUrl = `${databaseUrl}${separator}connection_limit=10&pool_timeout=30&connect_timeout=15`;
   }
   
   return new PrismaClient({
@@ -68,16 +69,51 @@ async function ensurePrismaConnected() {
 }
 
 // Helper to ensure connection before queries (call at start of API routes)
-export async function connectPrisma() {
-  try {
-    await ensurePrismaConnected();
-  } catch (error) {
-    console.error('[Prisma] Failed to connect:', error);
-    // Reset state to allow retry
-    connectionState = 'idle';
-    connectionPromise = undefined;
-    throw error;
+// Includes retry logic for transient connection failures (P1001 errors)
+export async function connectPrisma(maxRetries = 3, retryDelay = 1000) {
+  let lastError: unknown;
+  
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      await ensurePrismaConnected();
+      // Connection successful
+      if (attempt > 1) {
+        console.log(`[Prisma] ✅ Connected after ${attempt} attempt(s)`);
+      }
+      return;
+    } catch (error: unknown) {
+      lastError = error;
+      const errorObj = error as { code?: string; message?: string };
+      
+      // Check if it's a connection error (P1001)
+      const isConnectionError = errorObj?.code === 'P1001' || 
+        errorObj?.message?.includes("Can't reach database") ||
+        errorObj?.message?.includes('connection');
+      
+      // If it's not a connection error or we've exhausted retries, throw immediately
+      if (!isConnectionError || attempt === maxRetries) {
+        console.error(`[Prisma] ❌ Failed to connect (attempt ${attempt}/${maxRetries}):`, error);
+        // Reset state to allow retry on next call
+        connectionState = 'idle';
+        connectionPromise = undefined;
+        throw error;
+      }
+      
+      // Connection error - retry with exponential backoff
+      const delay = retryDelay * Math.pow(2, attempt - 1);
+      console.warn(`[Prisma] ⚠️ Connection failed (attempt ${attempt}/${maxRetries}), retrying in ${delay}ms...`);
+      
+      // Reset state before retry
+      connectionState = 'idle';
+      connectionPromise = undefined;
+      
+      // Wait before retry
+      await new Promise(resolve => setTimeout(resolve, delay));
+    }
   }
+  
+  // Should never reach here, but TypeScript needs it
+  throw lastError;
 }
 
 // Initialize connection on module load (for serverless warm starts)
