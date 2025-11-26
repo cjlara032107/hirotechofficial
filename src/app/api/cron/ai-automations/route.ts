@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { prisma, connectPrisma } from '@/lib/db';
-import { prismaWithRetry } from '@/lib/db-retry';
+import { withRetry } from '@/lib/db-retry';
 import { generateFollowUpMessage } from '@/lib/ai/google-ai-service';
 import { FacebookClient } from '@/lib/facebook/client';
 import { isContactEligibleForAutomation } from '@/lib/ai/conflict-prevention';
@@ -16,8 +16,8 @@ export async function GET(request: NextRequest) {
     }
 
     // Stagger cron job execution to prevent simultaneous pool access
-    // Random delay 0-2 seconds to spread out multiple cron jobs
-    const staggerDelay = Math.random() * 2000;
+    // Random delay 0-5 seconds to spread out multiple cron jobs more aggressively
+    const staggerDelay = Math.random() * 5000;
     await new Promise(resolve => setTimeout(resolve, staggerDelay));
 
     // Ensure Prisma is connected before queries
@@ -27,7 +27,7 @@ export async function GET(request: NextRequest) {
     const startTime = Date.now();
 
     // Get all enabled automation rules (with retry for pool exhaustion)
-    const rules = await prismaWithRetry(() => prisma.aIAutomationRule.findMany({
+    const rules = await withRetry(() => prisma.aIAutomationRule.findMany({
       where: {
         enabled: true,
       },

@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/db';
-import { prismaWithRetry } from '@/lib/db-retry';
+import { withRetry } from '@/lib/db-retry';
 import { startCampaign, getTargetContacts } from '@/lib/campaigns/send';
 import { GoogleAIService } from '@/lib/ai/google-ai-service';
 import { FacebookClient } from '@/lib/facebook/client';
@@ -24,8 +24,8 @@ export async function GET(request: NextRequest) {
     }
 
     // Stagger cron job execution to prevent simultaneous pool access
-    // Random delay 0-2 seconds to spread out multiple cron jobs
-    const staggerDelay = Math.random() * 2000;
+    // Random delay 0-5 seconds to spread out multiple cron jobs more aggressively
+    const staggerDelay = Math.random() * 5000;
     await new Promise(resolve => setTimeout(resolve, staggerDelay));
 
     const currentTime = new Date();
@@ -33,7 +33,7 @@ export async function GET(request: NextRequest) {
 
     // Find all campaigns that are scheduled and due to be sent (with retry for pool exhaustion)
     // Query: status = SCHEDULED AND scheduledAt <= currentTime
-    const dueCampaigns = await prismaWithRetry(() => prisma.campaign.findMany({
+    const dueCampaigns = await withRetry(() => prisma.campaign.findMany({
       where: {
         status: 'SCHEDULED',
         scheduledAt: {
