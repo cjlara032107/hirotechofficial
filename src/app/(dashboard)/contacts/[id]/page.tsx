@@ -12,6 +12,7 @@ import { ActivityTimeline } from '@/components/contacts/activity-timeline';
 import Link from 'next/link';
 import { Suspense } from 'react';
 import { Skeleton } from '@/components/ui/skeleton';
+import { ContactDetailRefresh } from '@/components/contacts/contact-detail-refresh';
 
 interface ContactDetailPageProps {
   params: Promise<{ id: string }>;
@@ -875,6 +876,7 @@ export default async function ContactDetailPage({ params, searchParams }: Contac
 
   return (
     <div className="space-y-6">
+      <ContactDetailRefresh />
       <Button variant="ghost" asChild className="mb-4">
         <Link href={getBackUrl()}>
           <ArrowLeft className="h-4 w-4 mr-2" />

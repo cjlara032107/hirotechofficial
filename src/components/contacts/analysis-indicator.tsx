@@ -53,8 +53,24 @@ export function AnalysisIndicator({ jobId, onComplete, onDismiss }: AnalysisIndi
               `Analysis complete! ${data.analyzedContacts} contact(s) analyzed${data.failedContacts > 0 ? ` (${data.failedContacts} failed)` : ''}`,
               { duration: 5000 }
             );
+            
+            // CRITICAL: Dispatch event to trigger page refresh on contact detail pages
+            if (typeof window !== 'undefined') {
+              window.dispatchEvent(new CustomEvent('analysisCompleted', { 
+                detail: { 
+                  jobId,
+                  analyzedContacts: data.analyzedContacts,
+                  failedContacts: data.failedContacts
+                } 
+              }));
+            }
           } else if (data.status === 'FAILED') {
             toast.error('Analysis failed. Please try again.', { duration: 5000 });
+            
+            // Log error details for debugging
+            if (data.errors && Array.isArray(data.errors) && data.errors.length > 0) {
+              console.error('[Analysis Indicator] Analysis failed with errors:', data.errors);
+            }
           }
 
           if (onComplete) {

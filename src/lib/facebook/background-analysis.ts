@@ -456,8 +456,19 @@ async function executeBackgroundAnalysis(
     });
 
     console.log(
-      `[Background Analysis ${jobId}] Completed: ${analyzedCount} analyzed, ${failedCount} failed`
+      `[Background Analysis ${jobId}] ✅ Completed: ${analyzedCount} analyzed, ${failedCount} failed`
     );
+    
+    // CRITICAL: Log detailed results for debugging
+    if (analyzedCount > 0) {
+      console.log(`[Background Analysis ${jobId}] ✅ Successfully analyzed ${analyzedCount} contact(s)`);
+    }
+    if (failedCount > 0) {
+      console.error(`[Background Analysis ${jobId}] ❌ Failed to analyze ${failedCount} contact(s)`);
+      if (errors.length > 0) {
+        console.error(`[Background Analysis ${jobId}] Error details:`, errors);
+      }
+    }
   } catch (error) {
     console.error(`[Background Analysis ${jobId}] Error:`, error);
     
