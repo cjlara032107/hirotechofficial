@@ -389,20 +389,13 @@ async function executeInstantSync(jobId: string, facebookPageId: string, userId:
         
         // Update last conversation time
         lastConversationTime = Date.now();
+        conversationCount++;
         
         // Check for overall timeout (only if we've been running for a very long time)
         if (Date.now() - streamStartTime > MAX_STREAM_TIME) {
           console.warn(`[Instant Sync ${jobId}] ⚠️ Stream timeout reached (${MAX_STREAM_TIME / 60000} minutes), processing collected participants...`);
           break;
         }
-        
-        // Check for inactivity timeout (if no conversations received for 5 minutes, something might be wrong)
-        if (Date.now() - lastConversationTime > 5 * 60 * 1000) {
-          console.warn(`[Instant Sync ${jobId}] ⚠️ No conversations received for 5 minutes, processing collected participants...`);
-          break;
-        }
-        
-        conversationCount++;
         
         // Update progress immediately on first conversation to show activity
         if (conversationCount === 1) {
