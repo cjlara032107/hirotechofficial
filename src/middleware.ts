@@ -42,10 +42,16 @@ export async function middleware(request: NextRequest) {
     }
   );
 
-  // IMPORTANT: DO NOT REMOVE auth.getUser()
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+    // IMPORTANT: DO NOT REMOVE auth.getUser()
+    const {
+      data: { user },
+      error: authError,
+    } = await supabase.auth.getUser();
+
+    if (authError) {
+      console.error('[Middleware] ❌ Supabase auth error:', authError.message);
+      // Continue with request even if auth fails - let pages handle auth
+    }
 
   const { pathname } = request.nextUrl;
 
