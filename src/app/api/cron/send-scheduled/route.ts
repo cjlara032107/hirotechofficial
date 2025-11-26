@@ -23,6 +23,11 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
+    // Stagger cron job execution to prevent simultaneous pool access
+    // Random delay 0-2 seconds to spread out multiple cron jobs
+    const staggerDelay = Math.random() * 2000;
+    await new Promise(resolve => setTimeout(resolve, staggerDelay));
+
     const currentTime = new Date();
     console.log('[Cron Send Scheduled] Starting at', currentTime.toISOString());
 
