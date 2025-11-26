@@ -52,6 +52,10 @@ export async function startBackgroundAnalysis(
       };
     }
 
+    // CRITICAL VALIDATION: Log exactly what we're creating the job with
+    console.log(`[Background Analysis] Creating job with ${contactIds.length} contact(s)`);
+    console.log(`[Background Analysis] Contact IDs:`, contactIds);
+    
     // Create a new analysis job
     const analysisJob = await prisma.analysisJob.create({
       data: {
@@ -64,6 +68,8 @@ export async function startBackgroundAnalysis(
         failedContacts: 0,
       },
     });
+    
+    console.log(`[Background Analysis] ✅ Job created: ${analysisJob.id} with ${analysisJob.totalContacts} contact(s)`);
 
     // Start the analysis process asynchronously (don't await)
     // For Vercel serverless, we need to ensure the promise chain starts before response

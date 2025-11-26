@@ -90,6 +90,13 @@ export async function analyzeSelectedContacts(
   };
 
   console.log(`[Analyze Selected] 🚀 Starting analysis for ${contactIds.length} contacts at ${new Date().toISOString()}`);
+  console.log(`[Analyze Selected] Contact IDs received:`, contactIds);
+
+  // CRITICAL VALIDATION: Ensure we're not accidentally analyzing all contacts
+  if (contactIds.length > 50) {
+    console.error(`[Analyze Selected] 🚨 WARNING: Received ${contactIds.length} contacts! This might be an error.`);
+    console.error(`[Analyze Selected] Contact IDs:`, contactIds);
+  }
 
   // Fetch contacts with their Facebook page info
   const contacts = await prisma.contact.findMany({

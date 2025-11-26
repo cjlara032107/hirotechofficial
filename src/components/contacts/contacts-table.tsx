@@ -401,8 +401,24 @@ export function ContactsTable({ contacts, tags, pipelines, isLoading }: Contacts
         setSelectAllPages(false);
         setAllContactIds([]);
         setTotalContactsCount(0);
-        // Re-read after reset
-        contactIdsToSend = Array.from(selectedIds);
+        // CRITICAL: Don't re-read from state (it's async), use the value we already have
+        // contactIdsToSend already has the correct value from stateSelectedIds above
+      } else {
+        // If selectAllPages is true AND the count matches, verify we're not accidentally using allContactIds
+        // This is a safety check to prevent analyzing all contacts when user only selected one
+        if (contactIdsToSend.length > 1 && allContactIds.length > 0) {
+          // Check if the selected IDs match allContactIds (which would mean "select all" is active)
+          const selectedArray = Array.from(contactIdsToSend).sort();
+          const allIdsArray = [...allContactIds].sort();
+          const matchesAllIds = selectedArray.length === allIdsArray.length && 
+            selectedArray.every((id, idx) => id === allIdsArray[idx]);
+          
+          if (matchesAllIds) {
+            console.warn('[ContactsTable] 🚨 CRITICAL: Selected IDs match allContactIds! This might be "select all" mode.');
+            console.warn('  This should only happen if user explicitly clicked "Select all pages"');
+            console.warn('  If user only selected 1 contact, this is a BUG!');
+          }
+        }
       }
     }
     
