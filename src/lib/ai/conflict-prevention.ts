@@ -36,16 +36,25 @@ export async function isContactInActiveCampaign(contactId: string): Promise<bool
 }
 
 /**
- * Check if contact was recently contacted (within last N hours)
+ * Check if contact was recently contacted (within last N hours or custom milliseconds)
  * Prevents spam from multiple automation sources
  */
 export async function wasContactRecentlyContacted(
   contactId: string,
-  hoursThreshold: number = 12
+  hoursThreshold: number = 12,
+  customCooldownMs?: number
 ): Promise<boolean> {
   try {
-    const thresholdDate = new Date();
-    thresholdDate.setHours(thresholdDate.getHours() - hoursThreshold);
+    let thresholdDate: Date;
+    
+    if (customCooldownMs && customCooldownMs > 0) {
+      // Use custom cooldown in milliseconds (from rule's time interval)
+      thresholdDate = new Date(Date.now() - customCooldownMs);
+    } else {
+      // Use hours-based threshold (default behavior)
+      thresholdDate = new Date();
+      thresholdDate.setHours(thresholdDate.getHours() - hoursThreshold);
+    }
 
     const recentMessage = await prisma.message.findFirst({
       where: {
@@ -132,17 +141,17 @@ export async function hasExcludedTags(
  */
 export async function isContactInActiveChatSession(contactId: string): Promise<boolean> {
   try {
-    // Check for recent messages FROM the contact (not from business)
-    // This prevents interrupting when the customer is actively chatting
-    const thirtyMinutesAgo = new Date();
-    thirtyMinutesAgo.setMinutes(thirtyMinutesAgo.getMinutes() - 30);
+    // Check for recent messages FROM THE CONTACT (not from business/automation)
+    // Only messages from the contact indicate an active chat session
+    const twoHoursAgo = new Date();
+    twoHoursAgo.setHours(twoHoursAgo.getHours() - 2);
 
-    const recentContactMessage = await prisma.message.findFirst({
+    const recentActivity = await prisma.message.findFirst({
       where: {
         contactId,
-        isFromBusiness: false, // Only check messages FROM the contact
+        isFromBusiness: false, // Only check messages FROM the contact, not from business/automation
         createdAt: {
-          gte: thirtyMinutesAgo,
+          gte: twoHoursAgo,
         },
       },
       orderBy: {
@@ -150,22 +159,36 @@ export async function isContactInActiveChatSession(contactId: string): Promise<b
       },
     });
 
-    // If contact sent a message within last 30 minutes, they're actively chatting
-    return !!recentContactMessage;
+    // If there's recent activity FROM THE CONTACT (within 2 hours), consider it an active session
+    if (recentActivity) {
+      const timeDiff = new Date().getTime() - recentActivity.createdAt.getTime();
+      const minutesAgo = Math.floor(timeDiff / (1000 * 60));
+      
+      // Active if last message FROM CONTACT was within 30 minutes
+      return minutesAgo <= 30;
+    }
+
+    return false;
   } catch (error) {
     console.error('[Conflict Prevention] Error checking chat session:', error);
-    return false; // Fail open - allow automation
+    return false;
   }
 }
 
 /**
  * Comprehensive eligibility check for AI automation
  * Combines all conflict prevention checks
+ * @param contactId - The contact ID to check
+ * @param excludedTags - Tags to exclude
+ * @param options - Optional configuration
+ * @param options.skipRecentContactCheck - Skip the cooldown check (for manual executions)
+ * @param options.skipActiveChatCheck - Skip the active chat session check (for manual executions)
+ * @param options.cooldownMs - Custom cooldown in milliseconds (uses rule's time interval)
  */
 export async function isContactEligibleForAutomation(
   contactId: string,
   excludedTags: string[] = [],
-  bypassRecentContactCheck: boolean = false
+  options: { skipRecentContactCheck?: boolean; skipActiveChatCheck?: boolean; cooldownMs?: number } = {}
 ): Promise<{
   eligible: boolean;
   reason?: string;
@@ -179,12 +202,24 @@ export async function isContactEligibleForAutomation(
       };
     }
 
-    // Check 2: Recently contacted? (can be bypassed for manual testing)
-    if (!bypassRecentContactCheck && await wasContactRecentlyContacted(contactId, 12)) {
-      return {
-        eligible: false,
-        reason: 'Contact was messaged within last 12 hours',
-      };
+    // Check 2: Recently contacted? (Skip for manual executions)
+    // Use custom cooldown if provided (rule's time interval), otherwise default to 12 hours
+    if (!options.skipRecentContactCheck) {
+      const wasRecent = await wasContactRecentlyContacted(
+        contactId, 
+        12, // Default 12 hours if no custom cooldown
+        options.cooldownMs
+      );
+      
+      if (wasRecent) {
+        const cooldownHours = options.cooldownMs 
+          ? Math.round(options.cooldownMs / (60 * 60 * 1000) * 10) / 10 
+          : 12;
+        return {
+          eligible: false,
+          reason: `Contact was messaged within last ${cooldownHours} hours`,
+        };
+      }
     }
 
     // Check 3: In closed stage?
@@ -203,13 +238,14 @@ export async function isContactEligibleForAutomation(
       };
     }
 
-    // Check 5: In active chat session? (can be bypassed for manual testing)
-    // Only check if not bypassing - manual testing should allow sending even if contact recently messaged
-    if (!bypassRecentContactCheck && await isContactInActiveChatSession(contactId)) {
-      return {
-        eligible: false,
-        reason: 'Contact is in active chat session',
-      };
+    // Check 5: In active chat session? (Skip for manual executions)
+    if (!options.skipActiveChatCheck) {
+      if (await isContactInActiveChatSession(contactId)) {
+        return {
+          eligible: false,
+          reason: 'Contact is in active chat session',
+        };
+      }
     }
 
     return { eligible: true };

@@ -22,6 +22,7 @@ model Organization {
   teams         Team[]
   templates     Template[]
   users         User[]
+  analysisJobs  AnalysisJob[]
 }
 
 model User {
@@ -47,6 +48,8 @@ model User {
   joinRequests          TeamJoinRequest[]
   teamMemberships       TeamMember[]
   organization          Organization            @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  pageAccesses          PageAccess[]
+  analysisJobs          AnalysisJob[]
 }
 
 model FacebookPage {
@@ -98,6 +101,8 @@ model Contact {
   aiContext             String?
   aiContextUpdatedAt    DateTime?
   lastInteraction       DateTime?
+  contactInfo           Json?                  // Stores extracted contact information (age, phone, email, socials, etc.)
+  bestContactTimes      Json?                  // Stores best contact times with multiple estimates and days of week
   createdAt             DateTime                @default(now())
   updatedAt             DateTime                @updatedAt
   AIAutomationExecution AIAutomationExecution[]
@@ -371,6 +376,28 @@ model SyncJob {
   facebookPage   FacebookPage  @relation(fields: [facebookPageId], references: [id], onDelete: Cascade)
 
   @@index([facebookPageId, status])
+  @@index([status, createdAt])
+}
+
+model AnalysisJob {
+  id              String            @id @default(cuid())
+  organizationId  String
+  userId          String
+  contactIds      String[]
+  status          AnalysisJobStatus @default(PENDING)
+  totalContacts   Int               @default(0)
+  analyzedContacts Int              @default(0)
+  failedContacts   Int              @default(0)
+  errors           Json?
+  startedAt        DateTime?
+  completedAt      DateTime?
+  createdAt        DateTime         @default(now())
+  updatedAt        DateTime         @updatedAt
+  organization     Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user             User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, status])
+  @@index([userId, status])
   @@index([status, createdAt])
 }
 
@@ -871,6 +898,14 @@ enum SyncJobStatus {
   CANCELLED
 }
 
+enum AnalysisJobStatus {
+  PENDING
+  IN_PROGRESS
+  COMPLETED
+  FAILED
+  CANCELLED
+}
+
 enum TeamStatus {
   ACTIVE
   PENDING_APPROVAL
@@ -1003,12 +1038,14 @@ enum ApiKeyStatus {
 
 model PageAccess {
   id        String   @id @default(cuid())
-  pagePath  String   @unique // e.g., "/dashboard", "/contacts", "/campaigns" - Global setting
+  userId    String
+  pagePath  String   // e.g., "/dashboard", "/contacts", "/campaigns"
   isEnabled Boolean  @default(true)
-  disabledBy String? // Track which developer disabled it
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
+  @@unique([userId, pagePath])
+  @@index([userId])
   @@index([pagePath])
-  @@index([isEnabled])
 }

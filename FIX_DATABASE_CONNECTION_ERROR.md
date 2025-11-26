@@ -130,3 +130,7 @@ For Supabase, make sure you're using the correct connection strings:
 
 **Next Step:** Go to Vercel Dashboard → Settings → Environment Variables and verify both `DATABASE_URL` and `DIRECT_URL` are set correctly! 🔧
 
+
+
+
+

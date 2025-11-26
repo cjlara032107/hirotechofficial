@@ -215,3 +215,7 @@ To verify the fixes work:
 - Graceful error handling prevents crashes
 - All existing functionality remains intact
 
+
+
+
+

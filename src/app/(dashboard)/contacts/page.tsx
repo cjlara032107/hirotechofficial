@@ -271,9 +271,14 @@ async function ContactsContent({
 }
 
 export default async function ContactsPage({ searchParams }: ContactsPageProps) {
-  // Check if page is disabled globally
+  // Check if page is disabled for current user
+  const session = await auth();
+  if (!session?.user?.id) {
+    redirect('/login');
+  }
+
   const { getPageAccessStatus } = await import('@/lib/developer/get-page-access');
-  const pageAccess = await getPageAccessStatus('/contacts');
+  const pageAccess = await getPageAccessStatus(session.user.id, '/contacts');
   
   if (pageAccess === false) {
     const { default: UnderDevelopmentPage } = await import('../under-development/page');

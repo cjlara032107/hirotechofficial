@@ -98,9 +98,34 @@ export async function startBackgroundSync(facebookPageId: string): Promise<Backg
     });
 
     // Start the sync process asynchronously (don't await)
-    executeBackgroundSync(syncJob.id, facebookPageId).catch((error) => {
-      console.error(`Background sync failed for job ${syncJob.id}:`, error);
-    });
+    // For Vercel serverless, we need to ensure the promise chain starts before response
+    // Use immediate execution with proper error handling
+    (async () => {
+      try {
+        console.log(`[Background Sync ${syncJob.id}] 🚀 Starting background execution immediately...`);
+        await executeBackgroundSync(syncJob.id, facebookPageId);
+      } catch (error) {
+        console.error(`[Background Sync ${syncJob.id}] ❌ Failed:`, error);
+        // Mark job as failed in database
+        try {
+          await prisma.syncJob.update({
+            where: { id: syncJob.id },
+            data: {
+              status: 'FAILED',
+              errors: [
+                {
+                  error: error instanceof Error ? error.message : String(error),
+                  timestamp: new Date().toISOString(),
+                },
+              ],
+              completedAt: new Date(),
+            },
+          });
+        } catch (dbError) {
+          console.error(`[Background Sync ${syncJob.id}] ❌ Failed to update job status:`, dbError);
+        }
+      }
+    })(); // Immediately invoked async function
 
     return {
       success: true,
@@ -294,6 +319,29 @@ async function executeBackgroundSync(jobId: string, facebookPageId: string): Pro
       const messengerConvos = await fetchWithTimeout();
       console.log(`[Background Sync ${jobId}] Fetched ${messengerConvos.length} Messenger conversations`);
       
+      // Check if no conversations found
+      if (messengerConvos.length === 0) {
+        console.warn(`[Background Sync ${jobId}] ⚠️ No Messenger conversations found for page ${page.pageId}. This could mean:
+          - The page has no conversations yet
+          - The access token doesn't have 'pages_messaging' permission
+          - The page ID is incorrect
+          - The page hasn't received any messages`);
+        
+        // Still mark as completed (not failed) since this is a valid state
+        await prisma.syncJob.update({
+          where: { id: jobId },
+          data: {
+            status: 'COMPLETED',
+            syncedContacts: 0,
+            failedContacts: 0,
+            totalContacts: 0,
+            completedAt: new Date(),
+            errors: Prisma.JsonNull,
+          },
+        });
+        return; // Exit early - no conversations to sync
+      }
+      
       // Update progress: conversations fetched
       await prisma.syncJob.update({
         where: { id: jobId },
@@ -310,9 +358,17 @@ async function executeBackgroundSync(jobId: string, facebookPageId: string): Pro
       }
 
       const participantTasks: ParticipantTask[] = [];
+      let skippedPageSelf = 0;
       for (const convo of messengerConvos) {
+        if (!convo.participants || !convo.participants.data) {
+          console.warn(`[Background Sync ${jobId}] Conversation ${convo.id} has no participants data`);
+          continue;
+        }
         for (const participant of convo.participants.data) {
-          if (participant.id === page.pageId) continue; // Skip page itself
+          if (participant.id === page.pageId) {
+            skippedPageSelf++;
+            continue; // Skip page itself
+          }
           participantTasks.push({
             participantId: participant.id,
             conversationId: convo.id,
@@ -321,7 +377,24 @@ async function executeBackgroundSync(jobId: string, facebookPageId: string): Pro
         }
       }
 
-      console.log(`[Background Sync ${jobId}] Processing ${participantTasks.length} Messenger participants`);
+      console.log(`[Background Sync ${jobId}] Processing ${participantTasks.length} Messenger participants (skipped ${skippedPageSelf} page self references)`);
+      
+      // Check if no participants found after filtering
+      if (participantTasks.length === 0) {
+        console.warn(`[Background Sync ${jobId}] ⚠️ No participants found after filtering. All participants were the page itself.`);
+        await prisma.syncJob.update({
+          where: { id: jobId },
+          data: {
+            status: 'COMPLETED',
+            syncedContacts: 0,
+            failedContacts: 0,
+            totalContacts: 0,
+            completedAt: new Date(),
+            errors: Prisma.JsonNull,
+          },
+        });
+        return; // Exit early - no participants to sync
+      }
 
       // Update progress: participants collected
       await prisma.syncJob.update({
@@ -597,7 +670,14 @@ async function executeBackgroundSync(jobId: string, facebookPageId: string): Pro
         tokenExpired = true;
       }
 
-      console.error(`[Background Sync ${jobId}] Failed to fetch Messenger conversations:`, error);
+      console.error(`[Background Sync ${jobId}] ❌ Failed to fetch Messenger conversations:`, error);
+      console.error(`[Background Sync ${jobId}] Error details:`, {
+        code: errorCode,
+        message: errorMessage,
+        isTokenExpired: tokenExpired,
+        errorType: error instanceof FacebookApiError ? error.type : 'Unknown',
+      });
+      
       errors.push({
         platform: 'Messenger',
         id: 'conversations',
@@ -614,8 +694,11 @@ async function executeBackgroundSync(jobId: string, facebookPageId: string): Pro
             failedContacts: errors.length,
             syncedContacts: 0,
             totalContacts: 0,
+            errors: errors.length > 0 ? errors : Prisma.JsonNull,
+            completedAt: new Date(),
           },
         });
+        console.error(`[Background Sync ${jobId}] ❌ Sync failed: Could not fetch conversations. Error: ${errorMessage}`);
         return; // Exit early if we can't fetch conversations
       }
     }

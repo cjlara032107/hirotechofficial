@@ -397,7 +397,7 @@ export async function analyzeSelectedContacts(
                 return;
               }
             } else {
-              throw dbError; // Re-throw other errors
+            throw dbError; // Re-throw other errors
             }
           }
 

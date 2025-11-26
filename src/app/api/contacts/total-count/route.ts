@@ -1,9 +1,12 @@
 import { NextResponse } from 'next/server';
 import { auth } from '@/auth';
-import { prisma } from '@/lib/db';
+import { prisma, connectPrisma } from '@/lib/db';
 
 export async function GET() {
   try {
+    // Ensure Prisma is connected before queries
+    await connectPrisma();
+    
     const session = await auth();
     if (!session?.user) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });

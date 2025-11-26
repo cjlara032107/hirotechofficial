@@ -2,6 +2,9 @@ import { redirect } from 'next/navigation';
 import { auth } from '@/auth';
 import { PageAccessClient } from '@/components/settings/page-access-client';
 
+// Force dynamic rendering since we use auth() which uses cookies
+export const dynamic = 'force-dynamic';
+
 export default async function DeveloperSettingsPage() {
   try {
     const session = await auth();

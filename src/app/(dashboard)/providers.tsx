@@ -1,6 +1,7 @@
 'use client';
 
 import { SupabaseRealtimeProvider } from '@/contexts/supabase-realtime-context';
+import { AnalysisProvider } from '@/components/contacts/analysis-provider';
 
 /**
  * Dashboard Providers
@@ -10,7 +11,9 @@ import { SupabaseRealtimeProvider } from '@/contexts/supabase-realtime-context';
 export function Providers({ children }: { children: React.ReactNode }) {
   return (
     <SupabaseRealtimeProvider>
-      {children}
+      <AnalysisProvider>
+        {children}
+      </AnalysisProvider>
     </SupabaseRealtimeProvider>
   );
 }

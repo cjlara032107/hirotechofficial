@@ -6,11 +6,10 @@ import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Input } from '@/components/ui/input';
-import { Plus, Play, Pause, Trash2, Clock, MessageSquare, TrendingUp, Edit2, Search, X, Info } from 'lucide-react';
+import { Plus, Play, Pause, Trash2, Clock, MessageSquare, TrendingUp, Edit2, Search, X, History, CheckCircle2, XCircle, AlertCircle } from 'lucide-react';
 import { toast } from 'sonner';
 import { CreateRuleDialog } from '@/components/ai-automations/create-rule-dialog';
 import { EditRuleDialog } from '@/components/ai-automations/edit-rule-dialog';
-import { RuleDetailsDialog } from '@/components/ai-automations/rule-details-dialog';
 
 interface Rule {
   id: string;
@@ -55,10 +54,11 @@ export default function AIAutomationsPage() {
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
   const [editDialogOpen, setEditDialogOpen] = useState(false);
   const [editingRule, setEditingRule] = useState<Rule | null>(null);
-  const [detailsDialogOpen, setDetailsDialogOpen] = useState(false);
-  const [viewingRuleId, setViewingRuleId] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedRules, setSelectedRules] = useState<Set<string>>(new Set());
+  const [viewingHistory, setViewingHistory] = useState<string | null>(null);
+  const [executionHistory, setExecutionHistory] = useState<Record<string, any[]>>({});
+  const [loadingHistory, setLoadingHistory] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     fetchRules();
@@ -191,41 +191,19 @@ export default function AIAutomationsPage() {
       const response = await fetch('/api/ai-automations/execute', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
-          ruleId: id,
-          bypassCooldown: true // Bypass cooldown for manual testing
-        })
+        body: JSON.stringify({ ruleId: id })
       });
 
       const data = await response.json();
 
       if (response.ok) {
-        if (data.sent > 0) {
-          toast.success(`✅ Success! Sent ${data.sent} message(s)${data.failed > 0 ? `. ${data.failed} failed.` : ''}`);
-        } else if (data.failed > 0) {
-          // Show detailed failure reasons
-          const failureDetails = data.failureReasons && data.failureReasons.length > 0
-            ? `\n\nReasons:\n${data.failureReasons.slice(0, 5).map((fr: { contactName: string; reason: string }) => `• ${fr.contactName}: ${fr.reason}`).join('\n')}${data.failureReasons.length > 5 ? `\n... and ${data.failureReasons.length - 5} more` : ''}`
-            : '';
-          
-          toast.warning(
-            `⚠️ No messages sent. ${data.failed} contact(s) failed.${data.reasonSummary ? `\n\n${data.reasonSummary}` : ''}${failureDetails}`,
-            { duration: 8000 }
-          );
-        } else {
-          toast.info(`ℹ️ ${data.message || 'No eligible contacts found. Check time interval, tags, or cooldown period.'}`);
-        }
+        toast.success(`Test complete: ${data.sent} sent, ${data.failed} failed`);
         fetchRules();
       } else {
-        const errorMsg = data.details 
-          ? `${data.error}: ${data.details}`
-          : data.error || 'Test failed';
-        toast.error(errorMsg);
+        toast.error(data.error || 'Test failed');
       }
-    } catch (err) {
-      const errorMessage = err instanceof Error ? err.message : 'Failed to execute test';
-      toast.error(`Error: ${errorMessage}`);
-      console.error('Test execution error:', err);
+    } catch {
+      toast.error('Failed to execute test');
     } finally {
       setActionLoading(null);
     }
@@ -234,11 +212,6 @@ export default function AIAutomationsPage() {
   const handleEdit = (rule: Rule) => {
     setEditingRule(rule);
     setEditDialogOpen(true);
-  };
-
-  const handleViewDetails = (ruleId: string) => {
-    setViewingRuleId(ruleId);
-    setDetailsDialogOpen(true);
   };
 
   const handleSelectAll = (checked: boolean) => {
@@ -261,35 +234,44 @@ export default function AIAutomationsPage() {
     });
   };
 
+  const fetchExecutionHistory = async (ruleId: string) => {
+    if (executionHistory[ruleId]) {
+      // Already loaded, just toggle view
+      setViewingHistory(viewingHistory === ruleId ? null : ruleId);
+      return;
+    }
+
+    setLoadingHistory(prev => new Set(prev).add(ruleId));
+    try {
+      const response = await fetch(`/api/ai-automations/${ruleId}/executions?limit=50`);
+      if (response.ok) {
+        const data = await response.json();
+        setExecutionHistory(prev => ({
+          ...prev,
+          [ruleId]: data.executions || [],
+        }));
+        setViewingHistory(ruleId);
+      } else {
+        toast.error('Failed to load execution history');
+      }
+    } catch (error) {
+      console.error('Error fetching execution history:', error);
+      toast.error('Failed to load execution history');
+    } finally {
+      setLoadingHistory(prev => {
+        const newSet = new Set(prev);
+        newSet.delete(ruleId);
+        return newSet;
+      });
+    }
+  };
+
   const getTimeIntervalText = (rule: Rule) => {
-    const days = rule.timeIntervalDays || 0;
-    const hours = rule.timeIntervalHours || 0;
-    const minutes = rule.timeIntervalMinutes || 0;
-    
-    if (days === 0 && hours === 0 && minutes === 0) {
-      return 'Not set';
-    }
-
-    const totalMs = days * 24 * 60 * 60 * 1000 + hours * 60 * 60 * 1000 + minutes * 60 * 1000;
-    const totalHours = Math.floor(totalMs / (60 * 60 * 1000));
-    const totalMinutes = Math.floor((totalMs % (60 * 60 * 1000)) / (60 * 1000));
-    const totalDays = Math.floor(totalHours / 24);
-    const remainingHours = totalHours % 24;
-
-    // Format in a user-friendly way
-    if (totalDays > 0) {
-      if (remainingHours > 0) {
-        return `${totalDays}d ${remainingHours}h`;
-      }
-      return `${totalDays} day${totalDays !== 1 ? 's' : ''}`;
-    } else if (totalHours > 0) {
-      if (totalMinutes > 0) {
-        return `${totalHours}h ${totalMinutes}m`;
-      }
-      return `${totalHours} hour${totalHours !== 1 ? 's' : ''}`;
-    } else {
-      return `${totalMinutes} minute${totalMinutes !== 1 ? 's' : ''}`;
-    }
+    const parts = [];
+    if (rule.timeIntervalDays) parts.push(`${rule.timeIntervalDays}d`);
+    if (rule.timeIntervalHours) parts.push(`${rule.timeIntervalHours}h`);
+    if (rule.timeIntervalMinutes) parts.push(`${rule.timeIntervalMinutes}m`);
+    return parts.join(' ') || 'Not set';
   };
 
   // Filtered rules based on search query
@@ -406,14 +388,6 @@ export default function AIAutomationsPage() {
           onOpenChange={setEditDialogOpen}
           rule={editingRule}
           onSuccess={fetchRules}
-        />
-      )}
-
-      {viewingRuleId && (
-        <RuleDetailsDialog
-          open={detailsDialogOpen}
-          onOpenChange={setDetailsDialogOpen}
-          ruleId={viewingRuleId}
         />
       )}
 
@@ -579,14 +553,6 @@ export default function AIAutomationsPage() {
                     <Button
                       variant="outline"
                       size="sm"
-                      onClick={() => handleViewDetails(rule.id)}
-                      title="View details"
-                    >
-                      <Info className="w-4 h-4" />
-                    </Button>
-                    <Button
-                      variant="outline"
-                      size="sm"
                       onClick={() => handleEdit(rule)}
                       disabled={actionLoading === rule.id}
                       title="Edit rule"
@@ -626,6 +592,93 @@ export default function AIAutomationsPage() {
                     </Button>
                   </div>
                 </div>
+
+                {/* Execution History */}
+                <details className="mt-4" open={viewingHistory === rule.id}>
+                  <summary 
+                    className="text-sm text-muted-foreground cursor-pointer hover:text-foreground flex items-center gap-2"
+                    onClick={(e) => {
+                      e.preventDefault();
+                      fetchExecutionHistory(rule.id);
+                    }}
+                  >
+                    <History className="w-4 h-4" />
+                    View Execution History ({rule._count.executions} total)
+                  </summary>
+                  {viewingHistory === rule.id && (
+                    <div className="mt-3 space-y-2 max-h-96 overflow-y-auto">
+                      {loadingHistory.has(rule.id) ? (
+                        <div className="text-sm text-muted-foreground p-4 text-center">
+                          Loading execution history...
+                        </div>
+                      ) : executionHistory[rule.id]?.length > 0 ? (
+                        executionHistory[rule.id].map((exec: any) => (
+                          <div
+                            key={exec.id}
+                            className="p-3 bg-muted rounded-md text-sm border border-border"
+                          >
+                            <div className="flex items-start justify-between mb-2">
+                              <div className="flex items-center gap-2">
+                                {exec.status === 'sent' ? (
+                                  <CheckCircle2 className="w-4 h-4 text-green-600" />
+                                ) : exec.status === 'failed' ? (
+                                  <XCircle className="w-4 h-4 text-red-600" />
+                                ) : (
+                                  <AlertCircle className="w-4 h-4 text-yellow-600" />
+                                )}
+                                <span className="font-medium">
+                                  {exec.contact?.firstName || exec.recipientName || 'Unknown Contact'}
+                                </span>
+                                <Badge
+                                  variant={
+                                    exec.status === 'sent'
+                                      ? 'default'
+                                      : exec.status === 'failed'
+                                      ? 'destructive'
+                                      : 'secondary'
+                                  }
+                                  className="text-xs"
+                                >
+                                  {exec.status}
+                                </Badge>
+                              </div>
+                              <span className="text-xs text-muted-foreground">
+                                {new Date(exec.executedAt).toLocaleString()}
+                              </span>
+                            </div>
+                            {exec.generatedMessage && (
+                              <div className="mt-2 p-2 bg-background rounded border text-xs">
+                                <div className="font-medium mb-1">Message:</div>
+                                <div className="text-muted-foreground">{exec.generatedMessage}</div>
+                              </div>
+                            )}
+                            {exec.aiReasoning && (
+                              <div className="mt-2 p-2 bg-background rounded border text-xs">
+                                <div className="font-medium mb-1">AI Reasoning:</div>
+                                <div className="text-muted-foreground">{exec.aiReasoning}</div>
+                              </div>
+                            )}
+                            {exec.errorMessage && (
+                              <div className="mt-2 p-2 bg-red-50 dark:bg-red-950/20 rounded border border-red-200 dark:border-red-800 text-xs">
+                                <div className="font-medium text-red-600 dark:text-red-400 mb-1">Error:</div>
+                                <div className="text-red-700 dark:text-red-300">{exec.errorMessage}</div>
+                              </div>
+                            )}
+                            {exec.facebookMessageId && (
+                              <div className="mt-2 text-xs text-muted-foreground">
+                                Message ID: {exec.facebookMessageId}
+                              </div>
+                            )}
+                          </div>
+                        ))
+                      ) : (
+                        <div className="text-sm text-muted-foreground p-4 text-center">
+                          No execution history yet
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </details>
 
                 {rule.customPrompt && (
                   <details className="mt-4">

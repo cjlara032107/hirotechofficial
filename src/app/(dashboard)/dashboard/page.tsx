@@ -1,8 +1,15 @@
 import { getPageAccessStatus } from '@/lib/developer/get-page-access';
 import UnderDevelopmentPage from '../under-development/page';
+import { auth } from '@/auth';
+import { redirect } from 'next/navigation';
 
 export default async function DashboardPage() {
-  const pageAccess = await getPageAccessStatus('/dashboard');
+  const session = await auth();
+  if (!session?.user?.id) {
+    redirect('/login');
+  }
+
+  const pageAccess = await getPageAccessStatus(session.user.id, '/dashboard');
   
   if (pageAccess === false) {
     return <UnderDevelopmentPage searchParams={Promise.resolve({ page: '/dashboard' })} />;

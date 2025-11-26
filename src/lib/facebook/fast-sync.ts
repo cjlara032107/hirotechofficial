@@ -95,9 +95,34 @@ export async function startFastSync(facebookPageId: string): Promise<FastSyncRes
     });
 
     // Start the sync process asynchronously (don't await)
-    executeFastSync(syncJob.id, facebookPageId).catch((error) => {
-      console.error(`Fast sync failed for job ${syncJob.id}:`, error);
-    });
+    // For Vercel serverless, we need to ensure the promise chain starts before response
+    // Use immediate execution with proper error handling
+    (async () => {
+      try {
+        console.log(`[Fast Sync ${syncJob.id}] 🚀 Starting background execution immediately...`);
+        await executeFastSync(syncJob.id, facebookPageId);
+      } catch (error) {
+        console.error(`[Fast Sync ${syncJob.id}] ❌ Failed:`, error);
+        // Mark job as failed in database
+        try {
+          await prisma.syncJob.update({
+            where: { id: syncJob.id },
+            data: {
+              status: 'FAILED',
+              errors: [
+                {
+                  error: error instanceof Error ? error.message : String(error),
+                  timestamp: new Date().toISOString(),
+                },
+              ],
+              completedAt: new Date(),
+            },
+          });
+        } catch (dbError) {
+          console.error(`[Fast Sync ${syncJob.id}] ❌ Failed to update job status:`, dbError);
+        }
+      }
+    })(); // Immediately invoked async function
 
     return {
       success: true,

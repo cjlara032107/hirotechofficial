@@ -10,7 +10,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Switch } from '@/components/ui/switch';
 import { Badge } from '@/components/ui/badge';
 import { toast } from 'sonner';
-import { Loader2, X, AlertCircle } from 'lucide-react';
+import { Loader2, X } from 'lucide-react';
 
 interface FacebookPage {
   id: string;
@@ -290,75 +290,6 @@ export function CreateRuleDialog({ open, onOpenChange, onSuccess }: CreateRuleDi
           <div className="space-y-4">
             <h3 className="font-semibold text-sm">Time Settings</h3>
             
-            {/* Quick Presets */}
-            <div className="flex flex-wrap gap-2">
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                onClick={() => setFormData({ ...formData, timeIntervalDays: '', timeIntervalHours: '0', timeIntervalMinutes: '30' })}
-              >
-                30 min
-              </Button>
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                onClick={() => setFormData({ ...formData, timeIntervalDays: '', timeIntervalHours: '1', timeIntervalMinutes: '' })}
-              >
-                1 hour
-              </Button>
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                onClick={() => setFormData({ ...formData, timeIntervalDays: '', timeIntervalHours: '6', timeIntervalMinutes: '' })}
-              >
-                6 hours
-              </Button>
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                onClick={() => setFormData({ ...formData, timeIntervalDays: '', timeIntervalHours: '12', timeIntervalMinutes: '' })}
-              >
-                12 hours
-              </Button>
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                onClick={() => setFormData({ ...formData, timeIntervalDays: '', timeIntervalHours: '24', timeIntervalMinutes: '' })}
-              >
-                24 hours
-              </Button>
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                onClick={() => setFormData({ ...formData, timeIntervalDays: '1', timeIntervalHours: '', timeIntervalMinutes: '' })}
-              >
-                1 day
-              </Button>
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                onClick={() => setFormData({ ...formData, timeIntervalDays: '3', timeIntervalHours: '', timeIntervalMinutes: '' })}
-              >
-                3 days
-              </Button>
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                onClick={() => setFormData({ ...formData, timeIntervalDays: '7', timeIntervalHours: '', timeIntervalMinutes: '' })}
-              >
-                7 days
-              </Button>
-            </div>
-
-            {/* Custom Input */}
             <div className="grid grid-cols-3 gap-4">
               <div className="space-y-2">
                 <Label htmlFor="days">Days</Label>
@@ -368,10 +299,7 @@ export function CreateRuleDialog({ open, onOpenChange, onSuccess }: CreateRuleDi
                   min="0"
                   placeholder="0"
                   value={formData.timeIntervalDays}
-                  onChange={(e) => {
-                    const val = e.target.value;
-                    setFormData({ ...formData, timeIntervalDays: val === '' ? '' : Math.max(0, parseInt(val) || 0).toString() });
-                  }}
+                  onChange={(e) => setFormData({ ...formData, timeIntervalDays: e.target.value })}
                 />
               </div>
               <div className="space-y-2">
@@ -380,12 +308,9 @@ export function CreateRuleDialog({ open, onOpenChange, onSuccess }: CreateRuleDi
                   id="hours"
                   type="number"
                   min="0"
-                  placeholder="0"
+                  placeholder="24"
                   value={formData.timeIntervalHours}
-                  onChange={(e) => {
-                    const val = e.target.value;
-                    setFormData({ ...formData, timeIntervalHours: val === '' ? '' : Math.max(0, parseInt(val) || 0).toString() });
-                  }}
+                  onChange={(e) => setFormData({ ...formData, timeIntervalHours: e.target.value })}
                 />
               </div>
               <div className="space-y-2">
@@ -396,68 +321,13 @@ export function CreateRuleDialog({ open, onOpenChange, onSuccess }: CreateRuleDi
                   min="0"
                   placeholder="0"
                   value={formData.timeIntervalMinutes}
-                  onChange={(e) => {
-                    const val = e.target.value;
-                    setFormData({ ...formData, timeIntervalMinutes: val === '' ? '' : Math.max(0, parseInt(val) || 0).toString() });
-                  }}
+                  onChange={(e) => setFormData({ ...formData, timeIntervalMinutes: e.target.value })}
                 />
               </div>
             </div>
-
-            {/* Live Preview */}
-            {(() => {
-              const days = parseInt(formData.timeIntervalDays) || 0;
-              const hours = parseInt(formData.timeIntervalHours) || 0;
-              const minutes = parseInt(formData.timeIntervalMinutes) || 0;
-              const totalMs = days * 24 * 60 * 60 * 1000 + hours * 60 * 60 * 1000 + minutes * 60 * 1000;
-              
-              if (totalMs === 0) {
-                return (
-                  <p className="text-xs text-muted-foreground">
-                    ⚠️ Please set a time interval (use presets above or enter custom values)
-                  </p>
-                );
-              }
-
-              const totalHours = Math.floor(totalMs / (60 * 60 * 1000));
-              const totalMinutes = Math.floor((totalMs % (60 * 60 * 1000)) / (60 * 1000));
-              const totalDays = Math.floor(totalHours / 24);
-              const remainingHours = totalHours % 24;
-
-              let preview = '';
-              if (totalDays > 0) {
-                preview = `${totalDays} day${totalDays !== 1 ? 's' : ''}`;
-                if (remainingHours > 0) {
-                  preview += ` ${remainingHours} hour${remainingHours !== 1 ? 's' : ''}`;
-                }
-              } else if (totalHours > 0) {
-                preview = `${totalHours} hour${totalHours !== 1 ? 's' : ''}`;
-                if (totalMinutes > 0) {
-                  preview += ` ${totalMinutes} minute${totalMinutes !== 1 ? 's' : ''}`;
-                }
-              } else {
-                preview = `${totalMinutes} minute${totalMinutes !== 1 ? 's' : ''}`;
-              }
-
-              // Check if interval is very short (less than 1 hour)
-              const intervalInMinutes = totalMs / (60 * 1000);
-              const isShortInterval = intervalInMinutes < 60;
-              
-              return (
-                <div className="p-3 bg-muted/50 rounded-lg border border-border/50">
-                  <p className="text-sm font-medium">⏰ Total Duration: {preview}</p>
-                  <p className="text-xs text-muted-foreground mt-1">
-                    Messages will be sent after contacts have been inactive for this duration
-                  </p>
-                  {isShortInterval && (
-                    <p className="text-xs text-amber-600 dark:text-amber-400 mt-2 flex items-center gap-1">
-                      <AlertCircle className="w-3 h-3" />
-                      Short intervals will restart after each automated send. Contacts must wait for the full interval before the next message.
-                    </p>
-                  )}
-                </div>
-              );
-            })()}
+            <p className="text-xs text-muted-foreground">
+              Send follow-up after contact has been inactive for this duration
+            </p>
           </div>
 
           {/* Targeting */}

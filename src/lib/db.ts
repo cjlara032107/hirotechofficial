@@ -28,34 +28,69 @@ declare global {
 const prismaClient = globalThis.prismaGlobal ?? prismaClientSingleton();
 
 // Ensure Prisma is connected before use (critical for serverless environments)
+// In serverless, connections can be lost between requests, so we need to reconnect
 let connectionPromise: Promise<void> | undefined;
+let connectionState: 'idle' | 'connecting' | 'connected' = 'idle';
 
 async function ensurePrismaConnected() {
-  if (!connectionPromise) {
-    connectionPromise = prismaClient.$connect().catch((error) => {
-      console.error('[Prisma] Connection error:', error);
-      connectionPromise = undefined; // Reset on error
+  // If already connected, return immediately
+  if (connectionState === 'connected') {
+    return;
+  }
+
+  // If connection is in progress, wait for it
+  if (connectionState === 'connecting' && connectionPromise) {
+    try {
+      await connectionPromise;
+      return;
+    } catch (error) {
+      // Connection failed, reset and retry
+      connectionState = 'idle';
+      connectionPromise = undefined;
+    }
+  }
+
+  // Start new connection
+  connectionState = 'connecting';
+  connectionPromise = prismaClient.$connect()
+    .then(() => {
+      connectionState = 'connected';
+      console.log('[Prisma] ✅ Connected to database');
+    })
+    .catch((error) => {
+      console.error('[Prisma] ❌ Connection error:', error);
+      connectionState = 'idle';
+      connectionPromise = undefined;
       throw error;
     });
-  }
+
   return connectionPromise;
 }
 
-// Wrap Prisma client to ensure connection before operations
-export const prisma = new Proxy(prismaClient, {
-  get(target, prop) {
-    // For methods that need connection, ensure it's connected first
-    if (typeof prop === 'string' && !prop.startsWith('$') && typeof target[prop as keyof typeof target] === 'function') {
-      return async (...args: unknown[]) => {
-        await ensurePrismaConnected();
-        const method = target[prop as keyof typeof target] as (...args: unknown[]) => unknown;
-        return method.apply(target, args);
-      };
-    }
-    // For $connect, $disconnect, etc., return directly
-    return target[prop as keyof typeof target];
-  },
-});
+// Helper to ensure connection before queries (call at start of API routes)
+export async function connectPrisma() {
+  try {
+    await ensurePrismaConnected();
+  } catch (error) {
+    console.error('[Prisma] Failed to connect:', error);
+    // Reset state to allow retry
+    connectionState = 'idle';
+    connectionPromise = undefined;
+    throw error;
+  }
+}
+
+// Initialize connection on module load (for serverless warm starts)
+if (typeof window === 'undefined') {
+  // Only run on server side
+  ensurePrismaConnected().catch(() => {
+    // Silently fail on initial connection - will retry on first query
+  });
+}
+
+// Export prisma client - Prisma handles connections automatically
+// but we ensure connection is established before first use
+export const prisma = prismaClient;
 
 if (process.env.NODE_ENV !== 'production') {
   globalThis.prismaGlobal = prismaClient;

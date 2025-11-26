@@ -34,7 +34,10 @@ export async function POST(request: NextRequest) {
     }
 
     // CRITICAL: Log exactly what contact IDs we received
-    console.log(`[Bulk API] Received ${action} action for ${contactIds.length} contact(s):`, contactIds);
+    console.log(`[Bulk API] 🔍 DEBUG: Received ${action} action`);
+    console.log(`[Bulk API] Contact IDs count: ${contactIds.length}`);
+    console.log(`[Bulk API] Contact IDs:`, contactIds);
+    console.log(`[Bulk API] Full request body:`, JSON.stringify({ action, contactIds, data }, null, 2));
 
     // Verify all contacts belong to user's organization
     let contacts;

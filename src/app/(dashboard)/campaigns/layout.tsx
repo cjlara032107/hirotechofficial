@@ -1,5 +1,6 @@
 import { getPageAccessStatus } from '@/lib/developer/get-page-access';
 import UnderDevelopmentPage from '../under-development/page';
+import { auth } from '@/auth';
 import { redirect } from 'next/navigation';
 
 export default async function CampaignsLayout({
@@ -7,7 +8,12 @@ export default async function CampaignsLayout({
 }: {
   children: React.ReactNode;
 }) {
-  const pageAccess = await getPageAccessStatus('/campaigns');
+  const session = await auth();
+  if (!session?.user?.id) {
+    redirect('/login');
+  }
+
+  const pageAccess = await getPageAccessStatus(session.user.id, '/campaigns');
   
   if (pageAccess === false) {
     return <UnderDevelopmentPage searchParams={Promise.resolve({ page: '/campaigns' })} />;
@@ -15,4 +21,6 @@ export default async function CampaignsLayout({
 
   return <>{children}</>;
 }
+
+
 

@@ -84,9 +84,9 @@ export async function analyzeWithFallback(
 
     retryCount++;
     
-    // Exponential backoff: 1s, 2s, 4s
+    // Reduced backoff: 500ms, 1s, 2s (faster retries)
     if (retryCount < maxRetries) {
-      const delayMs = Math.pow(2, retryCount) * 1000;
+      const delayMs = Math.min(Math.pow(2, retryCount) * 500, 2000); // Max 2s delay
       console.log(`[Enhanced Analysis] Retrying in ${delayMs}ms...`);
       await new Promise(resolve => setTimeout(resolve, delayMs));
     }
@@ -191,8 +191,11 @@ export async function batchAnalyzeWithFallback(
         console.log(`[Batch Analysis] Contact ${contactId}: AI success (score: ${result.analysis.leadScore})`);
       }
 
-      // Rate limiting delay
-      await new Promise(resolve => setTimeout(resolve, delayBetweenMs));
+      // Reduced rate limiting delay for faster processing
+      // Only delay if we have multiple API keys to avoid rate limits
+      if (delayBetweenMs > 0) {
+        await new Promise(resolve => setTimeout(resolve, Math.min(delayBetweenMs, 500))); // Max 500ms
+      }
 
     } catch (error) {
       console.error(`[Batch Analysis] Failed to analyze contact ${contactId}:`, error);

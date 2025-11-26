@@ -195,3 +195,7 @@ Then update environment variables to use OpenRouter API keys instead.
 
 **Status:** ✅ Ready to use NVIDIA API on `jad` branch!
 
+
+
+
+

@@ -158,3 +158,7 @@ The system will automatically use it for all AI features.
 
 **Status:** ✅ Ready to use! Just add your NVIDIA API key through the UI.
 
+
+
+
+

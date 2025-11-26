@@ -18,6 +18,12 @@ export async function startBackgroundAnalysis(
   userId: string
 ): Promise<BackgroundAnalysisResult> {
   try {
+    // CRITICAL: Log exactly what we received
+    console.log(`[Background Analysis] 🔍 DEBUG: startBackgroundAnalysis called`);
+    console.log(`[Background Analysis] Received ${contactIds.length} contact ID(s):`, contactIds);
+    console.log(`[Background Analysis] Organization ID: ${organizationId}`);
+    console.log(`[Background Analysis] User ID: ${userId}`);
+    
     // CRITICAL: Ensure database connection is established (required for Vercel serverless)
     await connectPrisma();
     
@@ -109,6 +115,10 @@ async function executeBackgroundAnalysis(
   organizationId: string
 ): Promise<void> {
   try {
+    // CRITICAL: Log exactly what we're processing
+    console.log(`[Background Analysis ${jobId}] 🔍 DEBUG: executeBackgroundAnalysis called`);
+    console.log(`[Background Analysis ${jobId}] Processing ${contactIds.length} contact ID(s):`, contactIds);
+    
     // CRITICAL: Ensure database connection is established (required for Vercel serverless)
     await connectPrisma();
     

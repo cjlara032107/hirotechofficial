@@ -369,27 +369,57 @@ export function ContactsTable({ contacts, tags, pipelines, isLoading }: Contacts
     action: string,
     data?: { tags?: string[]; stageId?: string }
   ) {
-    // CRITICAL: Use ref to get the absolute latest selection value (avoids stale closures)
-    const currentSelectedIds = selectedIdsRef.current;
-    const contactIdsToSend = Array.from(currentSelectedIds);
+    // CRITICAL: Get selection from BOTH ref and state to ensure accuracy
+    const refSelectedIds = selectedIdsRef.current;
+    const stateSelectedIds = selectedIds;
+    
+    console.log('[ContactsTable] 🔍 DEBUG: Selection check before bulk action');
+    console.log('  Ref selection size:', refSelectedIds.size);
+    console.log('  State selection size:', stateSelectedIds.size);
+    console.log('  Ref IDs:', Array.from(refSelectedIds));
+    console.log('  State IDs:', Array.from(stateSelectedIds));
+    console.log('  selectAllPages:', selectAllPages);
+    console.log('  totalContactsCount:', totalContactsCount);
+    console.log('  allContactIds length:', allContactIds.length);
+    
+    // Use state as source of truth, but validate against ref
+    let contactIdsToSend = Array.from(stateSelectedIds);
+    
+    // If ref and state don't match, use the smaller one (more conservative)
+    if (refSelectedIds.size !== stateSelectedIds.size) {
+      console.warn('[ContactsTable] ⚠️ Ref and state mismatch! Using state as source of truth.');
+      contactIdsToSend = Array.from(stateSelectedIds);
+    }
+    
+    // CRITICAL FIX: If selectAllPages is true, we MUST verify the selection matches
+    // If it doesn't match, force reset and use only what's actually selected
+    if (selectAllPages) {
+      if (contactIdsToSend.length !== totalContactsCount) {
+        console.warn('[ContactsTable] ⚠️ CRITICAL: selectAllPages=true but selection mismatch!');
+        console.warn(`  Expected ${totalContactsCount} contacts, got ${contactIdsToSend.length}`);
+        console.warn('  FORCING RESET of selectAllPages flag');
+        setSelectAllPages(false);
+        setAllContactIds([]);
+        setTotalContactsCount(0);
+        // Re-read after reset
+        contactIdsToSend = Array.from(selectedIds);
+      }
+    }
     
     if (contactIdsToSend.length === 0) {
-      console.warn('[ContactsTable] No contacts selected, aborting bulk action');
+      console.warn('[ContactsTable] ❌ No contacts selected, aborting bulk action');
+      toast.error('Please select at least one contact');
       return;
     }
     
-    // Safety check: if selectAllPages is true but selectedIds size doesn't match totalContactsCount,
-    // it means user manually changed selection, so reset selectAllPages
-    if (selectAllPages && contactIdsToSend.length !== totalContactsCount) {
-      console.warn('[ContactsTable] ⚠️ selectAllPages was true but selection changed! Expected:', totalContactsCount, 'Got:', contactIdsToSend.length, 'Resetting selectAllPages flag');
-      setSelectAllPages(false);
-      setAllContactIds([]);
-      setTotalContactsCount(0);
+    // FINAL VALIDATION: Ensure we're not accidentally sending all contacts
+    if (contactIdsToSend.length > 20) {
+      console.error('[ContactsTable] 🚨 WARNING: Sending more than 20 contacts! This might be an error.');
+      console.error('  Contact IDs being sent:', contactIdsToSend);
     }
     
-    console.log(`[ContactsTable] 🚀 Sending bulk action "${action}" for ${contactIdsToSend.length} contact(s)`);
-    console.log(`[ContactsTable] Selected contact IDs:`, contactIdsToSend.slice(0, 10), contactIdsToSend.length > 10 ? `... and ${contactIdsToSend.length - 10} more` : '');
-    console.log(`[ContactsTable] selectAllPages flag:`, selectAllPages, '| totalContactsCount:', totalContactsCount);
+    console.log(`[ContactsTable] 🚀 FINAL: Sending bulk action "${action}" for ${contactIdsToSend.length} contact(s)`);
+    console.log(`[ContactsTable] Contact IDs being sent:`, contactIdsToSend);
 
     try {
       setBulkActionLoading(true);

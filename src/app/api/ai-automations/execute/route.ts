@@ -17,8 +17,17 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const body = await request.json();
-    const { ruleId, bypassCooldown } = body;
+    let body;
+    try {
+      body = await request.json();
+    } catch (error) {
+      return NextResponse.json(
+        { error: 'Invalid JSON in request body' },
+        { status: 400 }
+      );
+    }
+    
+    const { ruleId } = body;
 
     if (!ruleId) {
       return NextResponse.json(
@@ -45,12 +54,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    console.log(`[AI Automations] Manual execution of rule: ${rule.name} (ID: ${rule.id})`);
-    
-    // Warn if rule is disabled (but allow manual execution for testing)
-    if (!rule.enabled) {
-      console.log(`[AI Automations] Warning: Rule "${rule.name}" is disabled, but allowing manual execution`);
-    }
+    console.log(`[AI Automations] Manual execution of rule: ${rule.name}`);
 
     // Get user's organization
     const user = await prisma.user.findUnique({
@@ -78,22 +82,9 @@ export async function POST(request: NextRequest) {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const whereClause: Record<string, any> = {
       organizationId: user.organizationId,
-      messengerPSID: {
-        not: null,
+      lastInteraction: {
+        lte: thresholdDate,
       },
-      OR: [
-        {
-          lastInteraction: {
-            lte: thresholdDate,
-          },
-        },
-        {
-          lastInteraction: null,
-          createdAt: {
-            lte: thresholdDate,
-          },
-        },
-      ],
     };
 
     // Filter by Facebook page if specified
@@ -109,10 +100,29 @@ export async function POST(request: NextRequest) {
     }
 
     // Get eligible contacts
+    // Use select to avoid issues with new columns that may not exist yet
     let eligibleContacts = await prisma.contact.findMany({
       where: whereClause,
-      include: {
-        facebookPage: true,
+      select: {
+        id: true,
+        firstName: true,
+        lastName: true,
+        messengerPSID: true,
+        instagramSID: true,
+        tags: true,
+        lastInteraction: true,
+        aiContext: true,
+        facebookPageId: true,
+        organizationId: true,
+        facebookPage: {
+          select: {
+            id: true,
+            pageId: true,
+            pageName: true,
+            pageAccessToken: true,
+            instagramAccountId: true,
+          },
+        },
         conversations: {
           where: {
             platform: 'MESSENGER',
@@ -121,13 +131,15 @@ export async function POST(request: NextRequest) {
             lastMessageAt: 'desc',
           },
           take: 1,
+          select: {
+            id: true,
+            lastMessageAt: true,
+            platform: true,
+          },
         },
       },
       take: 50, // Limit for manual testing
     });
-
-    const totalBeforeFilters = eligibleContacts.length;
-    console.log(`[AI Automations] Found ${totalBeforeFilters} contacts matching basic criteria`);
 
     // Exclude contacts with excluded tags
     if (rule.excludeTags.length > 0) {
@@ -149,71 +161,64 @@ export async function POST(request: NextRequest) {
     const stoppedIds = stoppedContactIds.map(s => s.contactId);
     eligibleContacts = eligibleContacts.filter(c => !stoppedIds.includes(c.id));
 
-    console.log(`[AI Automations] Found ${eligibleContacts.length} eligible contacts after filters`);
+    console.log(`[AI Automations] Found ${eligibleContacts.length} eligible contacts`);
 
-    if (eligibleContacts.length === 0) {
-      return NextResponse.json({
-        success: true,
-        sent: 0,
-        failed: 0,
-        total: 0,
-        message: 'No eligible contacts found. Check: time interval, tags, or stopped contacts.',
-        details: {
-          totalBeforeFilters,
-          stoppedCount: stoppedIds.length,
+    // Check for contacts that were just processed recently (prevent duplicate manual triggers)
+    // Use the rule's time interval as the cooldown, with a minimum of 2 minutes
+    const cooldownMs = Math.max(thresholdMs, 2 * 60 * 1000); // At least 2 minutes
+    const recentExecutionCutoff = new Date(now.getTime() - cooldownMs);
+    const recentlyProcessed = await prisma.aIAutomationExecution.findMany({
+      where: {
+        ruleId: rule.id,
+        contactId: { in: eligibleContacts.map(c => c.id) },
+        status: 'sent',
+        executedAt: {
+          gte: recentExecutionCutoff,
         },
-      });
+      },
+      select: {
+        contactId: true,
+        executedAt: true,
+      },
+    });
+
+    const recentlyProcessedIds = new Set(recentlyProcessed.map(e => e.contactId));
+    const contactsToProcess = eligibleContacts.filter(c => !recentlyProcessedIds.has(c.id));
+
+    if (recentlyProcessedIds.size > 0) {
+      const cooldownMinutes = Math.ceil(cooldownMs / (60 * 1000));
+      console.log(`[AI Automations] Skipping ${recentlyProcessedIds.size} contacts that were processed in the last ${cooldownMinutes} minutes`);
     }
+
+    console.log(`[AI Automations] Processing ${contactsToProcess.length} contacts (${eligibleContacts.length - contactsToProcess.length} skipped due to recent processing)`);
 
     let sent = 0;
     let failed = 0;
-    const failureReasons: Array<{ contactName: string; reason: string }> = [];
 
     // Process each eligible contact
-    for (const contact of eligibleContacts) {
+    for (const contact of contactsToProcess) {
       try {
-        console.log(`[AI Automations] Processing contact: ${contact.firstName} (${contact.id})`);
-
         // ⭐ CONFLICT PREVENTION: Check if contact is eligible
-        // For manual testing, we can bypass the "recently contacted" check
+        // Skip recent contact check and active chat check for manual execution (allow immediate retry)
         const eligibilityCheck = await isContactEligibleForAutomation(
           contact.id,
           rule.excludeTags,
-          bypassCooldown // Pass bypass flag to skip recent contact check
+          { 
+            skipRecentContactCheck: true,
+            skipActiveChatCheck: true // Skip active chat session check for manual execution
+          }
         );
 
         if (!eligibilityCheck.eligible) {
-          const contactName = `${contact.firstName} ${contact.lastName || ''}`.trim();
-          const reason = eligibilityCheck.reason || 'Unknown eligibility issue';
-          console.log(`[AI Automations] Contact ${contactName} (${contact.id}) not eligible: ${reason}`);
-          failureReasons.push({ contactName, reason });
-          failed++;
+          console.log(`[AI Automations] Contact ${contact.id} not eligible: ${eligibilityCheck.reason}`);
           continue;
         }
 
-        // Get or create conversation
-        let conversation = contact.conversations[0];
+        const conversation = contact.conversations[0];
         if (!conversation) {
-          // Create conversation if it doesn't exist (for contacts with messengerPSID)
-          if (contact.messengerPSID && contact.facebookPageId) {
-            console.log(`[AI Automations] Creating conversation for contact: ${contact.firstName} (${contact.id})`);
-            conversation = await prisma.conversation.create({
-              data: {
-                contactId: contact.id,
-                facebookPageId: contact.facebookPageId,
-                platform: 'MESSENGER',
-                status: 'OPEN',
-                lastMessageAt: new Date(),
-              },
-            });
-            console.log(`[AI Automations] Created conversation: ${conversation.id}`);
-          } else {
-            const contactName = `${contact.firstName} ${contact.lastName || ''}`.trim();
-            console.log(`[AI Automations] No conversation found and cannot create (missing messengerPSID or facebookPageId) for contact: ${contactName} (${contact.id})`);
-            failureReasons.push({ contactName, reason: 'No conversation found and cannot create (missing messengerPSID or facebookPageId)' });
-            failed++;
-            continue;
-          }
+          console.log(`[AI Automations] No conversation found for contact: ${contact.id}`);
+          failed++;
+          continue;
         }
 
         // Get conversation history
@@ -227,19 +232,18 @@ export async function POST(request: NextRequest) {
           take: 20,
         });
 
-        // If no messages, we can still send (new conversation), but AI won't have history
         if (messages.length === 0) {
-          console.log(`[AI Automations] No messages in conversation: ${conversation.id} - will send without history`);
+          console.log(`[AI Automations] No messages in conversation: ${conversation.id}`);
+          failed++;
+          continue;
         }
 
-        // Format messages for AI (or use empty array if no history)
-        const conversationHistory = messages.length > 0
-          ? messages.reverse().map(msg => ({
-              from: msg.isFromBusiness ? 'Business' : contact.firstName || 'Customer',
-              text: msg.content,
-              timestamp: msg.createdAt,
-            }))
-          : []; // Empty history for new conversations
+        // Format messages for AI
+        const conversationHistory = messages.reverse().map(msg => ({
+          from: msg.isFromBusiness ? 'Business' : contact.firstName || 'Customer',
+          text: msg.content,
+          timestamp: msg.createdAt,
+        }));
 
         // Generate AI message
         const aiResult = await generateFollowUpMessage(
@@ -266,32 +270,6 @@ export async function POST(request: NextRequest) {
               aiPromptUsed: rule.customPrompt,
               status: 'failed',
               errorMessage: 'Failed to generate AI message',
-              executedAt: new Date(),
-            },
-          });
-          
-          continue;
-        }
-
-        // Verify Facebook page has access token
-        if (!contact.facebookPage?.pageAccessToken) {
-          console.error(`[AI Automations] No access token for Facebook page: ${contact.facebookPage?.id}`);
-          failed++;
-          
-          await prisma.aIAutomationExecution.create({
-            data: {
-              id: `exec_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
-              ruleId: rule.id,
-              userId: session.user.id,
-              contactId: contact.id,
-              conversationId: conversation.id,
-              recipientPSID: contact.messengerPSID || 'unknown',
-              recipientName: `${contact.firstName} ${contact.lastName || ''}`.trim(),
-              aiPromptUsed: rule.customPrompt,
-              generatedMessage: aiResult.message,
-              aiReasoning: aiResult.reasoning,
-              status: 'failed',
-              errorMessage: 'Facebook page access token missing',
               executedAt: new Date(),
             },
           });
@@ -326,17 +304,6 @@ export async function POST(request: NextRequest) {
               facebookMessageId: result.data?.message_id,
               executedAt: new Date(),
             },
-          });
-
-          // Update contact timestamps so interval is respected
-          await prisma.contact.update({
-            where: { id: contact.id },
-            data: { lastInteraction: new Date() },
-          });
-
-          await prisma.conversation.update({
-            where: { id: conversation.id },
-            data: { lastMessageAt: new Date(), status: 'OPEN' },
           });
 
           // Save message to database
@@ -387,10 +354,12 @@ export async function POST(request: NextRequest) {
     }
 
     // Update rule statistics
+    // Set lastExecutedAt to current time so cron respects the time interval
+    // This ensures cron will wait for the full time interval before running again
     await prisma.aIAutomationRule.update({
       where: { id: rule.id },
       data: {
-        lastExecutedAt: now,
+        lastExecutedAt: now, // Set to current time so cron respects the interval
         executionCount: { increment: 1 },
         successCount: { increment: sent },
         failureCount: { increment: failed },
@@ -398,39 +367,24 @@ export async function POST(request: NextRequest) {
       },
     });
 
-    console.log(`[AI Automations] Execution complete: ${sent} sent, ${failed} failed`);
-
-    // Group failure reasons for better reporting
-    const reasonCounts = new Map<string, number>();
-    failureReasons.forEach(({ reason }) => {
-      reasonCounts.set(reason, (reasonCounts.get(reason) || 0) + 1);
-    });
-
-    const reasonSummary = Array.from(reasonCounts.entries())
-      .map(([reason, count]) => `${count} contact(s): ${reason}`)
-      .join('; ');
+    const skippedCount = eligibleContacts.length - contactsToProcess.length;
+    const cooldownMinutes = Math.ceil(cooldownMs / (60 * 1000));
+    console.log(`[AI Automations] Manual execution complete: ${sent} sent, ${failed} failed, ${skippedCount} skipped. Next cron execution will respect ${cooldownMinutes}-minute time interval.`);
 
     return NextResponse.json({
       success: true,
       sent,
       failed,
-      total: eligibleContacts.length,
-      failureReasons: failureReasons.length > 0 ? failureReasons : undefined,
-      reasonSummary: reasonSummary || undefined,
-      message: sent > 0 
-        ? `Successfully sent ${sent} message(s). ${failed > 0 ? `${failed} failed.` : ''}`
-        : failed > 0
-        ? `No messages sent. ${failed} contact(s) failed: ${reasonSummary || 'eligibility checks'}`
-        : 'No eligible contacts found.',
+      total: contactsToProcess.length,
+      skipped: skippedCount,
+      message: skippedCount > 0 
+        ? `${skippedCount} contacts were skipped because they were processed in the last ${cooldownMinutes} minutes. Please wait before triggering again.`
+        : undefined,
     });
   } catch (error) {
     console.error('[AI Automations] Execute error:', error);
-    const errorMessage = error instanceof Error ? error.message : 'Unknown error occurred';
     return NextResponse.json(
-      { 
-        error: 'Failed to execute automation rule',
-        details: errorMessage,
-      },
+      { error: 'Failed to execute automation rule' },
       { status: 500 }
     );
   }

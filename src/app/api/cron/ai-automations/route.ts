@@ -1,36 +1,21 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { prisma } from '@/lib/db';
+import { prisma, connectPrisma } from '@/lib/db';
 import { generateFollowUpMessage } from '@/lib/ai/google-ai-service';
 import { FacebookClient } from '@/lib/facebook/client';
 import { isContactEligibleForAutomation } from '@/lib/ai/conflict-prevention';
 
-export const dynamic = 'force-dynamic';
-export const maxDuration = 300; // 5 minutes max execution time
-
 // Cron job that runs every minute
 export async function GET(request: NextRequest) {
   try {
-    // Authentication: Vercel cron jobs are automatically authenticated
-    // Only require CRON_SECRET for external/manual calls
+    // Verify cron secret if set (security for production)
     const authHeader = request.headers.get('authorization');
-    const cronSecret = process.env.CRON_SECRET;
-    
-    // Log request for debugging
-    console.log('[AI Automations Cron] Request received:', {
-      hasAuth: !!authHeader,
-      hasCronSecret: !!cronSecret,
-      userAgent: request.headers.get('user-agent')?.substring(0, 50),
-    });
-    
-    // If CRON_SECRET is set, require it for non-Vercel requests
-    // Vercel cron jobs don't send authorization headers, so we allow those
-    if (cronSecret && authHeader && authHeader !== `Bearer ${cronSecret}`) {
-      console.log('[AI Automations Cron] Unauthorized: Invalid CRON_SECRET');
+    if (process.env.CRON_SECRET && authHeader !== `Bearer ${process.env.CRON_SECRET}`) {
+      console.log('[AI Automations Cron] Unauthorized request');
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
-    // If no auth header and CRON_SECRET is set, assume it's Vercel cron (allow it)
-    // If auth header matches CRON_SECRET, allow it
-    // If no CRON_SECRET is set, allow all requests
+
+    // Ensure Prisma is connected before queries
+    await connectPrisma();
 
     console.log('[AI Automations Cron] Starting execution...');
     const startTime = Date.now();
@@ -117,27 +102,35 @@ export async function GET(request: NextRequest) {
           (rule.timeIntervalHours || 0) * 60 * 60 * 1000 +
           (rule.timeIntervalMinutes || 0) * 60 * 1000;
 
+        // Check if rule was executed recently (respect user-set time interval)
+        // 24/7 mode: respects user-set time interval (no 1-hour minimum)
+        // Regular mode: respects user-set time interval
+        if (rule.lastExecutedAt && thresholdMs > 0) {
+          const timeSinceLastExecution = now.getTime() - rule.lastExecutedAt.getTime();
+          
+          if (timeSinceLastExecution < thresholdMs) {
+            const remainingTime = thresholdMs - timeSinceLastExecution;
+            const remainingMinutes = Math.ceil(remainingTime / (60 * 1000));
+            if (rule.run24_7) {
+              console.log(`[AI Automations Cron] Rule "${rule.name}" (24/7 mode) executed recently. Waiting ${remainingMinutes} more minutes before next execution (time interval: ${Math.round(thresholdMs / (60 * 1000))} min).`);
+            } else {
+              console.log(`[AI Automations Cron] Rule "${rule.name}" executed recently. Waiting ${remainingMinutes} more minutes before next execution.`);
+            }
+            continue;
+          }
+        }
+
         const thresholdDate = new Date(now.getTime() - thresholdMs);
 
         // Build where clause for finding eligible contacts
         const whereClause: any = {
           organizationId: rule.User.organizationId,
+          lastInteraction: {
+            lte: thresholdDate,
+          },
           messengerPSID: {
             not: null,
           },
-          OR: [
-            {
-              lastInteraction: {
-                lte: thresholdDate,
-              },
-            },
-            {
-              lastInteraction: null,
-              createdAt: {
-                lte: thresholdDate,
-              },
-            },
-          ],
         };
 
         // Filter by Facebook page if specified
@@ -152,36 +145,13 @@ export async function GET(request: NextRequest) {
           };
         }
 
-        // Get eligible contacts
-        let eligibleContacts = await prisma.contact.findMany({
-          where: whereClause,
-          include: {
-            facebookPage: true,
-            conversations: {
-              where: {
-                platform: 'MESSENGER',
-              },
-              orderBy: {
-                lastMessageAt: 'desc',
-              },
-              take: 1,
-            },
-          },
-          take: remainingQuota, // Respect daily limit
-        });
-
-        const beforeTagFilter = eligibleContacts.length;
-        console.log(`[AI Automations Cron] Rule "${rule.name}" - Found ${beforeTagFilter} contacts matching time interval`);
-
-        // Exclude contacts with excluded tags
-        if (rule.excludeTags.length > 0) {
-          eligibleContacts = eligibleContacts.filter(contact => {
-            return !rule.excludeTags.some(tag => contact.tags.includes(tag));
-          });
-          console.log(`[AI Automations Cron] After exclude tags filter: ${eligibleContacts.length} contacts`);
-        }
-
+        // Pagination: Process contacts in batches to handle large numbers efficiently
+        // Batch size: Process 20 contacts per cron run (adjustable)
+        const BATCH_SIZE = 20;
+        const batchSize = Math.min(BATCH_SIZE, remainingQuota);
+        
         // Filter out contacts that have been stopped for this rule
+        // Contacts are stopped if: stopOnReply is enabled and they replied, OR user removed the tag
         const stoppedContactIds = await prisma.aIAutomationStop.findMany({
           where: {
             ruleId: rule.id,
@@ -192,31 +162,304 @@ export async function GET(request: NextRequest) {
         });
 
         const stoppedIds = stoppedContactIds.map(s => s.contactId);
-        const beforeStoppedFilter = eligibleContacts.length;
-        eligibleContacts = eligibleContacts.filter(c => !stoppedIds.includes(c.id));
-        console.log(`[AI Automations Cron] After stopped filter: ${eligibleContacts.length} contacts (${stoppedIds.length} stopped)`);
+
+        // Only exclude stopped contacts from the query
+        // We will check time interval per-contact later to allow re-processing after interval
+        if (stoppedIds.length > 0) {
+          whereClause.id = {
+            notIn: stoppedIds,
+          };
+        }
+
+        // Debug: Check total contacts matching basic criteria
+        const totalMatchingContacts = await prisma.contact.count({
+          where: {
+            organizationId: rule.User.organizationId,
+            messengerPSID: { not: null },
+            ...(rule.facebookPageId && { facebookPageId: rule.facebookPageId }),
+            ...(rule.includeTags.length > 0 && {
+              tags: { hasSome: rule.includeTags },
+            }),
+          },
+        });
+        console.log(`[AI Automations Cron] Rule "${rule.name}" - Total contacts matching basic criteria: ${totalMatchingContacts}`);
+        
+        // Additional debug: Check contacts matching lastInteraction criteria
+        const contactsMatchingTimeThreshold = await prisma.contact.count({
+          where: {
+            organizationId: rule.User.organizationId,
+            messengerPSID: { not: null },
+            lastInteraction: { lte: thresholdDate },
+            ...(rule.facebookPageId && { facebookPageId: rule.facebookPageId }),
+          },
+        });
+        console.log(`[AI Automations Cron] Rule "${rule.name}" - Contacts matching time threshold (lastInteraction <= ${thresholdDate.toISOString()}): ${contactsMatchingTimeThreshold}`);
+
+        // Get total count of eligible contacts (after all filters except per-contact time interval check)
+        const totalEligibleCount = await prisma.contact.count({
+          where: whereClause,
+        });
+
+        console.log(`[AI Automations Cron] Rule "${rule.name}" - Found ${totalEligibleCount} potentially eligible contacts (excluding ${stoppedIds.length} stopped, time interval check will be done per-contact)`);
+
+        // Get eligible contacts with pagination
+        // Use select to avoid issues with new columns that may not exist yet
+        let eligibleContacts = await prisma.contact.findMany({
+          where: whereClause,
+          select: {
+            id: true,
+            firstName: true,
+            lastName: true,
+            messengerPSID: true,
+            instagramSID: true,
+            tags: true,
+            lastInteraction: true,
+            aiContext: true,
+            facebookPageId: true,
+            organizationId: true,
+            facebookPage: {
+              select: {
+                id: true,
+                pageId: true,
+                pageName: true,
+                pageAccessToken: true,
+                instagramAccountId: true,
+              },
+            },
+            conversations: {
+              where: {
+                platform: 'MESSENGER',
+              },
+              orderBy: {
+                lastMessageAt: 'desc',
+              },
+              take: 1,
+              select: {
+                id: true,
+                lastMessageAt: true,
+                platform: true,
+              },
+            },
+          },
+          take: batchSize, // Process in batches
+          orderBy: {
+            lastInteraction: 'asc', // Process oldest first
+          },
+        });
+
+        // Exclude contacts with excluded tags (client-side filter as Prisma doesn't support complex tag filtering)
+        if (rule.excludeTags.length > 0) {
+          eligibleContacts = eligibleContacts.filter(contact => {
+            return !rule.excludeTags.some(tag => contact.tags.includes(tag));
+          });
+        }
 
         if (eligibleContacts.length === 0) {
-          console.log(`[AI Automations Cron] Rule "${rule.name}" - No eligible contacts after all filters`);
-          console.log(`[AI Automations Cron] Filter summary: ${beforeTagFilter} initial → ${beforeStoppedFilter} after tags → 0 after stopped`);
+          console.log(`[AI Automations Cron] Rule "${rule.name}" - No eligible contacts in this batch`);
           continue;
         }
 
-        console.log(`[AI Automations Cron] Rule "${rule.name}" - Processing ${eligibleContacts.length} contacts`);
-        console.log(`[AI Automations Cron] Eligible contacts:`, eligibleContacts.map(c => `${c.firstName} (${c.id})`));
+        console.log(`[AI Automations Cron] Rule "${rule.name}" - Processing batch of ${eligibleContacts.length} contacts (${totalEligibleCount} total eligible)`);
 
         let ruleSent = 0;
         let ruleFailed = 0;
 
+        // Check for contacts that were just processed recently (prevent race conditions with manual triggers)
+        // Use the rule's time interval as the cooldown, with a minimum of 2 minutes
+        const cooldownMs = Math.max(thresholdMs, 2 * 60 * 1000); // At least 2 minutes
+        const recentExecutionCutoff = new Date(now.getTime() - cooldownMs);
+        const recentlyProcessedContacts = await prisma.aIAutomationExecution.findMany({
+          where: {
+            ruleId: rule.id,
+            contactId: { in: eligibleContacts.map(c => c.id) },
+            status: 'sent',
+            executedAt: {
+              gte: recentExecutionCutoff,
+            },
+          },
+          select: {
+            contactId: true,
+          },
+        });
+
+        const recentlyProcessedContactIds = new Set(recentlyProcessedContacts.map(e => e.contactId));
+        const contactsToProcess = eligibleContacts.filter(c => !recentlyProcessedContactIds.has(c.id));
+
+        if (recentlyProcessedContactIds.size > 0) {
+          const cooldownMinutes = Math.ceil(cooldownMs / (60 * 1000));
+          console.log(`[AI Automations Cron] Rule "${rule.name}" - Skipping ${recentlyProcessedContactIds.size} contacts that were processed in the last ${cooldownMinutes} minutes`);
+        }
+
         // Process each eligible contact
-        for (const contact of eligibleContacts) {
+        for (const contact of contactsToProcess) {
           try {
             console.log(`[AI Automations Cron] Processing contact: ${contact.firstName} (${contact.id})`);
             
+            // ⭐ SAFETY CHECK: Verify contact is not stopped for this rule
+            // This is a double-check in case the initial filter missed something
+            const isStopped = await prisma.aIAutomationStop.findUnique({
+              where: {
+                ruleId_contactId: {
+                  ruleId: rule.id,
+                  contactId: contact.id,
+                },
+              },
+            });
+
+            if (isStopped) {
+              console.log(`[AI Automations Cron] Contact ${contact.id} is stopped for rule "${rule.name}" (reason: ${isStopped.stoppedReason}) - skipping`);
+              continue;
+            }
+
+            // ⭐ STOP-ON-REPLY: Check if THIS SPECIFIC CONTACT has replied AFTER we sent them automation messages
+            // This stops automation ONLY for the contact who replied, not for other contacts
+            // This is a backup check in case webhook didn't fire
+            // Only check if rule has stopOnReply enabled
+            console.log(`[AI Automations Cron] Checking stopOnReply for contact ${contact.id} - rule "${rule.name}" has stopOnReply: ${rule.stopOnReply}`);
+            if (rule.stopOnReply) {
+              console.log(`[AI Automations Cron] Rule "${rule.name}" has stopOnReply enabled - checking if contact ${contact.id} replied`);
+              // Get the last execution (automation message sent) for THIS SPECIFIC CONTACT and rule
+              const lastExecution = await prisma.aIAutomationExecution.findFirst({
+                where: {
+                  contactId: contact.id, // THIS SPECIFIC CONTACT ONLY
+                  ruleId: rule.id,
+                  status: 'sent',
+                },
+                orderBy: {
+                  executedAt: 'desc',
+                },
+                select: {
+                  executedAt: true,
+                },
+              });
+
+              // If we've sent messages to THIS SPECIFIC CONTACT, check if THEY replied
+              if (lastExecution) {
+                console.log(`[AI Automations Cron] Found last execution for contact ${contact.id} at ${lastExecution.executedAt.toISOString()}`);
+                // Check if THIS SPECIFIC CONTACT replied AFTER we sent them the last automation message
+                const replyAfterAutomation = await prisma.message.findFirst({
+                  where: {
+                    contactId: contact.id, // THIS SPECIFIC CONTACT ONLY
+                    isFromBusiness: false, // Only check messages FROM the contact (not from business)
+                    createdAt: {
+                      gt: lastExecution.executedAt, // Reply must be AFTER the automation message
+                    },
+                  },
+                  orderBy: {
+                    createdAt: 'desc',
+                  },
+                });
+
+                console.log(`[AI Automations Cron] Contact ${contact.id} - Last execution: ${lastExecution.executedAt.toISOString()}, Reply found: ${replyAfterAutomation ? replyAfterAutomation.createdAt.toISOString() : 'NONE'}`);
+
+                // If THIS SPECIFIC CONTACT replied after we sent them a message, stop automation FOR THIS CONTACT ONLY
+                if (replyAfterAutomation) {
+                  const timeSinceReply = now.getTime() - replyAfterAutomation.createdAt.getTime();
+                  const minutesSinceReply = Math.floor(timeSinceReply / (60 * 1000));
+                  console.log(`[AI Automations Cron] ⚠️ CONTACT ${contact.id} (${contact.firstName}) replied ${minutesSinceReply} minutes ago - STOPPING automation for THIS CONTACT ONLY (rule: "${rule.name}")`);
+                
+                  try {
+                    // Check if stop record already exists for THIS SPECIFIC CONTACT
+                    const existingStop = await prisma.aIAutomationStop.findUnique({
+                      where: {
+                        ruleId_contactId: {
+                          ruleId: rule.id,
+                          contactId: contact.id, // THIS SPECIFIC CONTACT ONLY
+                        },
+                      },
+                    });
+
+                    if (existingStop) {
+                      // THIS CONTACT already has a stop record - skip sending to THIS CONTACT
+                      console.log(`[AI Automations Cron] Contact ${contact.id} (${contact.firstName}) already has stop record for rule "${rule.name}" - skipping THIS CONTACT`);
+                      continue;
+                    }
+
+                    // Count follow-ups sent to THIS SPECIFIC CONTACT
+                    const executions = await prisma.aIAutomationExecution.findMany({
+                      where: {
+                        contactId: contact.id, // THIS SPECIFIC CONTACT ONLY
+                        ruleId: rule.id,
+                        status: 'sent',
+                      },
+                    });
+
+                    // Create stop record FOR THIS SPECIFIC CONTACT ONLY
+                    await prisma.aIAutomationStop.create({
+                      data: {
+                        id: `stop_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+                        ruleId: rule.id,
+                        contactId: contact.id, // THIS SPECIFIC CONTACT ONLY
+                        recipientPSID: contact.messengerPSID || 'unknown',
+                        stoppedReason: 'User replied to automated message (detected by cron fallback)',
+                        followUpsSent: executions.length,
+                      },
+                    });
+
+                    console.log(`[AI Automations Cron] ✅ STOPPED automation for CONTACT ${contact.id} (${contact.firstName}) ONLY - rule "${rule.name}" will no longer send messages to THIS CONTACT`);
+
+                    // Remove tag from THIS SPECIFIC CONTACT if configured
+                    if (rule.removeTagOnReply) {
+                      const contactData = await prisma.contact.findUnique({
+                        where: { id: contact.id }, // THIS SPECIFIC CONTACT ONLY
+                        select: { tags: true },
+                      });
+
+                      if (contactData && contactData.tags.includes(rule.removeTagOnReply)) {
+                        await prisma.contact.update({
+                          where: { id: contact.id }, // THIS SPECIFIC CONTACT ONLY
+                          data: {
+                            tags: contactData.tags.filter(tag => tag !== rule.removeTagOnReply),
+                          },
+                        });
+                        console.log(`[AI Automations Cron] Removed tag "${rule.removeTagOnReply}" from contact ${contact.id} (${contact.firstName})`);
+                      }
+                    }
+
+                    // Skip THIS CONTACT - do not send any more messages to THIS CONTACT
+                    continue;
+                  } catch (error) {
+                    console.error(`[AI Automations Cron] Error creating stop record for contact ${contact.id}:`, error);
+                  }
+                }
+              }
+            }
+            
+            // Check if this contact was processed by THIS rule within the time interval
+            // Only skip if they were processed recently - otherwise process them again
+            if (thresholdMs > 0) {
+              const lastExecution = await prisma.aIAutomationExecution.findFirst({
+                where: {
+                  ruleId: rule.id,
+                  contactId: contact.id,
+                  status: 'sent',
+                },
+                orderBy: {
+                  executedAt: 'desc',
+                },
+                select: {
+                  executedAt: true,
+                },
+              });
+
+              if (lastExecution) {
+                const timeSinceLastExecution = now.getTime() - lastExecution.executedAt.getTime();
+                if (timeSinceLastExecution < thresholdMs) {
+                  const minutesRemaining = Math.ceil((thresholdMs - timeSinceLastExecution) / (60 * 1000));
+                  console.log(`[AI Automations Cron] Contact ${contact.id} processed ${Math.round(timeSinceLastExecution / (60 * 1000))} min ago, waiting ${minutesRemaining} more minutes (time interval: ${Math.round(thresholdMs / (60 * 1000))} min)`);
+                  continue;
+                }
+              }
+            }
+            
             // ⭐ CONFLICT PREVENTION: Check if contact is eligible
+            // Skip the recent contact check since we handle it per-rule above
             const eligibilityCheck = await isContactEligibleForAutomation(
               contact.id,
-              rule.excludeTags
+              rule.excludeTags,
+              { 
+                skipRecentContactCheck: true // We check per-rule time interval above
+              }
             );
 
             if (!eligibilityCheck.eligible) {
@@ -224,27 +467,11 @@ export async function GET(request: NextRequest) {
               continue;
             }
 
-            // Get or create conversation
-            let conversation = contact.conversations[0];
+            const conversation = contact.conversations[0];
             if (!conversation) {
-              // Create conversation if it doesn't exist (for contacts with messengerPSID)
-              if (contact.messengerPSID && contact.facebookPageId) {
-                console.log(`[AI Automations Cron] Creating conversation for contact: ${contact.firstName} (${contact.id})`);
-                conversation = await prisma.conversation.create({
-                  data: {
-                    contactId: contact.id,
-                    facebookPageId: contact.facebookPageId,
-                    platform: 'MESSENGER',
-                    status: 'OPEN',
-                    lastMessageAt: new Date(),
-                  },
-                });
-                console.log(`[AI Automations Cron] Created conversation: ${conversation.id}`);
-              } else {
-                console.log(`[AI Automations Cron] No conversation found and cannot create (missing messengerPSID or facebookPageId) for contact: ${contact.id}`);
-                ruleFailed++;
-                continue;
-              }
+              console.log(`[AI Automations Cron] No conversation for contact: ${contact.id}`);
+              ruleFailed++;
+              continue;
             }
 
             // Get conversation history
@@ -258,35 +485,102 @@ export async function GET(request: NextRequest) {
               take: 20,
             });
 
-            // If no messages, we can still send (new conversation), but AI won't have history
             if (messages.length === 0) {
-              console.log(`[AI Automations Cron] No messages in conversation: ${conversation.id} - will send without history`);
+              console.log(`[AI Automations Cron] No messages in conversation: ${conversation.id}`);
+              ruleFailed++;
+              continue;
             }
 
             // Check if contact replied recently (live check)
-            // This is a redundant check since isContactEligibleForAutomation already checks this
-            // But we keep it for additional safety
             const recentContactMessages = messages.filter(msg => !msg.isFromBusiness);
+            console.log(`[AI Automations Cron] Contact ${contact.id} - Total messages: ${messages.length}, From contact: ${recentContactMessages.length}, From business: ${messages.filter(m => m.isFromBusiness).length}`);
+            
             if (recentContactMessages.length > 0) {
               const lastContactMessage = recentContactMessages[0];
               const timeSinceReply = now.getTime() - lastContactMessage.createdAt.getTime();
               
-              // If contact replied within last 30 minutes, skip (they're actively chatting)
-              // This matches the isContactInActiveChatSession check
-              if (timeSinceReply < 30 * 60 * 1000) {
-                console.log(`[AI Automations Cron] Contact ${contact.id} replied recently (${Math.floor(timeSinceReply / 60000)} minutes ago), skipping`);
+              // If contact replied within last hour, check if we need to create stop record
+              if (timeSinceReply < 60 * 60 * 1000) {
+                // ⭐ STOP-ON-REPLY: If rule has stopOnReply enabled, create stop record
+                if (rule.stopOnReply) {
+                  // Check if we've sent messages to this contact from this rule
+                  const hasExecutions = await prisma.aIAutomationExecution.findFirst({
+                    where: {
+                      contactId: contact.id,
+                      ruleId: rule.id,
+                      status: 'sent',
+                    },
+                  });
+
+                  if (hasExecutions) {
+                    // Check if stop record already exists
+                    const existingStop = await prisma.aIAutomationStop.findUnique({
+                      where: {
+                        ruleId_contactId: {
+                          ruleId: rule.id,
+                          contactId: contact.id,
+                        },
+                      },
+                    });
+
+                    if (!existingStop) {
+                      // Count follow-ups sent
+                      const executions = await prisma.aIAutomationExecution.findMany({
+                        where: {
+                          contactId: contact.id,
+                          ruleId: rule.id,
+                          status: 'sent',
+                        },
+                      });
+
+                      // Create stop record
+                      await prisma.aIAutomationStop.create({
+                        data: {
+                          id: `stop_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+                          ruleId: rule.id,
+                          contactId: contact.id,
+                          recipientPSID: contact.messengerPSID || 'unknown',
+                          stoppedReason: 'User replied to automated message (detected in conversation check)',
+                          followUpsSent: executions.length,
+                        },
+                      });
+
+                      console.log(`[AI Automations Cron] ✅ STOPPED automation for CONTACT ${contact.id} (${contact.firstName}) - rule "${rule.name}" - contact replied ${Math.floor(timeSinceReply / (60 * 1000))} minutes ago`);
+
+                      // Remove tag if configured
+                      if (rule.removeTagOnReply) {
+                        const contactData = await prisma.contact.findUnique({
+                          where: { id: contact.id },
+                          select: { tags: true },
+                        });
+
+                        if (contactData && contactData.tags.includes(rule.removeTagOnReply)) {
+                          await prisma.contact.update({
+                            where: { id: contact.id },
+                            data: {
+                              tags: contactData.tags.filter(tag => tag !== rule.removeTagOnReply),
+                            },
+                          });
+                          console.log(`[AI Automations Cron] Removed tag "${rule.removeTagOnReply}" from contact ${contact.id}`);
+                        }
+                      }
+                    } else {
+                      console.log(`[AI Automations Cron] Contact ${contact.id} already has stop record for rule "${rule.name}"`);
+                    }
+                  }
+                }
+                
+                console.log(`[AI Automations Cron] Contact ${contact.id} replied recently (${Math.floor(timeSinceReply / (60 * 1000))} min ago), skipping`);
                 continue;
               }
             }
 
-            // Format messages for AI (or use empty array if no history)
-            const conversationHistory = messages.length > 0
-              ? messages.reverse().map(msg => ({
-                  from: msg.isFromBusiness ? 'Business' : contact.firstName || 'Customer',
-                  text: msg.content,
-                  timestamp: msg.createdAt,
-                }))
-              : []; // Empty history for new conversations
+            // Format messages for AI
+            const conversationHistory = messages.reverse().map(msg => ({
+              from: msg.isFromBusiness ? 'Business' : contact.firstName || 'Customer',
+              text: msg.content,
+              timestamp: msg.createdAt,
+            }));
 
             // Generate AI message
             const aiResult = await generateFollowUpMessage(
@@ -313,32 +607,6 @@ export async function GET(request: NextRequest) {
                   aiPromptUsed: rule.customPrompt,
                   status: 'failed',
                   errorMessage: 'Failed to generate AI message',
-                  executedAt: new Date(),
-                },
-              });
-              
-              continue;
-            }
-
-            // Verify Facebook page has access token
-            if (!contact.facebookPage?.pageAccessToken) {
-              console.error(`[AI Automations Cron] No access token for Facebook page: ${contact.facebookPage?.id}`);
-              ruleFailed++;
-              
-              await prisma.aIAutomationExecution.create({
-                data: {
-                  id: `exec_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
-                  ruleId: rule.id,
-                  userId: rule.userId,
-                  contactId: contact.id,
-                  conversationId: conversation.id,
-                  recipientPSID: contact.messengerPSID || 'unknown',
-                  recipientName: `${contact.firstName} ${contact.lastName || ''}`.trim(),
-                  aiPromptUsed: rule.customPrompt,
-                  generatedMessage: aiResult.message,
-                  aiReasoning: aiResult.reasoning,
-                  status: 'failed',
-                  errorMessage: 'Facebook page access token missing',
                   executedAt: new Date(),
                 },
               });
@@ -373,16 +641,6 @@ export async function GET(request: NextRequest) {
                   facebookMessageId: result.data?.message_id,
                   executedAt: new Date(),
                 },
-              });
-
-              // Update contact activity timestamps so the interval is respected
-              await prisma.contact.update({
-                where: { id: contact.id },
-                data: { lastInteraction: new Date() },
-              });
-              await prisma.conversation.update({
-                where: { id: conversation.id },
-                data: { lastMessageAt: new Date(), status: 'OPEN' },
               });
 
               // Save message to database

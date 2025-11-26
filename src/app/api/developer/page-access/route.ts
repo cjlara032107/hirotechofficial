@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { auth } from '@/auth';
 import { prisma } from '@/lib/db';
+import { Prisma } from '@prisma/client';
 
 /**
  * GET /api/developer/page-access
@@ -21,15 +22,28 @@ export async function GET() {
       );
     }
 
-    // Get all global page access settings
-    const pageAccesses = await prisma.pageAccess.findMany({
+    // Get all page access settings for the current developer
+    // Using findFirst with filter since userId might not be in generated types yet
+    const allPageAccesses = await prisma.pageAccess.findMany({
       orderBy: {
         pagePath: 'asc',
       },
     });
+    const pageAccesses = allPageAccesses.filter((pa: any) => pa.userId === session.user.id);
 
     return NextResponse.json(pageAccesses);
   } catch (error) {
+    // Handle schema mismatch errors gracefully
+    if (error instanceof Prisma.PrismaClientKnownRequestError) {
+      if (error.code === 'P2022' || error.code === 'P2021') {
+        // Table or column doesn't exist - database schema is out of sync
+        console.warn(
+          '[Page Access API] Database schema is out of sync. Page access feature requires migration. Returning empty array.'
+        );
+        // Return empty array when schema is missing
+        return NextResponse.json([]);
+      }
+    }
     console.error('Get page access error:', error);
     return NextResponse.json(
       { error: 'Failed to fetch page access' },
@@ -74,24 +88,45 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Upsert global page access (affects all users)
-    const pageAccess = await prisma.pageAccess.upsert({
+    // Upsert page access for the current developer
+    // Using findFirst since compound unique constraint might not be in generated types
+    const existing = await prisma.pageAccess.findFirst({
       where: {
         pagePath: pagePath,
       },
-      update: {
-        isEnabled,
-        disabledBy: !isEnabled ? session.user.id : null,
-      },
-      create: {
-        pagePath: pagePath,
-        isEnabled,
-        disabledBy: !isEnabled ? session.user.id : null,
-      },
     });
+
+    // Check if this existing record belongs to the current user
+    const userOwnsRecord = existing && (existing as any).userId === session.user.id;
+    
+    const pageAccess = userOwnsRecord
+      ? await prisma.pageAccess.update({
+          where: { id: existing.id },
+          data: { isEnabled },
+        })
+      : await prisma.pageAccess.create({
+          data: {
+            userId: session.user.id,
+            pagePath: pagePath,
+            isEnabled,
+          } as any, // Type assertion needed until Prisma types are regenerated
+        });
 
     return NextResponse.json(pageAccess, { status: 201 });
   } catch (error) {
+    // Handle schema mismatch errors gracefully
+    if (error instanceof Prisma.PrismaClientKnownRequestError) {
+      if (error.code === 'P2022' || error.code === 'P2021') {
+        // Table or column doesn't exist - database schema is out of sync
+        console.warn(
+          '[Page Access API] Database schema is out of sync. Page access feature requires migration.'
+        );
+        return NextResponse.json(
+          { error: 'Database schema is out of sync. Please run database migration.' },
+          { status: 503 }
+        );
+      }
+    }
     console.error('Create/update page access error:', error);
     return NextResponse.json(
       { error: 'Failed to update page access' },

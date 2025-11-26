@@ -161,3 +161,7 @@ npx prisma migrate deploy
 
 **Next Step:** Get the correct connection string from Supabase Dashboard and update `DIRECT_URL` in Vercel! 🚀
 
+
+
+
+

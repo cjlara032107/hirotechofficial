@@ -1,12 +1,21 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { auth } from '@/auth';
 import { getPageAccessStatus } from '@/lib/developer/get-page-access';
 
 /**
  * GET /api/developer/page-access/check
- * Check if a page is enabled (public endpoint for client-side checks)
+ * Check if a page is enabled for the current user
  */
 export async function GET(request: NextRequest) {
   try {
+    const session = await auth();
+    if (!session?.user?.id) {
+      return NextResponse.json(
+        { error: 'Unauthorized' },
+        { status: 401 }
+      );
+    }
+
     const searchParams = request.nextUrl.searchParams;
     const pagePath = searchParams.get('path');
 
@@ -17,7 +26,7 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    const isEnabled = await getPageAccessStatus(pagePath);
+    const isEnabled = await getPageAccessStatus(session.user.id, pagePath);
 
     return NextResponse.json({
       pagePath,
@@ -31,4 +40,6 @@ export async function GET(request: NextRequest) {
     );
   }
 }
+
+
 

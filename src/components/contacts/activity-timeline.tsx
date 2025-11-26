@@ -1,10 +1,16 @@
+'use client';
+
 import {
   MessageSquare,
   Tag,
   GitBranch,
   User,
   FileText,
+  ChevronDown,
 } from 'lucide-react';
+import { Button } from '@/components/ui/button';
+import { useState } from 'react';
+import { useRouter } from 'next/navigation';
 
 interface Activity {
   id: string;
@@ -15,6 +21,15 @@ interface Activity {
   user?: {
     name: string | null;
   } | null;
+}
+
+interface ActivityTimelineProps {
+  activities: Activity[];
+  total?: number;
+  currentPage?: number;
+  totalPages?: number;
+  hasMore?: boolean;
+  contactId?: string;
 }
 
 const activityIcons: Record<string, React.ComponentType<{ className?: string }>> = {
@@ -62,12 +77,38 @@ function getRelativeTimeString(date: Date): string {
   return rtf.format(-diffInYears, 'year');
 }
 
-export function ActivityTimeline({ activities }: { activities: Activity[] }) {
+export function ActivityTimeline({ 
+  activities, 
+  total,
+  currentPage = 1,
+  totalPages = 1,
+  hasMore = false,
+  contactId 
+}: ActivityTimelineProps) {
+  const router = useRouter();
+  const [isLoading, setIsLoading] = useState(false);
+
   if (!activities || activities.length === 0) {
     return (
       <p className="text-sm text-muted-foreground">No activity yet</p>
     );
   }
+
+  const loadMore = async () => {
+    if (isLoading || !hasMore || !contactId) return;
+    
+    setIsLoading(true);
+    try {
+      // Navigate to next page
+      const nextPage = currentPage + 1;
+      router.push(`/contacts/${contactId}?activityPage=${nextPage}`, { scroll: false });
+      router.refresh();
+    } catch (error) {
+      console.error('Error loading more activities:', error);
+    } finally {
+      setIsLoading(false);
+    }
+  };
 
   return (
     <div className="space-y-4">
@@ -112,6 +153,26 @@ export function ActivityTimeline({ activities }: { activities: Activity[] }) {
           </div>
         );
       })}
+      
+      {hasMore && (
+        <div className="flex justify-center pt-4">
+          <Button
+            variant="outline"
+            onClick={loadMore}
+            disabled={isLoading}
+            className="w-full"
+          >
+            {isLoading ? (
+              'Loading...'
+            ) : (
+              <>
+                Load More Activities
+                <ChevronDown className="ml-2 h-4 w-4" />
+              </>
+            )}
+          </Button>
+        </div>
+      )}
     </div>
   );
 }

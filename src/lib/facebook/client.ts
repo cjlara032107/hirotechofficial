@@ -431,7 +431,7 @@ export class FacebookClient {
           fields: 'from,message,created_time',
           limit: Math.min(limit, 100), // Facebook API max is 100 per request
         },
-        timeout: 30000, // 30 second timeout
+        timeout: 15000, // Reduced to 15 second timeout for faster failure
       });
 
       const messages = response.data.data || [];

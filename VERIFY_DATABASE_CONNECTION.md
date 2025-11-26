@@ -156,3 +156,7 @@ After updating, the build should get past the database connection step. If it st
 
 **Next Step:** Double-check your Supabase connection string in the dashboard and make sure it matches exactly what you have in Vercel! 🔧
 
+
+
+
+

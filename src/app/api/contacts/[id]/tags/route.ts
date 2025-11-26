@@ -51,6 +51,26 @@ export async function POST(
       },
     });
 
+    // ⭐ AI AUTOMATION: Remove stop records when user manually adds a tag
+    // This allows the contact to be re-automated if they have the automation tag
+    const rulesWithThisTag = await prisma.aIAutomationRule.findMany({
+      where: {
+        enabled: true,
+        includeTags: { has: tag },
+      },
+      select: { id: true },
+    });
+
+    if (rulesWithThisTag.length > 0) {
+      await prisma.aIAutomationStop.deleteMany({
+        where: {
+          contactId,
+          ruleId: { in: rulesWithThisTag.map(r => r.id) },
+        },
+      });
+      console.log(`[Tag API] Removed ${rulesWithThisTag.length} stop records for contact ${contactId} after adding tag "${tag}"`);
+    }
+
     // Log activity
     await prisma.contactActivity.create({
       data: {
