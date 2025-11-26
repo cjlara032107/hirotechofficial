@@ -319,6 +319,9 @@ async function executeInstantSync(jobId: string, facebookPageId: string, userId:
 
     // Phase 1: Fast contact storage (NO AI ANALYSIS)
     // OPTIMIZATION: Stream conversations and process contacts in batches as they arrive
+    let heartbeatInterval: NodeJS.Timeout | null = null;
+    let streamTimeout: NodeJS.Timeout | null = null;
+    
     try {
       console.log(`[Instant Sync ${jobId}] Streaming Messenger conversations...`);
       
@@ -342,9 +345,39 @@ async function executeInstantSync(jobId: string, facebookPageId: string, userId:
       
       console.log(`[Instant Sync ${jobId}] Starting to stream conversations...`);
       
+      // Heartbeat mechanism: Update progress every 30 seconds even if no conversations processed
+      heartbeatInterval = setInterval(async () => {
+        const elapsed = Date.now() - streamStartTime;
+        const elapsedSeconds = Math.floor(elapsed / 1000);
+        console.log(`[Instant Sync ${jobId}] 💓 Heartbeat: ${elapsedSeconds}s elapsed, ${conversationCount} conversations, ${participantMap.size} participants discovered`);
+        
+        // Update progress to show we're still alive
+        prisma.syncJob.update({
+          where: { id: jobId },
+          data: {
+            syncedContacts: contactsStored,
+            totalContacts: contactsStored + participantMap.size,
+          },
+        }).catch(err => console.error(`[Instant Sync ${jobId}] Failed to update heartbeat:`, err));
+      }, 30000); // Every 30 seconds
+      
+      // Wrap the stream in a timeout to detect if it never starts
+      streamTimeout = setTimeout(() => {
+        console.error(`[Instant Sync ${jobId}] ❌ Stream timeout: No conversations received after 60 seconds. The Facebook API may be hanging.`);
+        if (heartbeatInterval) clearInterval(heartbeatInterval);
+      }, 60000); // 60 second timeout for first conversation
+      
+      let firstConversationReceived = false;
+      
       // OPTIMIZATION: Process conversations as they're fetched (streaming)
       // Process contacts in batches during streaming for immediate storage
       for await (const convo of client.fetchMessengerConversationsStream(page.pageId)) {
+        // Clear the initial timeout once we receive the first conversation
+        if (!firstConversationReceived) {
+          firstConversationReceived = true;
+          clearTimeout(streamTimeout);
+          console.log(`[Instant Sync ${jobId}] ✅ Stream started, received first conversation`);
+        }
         // Check for cancellation
         if (await isJobCancelled(jobId)) {
           console.log(`[Instant Sync ${jobId}] Sync cancelled by user`);
@@ -431,6 +464,10 @@ async function executeInstantSync(jobId: string, facebookPageId: string, userId:
         }
       }
       
+      // Clean up heartbeat and timeout
+      if (heartbeatInterval) clearInterval(heartbeatInterval);
+      if (streamTimeout) clearTimeout(streamTimeout);
+      
       console.log(`[Instant Sync ${jobId}] Fetched ${conversationCount} Messenger conversations`);
 
       // Process any remaining participants
@@ -459,6 +496,10 @@ async function executeInstantSync(jobId: string, facebookPageId: string, userId:
 
       console.log(`[Instant Sync ${jobId}] ✅ Stored ${contactsStored} Messenger contacts`);
     } catch (error) {
+      // Clean up on error
+      if (heartbeatInterval) clearInterval(heartbeatInterval);
+      if (streamTimeout) clearTimeout(streamTimeout);
+      
       console.error(`[Instant Sync ${jobId}] Failed to fetch Messenger conversations:`, error);
       errors.push({
         platform: 'Messenger',
