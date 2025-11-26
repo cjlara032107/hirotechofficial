@@ -46,11 +46,14 @@ export async function withRetry<T>(
         throw error;
       }
       
-      // Calculate delay with exponential backoff
-      const delay = Math.min(initialDelay * Math.pow(2, attempt - 1), maxDelay);
+      // Calculate delay with exponential backoff + jitter to prevent thundering herd
+      const baseDelay = Math.min(initialDelay * Math.pow(2, attempt - 1), maxDelay);
+      // Add random jitter (0-500ms) to prevent all retries happening at once
+      const jitter = Math.random() * 500;
+      const delay = baseDelay + jitter;
       
       console.warn(
-        `[DB Retry] Attempt ${attempt}/${maxRetries} failed (${errorMessage}), retrying in ${delay}ms...`
+        `[DB Retry] Attempt ${attempt}/${maxRetries} failed (${errorMessage}), retrying in ${Math.round(delay)}ms...`
       );
       
       // Wait before retry

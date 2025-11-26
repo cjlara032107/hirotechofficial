@@ -538,15 +538,15 @@ async function executePipelineAnalysis(jobId: string, facebookPageId: string): P
     }
 
     // Process all contacts continuously - each contact completes independently
-    // CRITICAL: Reduced concurrency to prevent database pool exhaustion (20 connections max)
-    // Database operations are batched separately to prevent pool exhaustion
-    const conversationFetchLimiter = new ConcurrencyLimiter(20); // Reduced from 100 to 20
-    const analysisLimiter = new ConcurrencyLimiter(10); // Reduced from 100 to 10
+    // CRITICAL: Further reduced concurrency to prevent database pool exhaustion
+    // Must leave connections available for cron jobs and other operations
+    const conversationFetchLimiter = new ConcurrencyLimiter(10); // Reduced from 20 to 10
+    const analysisLimiter = new ConcurrencyLimiter(5); // Reduced from 10 to 5
     
     console.log(`[Pipeline Analysis ${jobId}] Processing ${contactsWithoutPipeline.length} contacts continuously...`);
 
-    // Batch database updates for efficiency (process in batches of 20 to match pool size)
-    const BATCH_SIZE = 20; // Reduced from 50 to 20
+    // Batch database updates for efficiency (process in smaller batches to leave connections for other operations)
+    const BATCH_SIZE = 10; // Reduced from 20 to 10 to leave more connections available
     const updateQueue: Array<{
       contactId: string;
       aiContext: string;
