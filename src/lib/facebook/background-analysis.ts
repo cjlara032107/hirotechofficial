@@ -6,6 +6,7 @@ interface BackgroundAnalysisResult {
   success: boolean;
   jobId: string;
   message: string;
+  cancelledJobs?: string[]; // IDs of jobs that were cancelled due to overlap
 }
 
 /**
