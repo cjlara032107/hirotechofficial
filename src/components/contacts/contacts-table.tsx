@@ -109,12 +109,14 @@ const ContactRow = memo(function ContactRow({
   return (
     <TableRow
       data-state={isSelected ? 'selected' : undefined}
+      data-contact-id={contact.id}
     >
       <TableCell>
         <Checkbox
           checked={isSelected}
           onCheckedChange={(checked) => onSelect(contact.id, checked as boolean)}
           aria-label={`Select ${contact.firstName}`}
+          data-contact-id={contact.id}
         />
       </TableCell>
       <TableCell>
@@ -784,49 +786,106 @@ export function ContactsTable({ contacts, tags, pipelines, isLoading }: Contacts
                 size="sm"
                 onClick={async () => {
                   // CRITICAL: Read selection from MULTIPLE sources to ensure accuracy
-                  // 1. Read from ref (most up-to-date)
+                  // 1. Read from ref (most up-to-date, updated synchronously)
                   const refSelection = new Set(selectedIdsRef.current);
-                  // 2. Read from state
+                  // 2. Read from state (may be stale due to React batching)
                   const stateSelection = new Set(selectedIds);
                   // 3. Read from DOM checkboxes (most reliable - actual UI state)
+                  // CRITICAL: Exclude header checkbox by only looking in tbody and using data-contact-id
                   const domSelection = new Set<string>();
                   if (typeof document !== 'undefined') {
-                    const checkboxes = document.querySelectorAll<HTMLInputElement>(
-                      'input[type="checkbox"][aria-label^="Select"]:checked'
-                    );
-                    checkboxes.forEach((checkbox) => {
-                      // Try to find the contact ID from the row
-                      const row = checkbox.closest('tr');
-                      if (row) {
-                        const link = row.querySelector('a[href^="/contacts/"]');
-                        if (link) {
-                          const href = link.getAttribute('href');
-                          const contactId = href?.replace('/contacts/', '');
-                          if (contactId) {
-                            domSelection.add(contactId);
-                          }
+                    const tbody = document.querySelector('tbody');
+                    if (tbody) {
+                      // Method 1: Use data-contact-id attribute (most reliable)
+                      const checkboxesWithId = tbody.querySelectorAll<HTMLInputElement>(
+                        'input[type="checkbox"][data-contact-id]:checked'
+                      );
+                      checkboxesWithId.forEach((checkbox) => {
+                        const contactId = checkbox.getAttribute('data-contact-id');
+                        if (contactId) {
+                          domSelection.add(contactId);
                         }
+                      });
+                      
+                      // Method 2: Fallback - find from row data attribute
+                      if (domSelection.size === 0) {
+                        const checkedRows = tbody.querySelectorAll<HTMLTableRowElement>(
+                          'tr[data-contact-id]'
+                        );
+                        checkedRows.forEach((row) => {
+                          const checkbox = row.querySelector<HTMLInputElement>('input[type="checkbox"]:checked');
+                          if (checkbox) {
+                            const contactId = row.getAttribute('data-contact-id');
+                            if (contactId) {
+                              domSelection.add(contactId);
+                            }
+                          }
+                        });
                       }
-                    });
+                      
+                      // Method 3: Last resort - extract from link href
+                      if (domSelection.size === 0) {
+                        const checkboxes = tbody.querySelectorAll<HTMLInputElement>(
+                          'input[type="checkbox"]:checked'
+                        );
+                        checkboxes.forEach((checkbox) => {
+                          const row = checkbox.closest('tr');
+                          if (row) {
+                            const link = row.querySelector('a[href^="/contacts/"]');
+                            if (link) {
+                              const href = link.getAttribute('href');
+                              const contactId = href?.replace('/contacts/', '').split('?')[0];
+                              if (contactId && contactId.length > 0) {
+                                domSelection.add(contactId);
+                              }
+                            }
+                          }
+                        });
+                      }
+                    }
                   }
                   
-                  // Use the intersection of all three sources (most conservative)
+                  // CRITICAL: Determine final selection using priority logic
+                  // Priority: DOM (most reliable) > Ref (synchronous) > State (may be stale)
                   const finalSelection = new Set<string>();
-                  const allSources = [refSelection, stateSelection, domSelection];
                   
-                  // If any source has only 1, use that
-                  if (refSelection.size === 1) {
-                    refSelection.forEach(id => finalSelection.add(id));
-                  } else if (stateSelection.size === 1) {
-                    stateSelection.forEach(id => finalSelection.add(id));
-                  } else if (domSelection.size === 1) {
+                  // If DOM has exactly 1, trust it (most reliable - actual UI state)
+                  if (domSelection.size === 1) {
                     domSelection.forEach(id => finalSelection.add(id));
-                  } else {
-                    // Use the smallest selection (most conservative)
-                    const smallest = [refSelection, stateSelection, domSelection].reduce((a, b) => 
-                      a.size <= b.size ? a : b
-                    );
-                    smallest.forEach(id => finalSelection.add(id));
+                    console.log('[ContactsTable] ✅ Using DOM selection (1 contact) - most reliable');
+                  }
+                  // Else if ref has exactly 1, use it (updated synchronously)
+                  else if (refSelection.size === 1) {
+                    refSelection.forEach(id => finalSelection.add(id));
+                    console.log('[ContactsTable] ✅ Using ref selection (1 contact) - synchronous');
+                  }
+                  // Else if state has exactly 1, use it
+                  else if (stateSelection.size === 1) {
+                    stateSelection.forEach(id => finalSelection.add(id));
+                    console.log('[ContactsTable] ✅ Using state selection (1 contact)');
+                  }
+                  // If all sources agree, use any of them
+                  else if (refSelection.size === stateSelection.size && 
+                           refSelection.size === domSelection.size &&
+                           Array.from(refSelection).every(id => stateSelection.has(id) && domSelection.has(id))) {
+                    refSelection.forEach(id => finalSelection.add(id));
+                    console.log('[ContactsTable] ✅ All sources agree, using ref selection');
+                  }
+                  // Otherwise, use the SMALLEST selection (most conservative - prevents analyzing all)
+                  else {
+                    const allSources = [
+                      { name: 'ref', set: refSelection },
+                      { name: 'state', set: stateSelection },
+                      { name: 'dom', set: domSelection }
+                    ].filter(s => s.set.size > 0); // Only consider non-empty sources
+                    
+                    if (allSources.length > 0) {
+                      const smallest = allSources.reduce((a, b) => 
+                        a.set.size <= b.set.size ? a : b
+                      );
+                      smallest.set.forEach(id => finalSelection.add(id));
+                      console.log(`[ContactsTable] ⚠️ Sources disagree, using smallest (${smallest.name}: ${smallest.set.size} contacts)`);
+                    }
                   }
                   
                   const selectionSize = finalSelection.size;
