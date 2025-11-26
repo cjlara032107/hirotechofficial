@@ -2,6 +2,7 @@ import { prisma } from '@/lib/db';
 import { Prisma } from '@prisma/client';
 import { FacebookClient, FacebookApiError } from './client';
 import { startBackgroundAnalysis } from './background-analysis';
+import { startPipelineAnalysis } from './pipeline-analyzer';
 
 interface InstantSyncResult {
   success: boolean;
@@ -92,7 +93,7 @@ async function executeInstantSync(jobId: string, facebookPageId: string, userId:
 
     console.log(`[Instant Sync ${jobId}] 🚀 Starting instant sync execution...`);
 
-    // Get page info
+    // Get page info (including auto-pipeline configuration)
     const page = await prisma.facebookPage.findUnique({
       where: { id: facebookPageId },
       select: {
@@ -101,6 +102,7 @@ async function executeInstantSync(jobId: string, facebookPageId: string, userId:
         pageAccessToken: true,
         instagramAccountId: true,
         organizationId: true,
+        autoPipelineId: true,
       },
     });
 
@@ -665,6 +667,18 @@ async function executeInstantSync(jobId: string, facebookPageId: string, userId:
 
     const elapsedTime = ((Date.now() - startTime) / 1000).toFixed(1);
     console.log(`[Instant Sync ${jobId}] ✅ Completed in ${elapsedTime}s: ${contactsStored} contacts stored, AI analysis queued: ${aiAnalysisQueued}`);
+
+    // Automatically start pipeline analysis if auto-pipeline is configured
+    if (page.autoPipelineId && contactsStored > 0) {
+      try {
+        console.log(`[Instant Sync ${jobId}] 🔄 Auto-starting pipeline analysis for ${contactsStored} contacts...`);
+        const pipelineResult = await startPipelineAnalysis(facebookPageId);
+        console.log(`[Instant Sync ${jobId}] ✅ Pipeline analysis started: ${pipelineResult.jobId}`);
+      } catch (error) {
+        console.error(`[Instant Sync ${jobId}] ⚠️ Failed to start pipeline analysis (non-critical):`, error);
+        // Don't fail the sync if pipeline analysis fails to start
+      }
+    }
   } catch (error) {
     console.error(`[Instant Sync ${jobId}] ❌ Failed:`, error);
     // Mark job as failed in database
