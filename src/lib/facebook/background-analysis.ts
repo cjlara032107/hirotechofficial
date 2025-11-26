@@ -27,8 +27,12 @@ export async function startBackgroundAnalysis(
     // CRITICAL: Ensure database connection is established (required for Vercel serverless)
     await connectPrisma();
     
-    // Check if there's already an active analysis job for these contacts
-    const existingJob = await prisma.analysisJob.findFirst({
+    // CRITICAL: Sort contactIds for consistent comparison
+    const contactIdsSorted = [...contactIds].sort();
+    
+    // STEP 1: Find jobs with overlapping contacts (for cancellation)
+    // We'll cancel PENDING jobs with overlapping contacts to prevent conflicts
+    const overlappingJobs = await prisma.analysisJob.findMany({
       where: {
         organizationId,
         userId,
@@ -43,13 +47,79 @@ export async function startBackgroundAnalysis(
         createdAt: 'desc',
       },
     });
-
-    if (existingJob) {
+    
+    // STEP 2: Check for exact match first (reuse if exact match)
+    let exactMatchJob = null;
+    let cancelledJobs: string[] = [];
+    
+    for (const job of overlappingJobs) {
+      const jobIdsSorted = [...job.contactIds].sort();
+      const isExactMatch = 
+        job.contactIds.length === contactIds.length &&
+        jobIdsSorted.every((id, idx) => id === contactIdsSorted[idx]);
+      
+      if (isExactMatch) {
+        exactMatchJob = job;
+        console.log(`[Background Analysis] ✅ Found existing job with exact contact match: ${job.id}`);
+        console.log(`[Background Analysis] Reusing job with ${job.totalContacts} contact(s)`);
+        break; // Found exact match, no need to check others
+      }
+    }
+    
+    // STEP 3: If exact match found, cancel other overlapping jobs and return
+    if (exactMatchJob) {
+      // Cancel other overlapping jobs (but not the exact match)
+      const jobsToCancel = overlappingJobs.filter(j => j.id !== exactMatchJob!.id);
+      if (jobsToCancel.length > 0) {
+        const cancelled = await prisma.analysisJob.updateMany({
+          where: {
+            id: { in: jobsToCancel.map(j => j.id) },
+            status: { in: ['PENDING', 'IN_PROGRESS'] },
+          },
+          data: {
+            status: 'CANCELLED',
+            completedAt: new Date(),
+          },
+        });
+        cancelledJobs = jobsToCancel.map(j => j.id);
+        console.log(`[Background Analysis] 🗑️ Cancelled ${cancelled.count} overlapping job(s) to prevent conflicts`);
+      }
+      
       return {
         success: true,
-        jobId: existingJob.id,
+        jobId: exactMatchJob.id,
         message: 'Analysis already in progress',
+        cancelledJobs: cancelledJobs.length > 0 ? cancelledJobs : undefined,
       };
+    }
+    
+    // STEP 4: No exact match - cancel all overlapping PENDING jobs before creating new one
+    if (overlappingJobs.length > 0) {
+      const jobsToCancel = overlappingJobs.filter(j => j.status === 'PENDING');
+      if (jobsToCancel.length > 0) {
+        const cancelled = await prisma.analysisJob.updateMany({
+          where: {
+            id: { in: jobsToCancel.map(j => j.id) },
+            status: 'PENDING',
+          },
+          data: {
+            status: 'CANCELLED',
+            completedAt: new Date(),
+          },
+        });
+        cancelledJobs = jobsToCancel.map(j => j.id);
+        console.log(`[Background Analysis] 🗑️ Cancelled ${cancelled.count} PENDING job(s) with overlapping contacts`);
+        console.log(`[Background Analysis]   Cancelled job IDs:`, cancelledJobs);
+        console.log(`[Background Analysis]   Reason: Creating new job with different contact set`);
+      }
+      
+      // Note: We don't cancel IN_PROGRESS jobs as they're actively running
+      const inProgressJobs = overlappingJobs.filter(j => j.status === 'IN_PROGRESS');
+      if (inProgressJobs.length > 0) {
+        console.log(`[Background Analysis] ⚠️ Found ${inProgressJobs.length} IN_PROGRESS job(s) with overlapping contacts`);
+        console.log(`[Background Analysis]   These jobs will continue running (not cancelled)`);
+        console.log(`[Background Analysis]   New job will be created in parallel`);
+      }
     }
 
     // CRITICAL VALIDATION: Log exactly what we're creating the job with
@@ -126,7 +196,10 @@ export async function startBackgroundAnalysis(
     return {
       success: true,
       jobId: analysisJob.id,
-      message: 'Analysis started',
+      message: cancelledJobs.length > 0 
+        ? `Analysis started. ${cancelledJobs.length} previous job(s) were cancelled.`
+        : 'Analysis started',
+      cancelledJobs: cancelledJobs.length > 0 ? cancelledJobs : undefined,
     };
   } catch (error) {
     console.error('Failed to start background analysis:', error);

@@ -438,10 +438,18 @@ export function ContactsTable({ contacts, tags, pipelines, isLoading }: Contacts
         if (response.ok) {
           if (action === 'analyze') {
             if (result.analyzing && result.jobId) {
-              toast.info('Analysis started in background', {
-                description: 'You can continue working while contacts are analyzed',
-                duration: 3000,
-              });
+              // Show notification about cancelled jobs if any
+              if (result.cancelledJobs && result.cancelledJobs.length > 0) {
+                toast.info('Analysis started in background', {
+                  description: `${result.cancelledJobs.length} previous analysis job(s) were cancelled to prevent conflicts. You can continue working while contacts are analyzed.`,
+                  duration: 5000,
+                });
+              } else {
+                toast.info('Analysis started in background', {
+                  description: 'You can continue working while contacts are analyzed',
+                  duration: 3000,
+                });
+              }
               if (typeof window !== 'undefined') {
                 sessionStorage.setItem('activeAnalysisJobId', result.jobId);
                 window.dispatchEvent(new CustomEvent('analysisStarted', { detail: { jobId: result.jobId } }));
@@ -636,10 +644,18 @@ export function ContactsTable({ contacts, tags, pipelines, isLoading }: Contacts
         if (action === 'analyze') {
           // Check if this is a background job
           if (result.analyzing && result.jobId) {
-            toast.info('Analysis started in background', {
-              description: 'You can continue working while contacts are analyzed',
-              duration: 3000,
-            });
+            // Show notification about cancelled jobs if any
+            if (result.cancelledJobs && result.cancelledJobs.length > 0) {
+              toast.info('Analysis started in background', {
+                description: `${result.cancelledJobs.length} previous analysis job(s) were cancelled to prevent conflicts. You can continue working while contacts are analyzed.`,
+                duration: 5000,
+              });
+            } else {
+              toast.info('Analysis started in background', {
+                description: 'You can continue working while contacts are analyzed',
+                duration: 3000,
+              });
+            }
             // Store job ID for indicator
             if (typeof window !== 'undefined') {
               sessionStorage.setItem('activeAnalysisJobId', result.jobId);

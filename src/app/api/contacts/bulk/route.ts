@@ -294,12 +294,16 @@ export async function POST(request: NextRequest) {
           );
           console.log(`[Bulk API] ✅ Analysis started with jobId: ${backgroundResult.jobId}`);
           console.log(`[Bulk API] Job created for ${contactIds.length} contact(s)`);
+          if (backgroundResult.cancelledJobs && backgroundResult.cancelledJobs.length > 0) {
+            console.log(`[Bulk API] 🗑️ Cancelled ${backgroundResult.cancelledJobs.length} overlapping job(s):`, backgroundResult.cancelledJobs);
+          }
 
           result = {
             success: true,
             jobId: backgroundResult.jobId,
             message: backgroundResult.message,
             analyzing: true, // Indicates this is a background job
+            cancelledJobs: backgroundResult.cancelledJobs, // Include cancelled job IDs for UI notification
           };
         } catch (analyzeError: any) {
           // Handle database connection errors during analysis
