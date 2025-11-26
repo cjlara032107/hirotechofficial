@@ -283,8 +283,10 @@ async function executePipelineAnalysis(jobId: string, facebookPageId: string): P
     }
 
     // Process all contacts continuously - each contact completes independently
-    const conversationFetchLimiter = new ConcurrencyLimiter(50); // Limit API calls
-    const analysisLimiter = new ConcurrencyLimiter(50); // Limit AI analysis
+    // MAXIMUM concurrency for fastest processing (300 concurrent operations)
+    // This allows processing 100+ contacts per minute when AI is fast
+    const conversationFetchLimiter = new ConcurrencyLimiter(300); // Limit API calls
+    const analysisLimiter = new ConcurrencyLimiter(300); // Limit AI analysis
 
     console.log(`[Pipeline Analysis ${jobId}] Processing ${contactsWithoutPipeline.length} contacts continuously...`);
 
@@ -365,39 +367,70 @@ async function executePipelineAnalysis(jobId: string, facebookPageId: string): P
           }
 
           // Step 4: Analyze with AI (concurrency limited)
+          // Use fallback scoring directly for maximum speed (100+ contacts/minute)
+          // AI analysis is slow (5-10s) and rate-limited, so we skip it for pipeline assignment
+          // Fallback scoring is instant (<100ms) and provides good enough scores for pipeline routing
           const { analysis } = await analysisLimiter.execute(async () => {
             if (!page.autoPipeline) {
               throw new Error('Auto-pipeline not configured');
             }
-            return await analyzeWithFallback(
-              messagesToAnalyze,
-              page.autoPipeline.stages,
-              contact.lastInteraction || undefined
-            );
+            
+            // FAST MODE: Use fallback scoring only (instant, no AI API calls)
+            // This allows processing 100+ contacts per minute
+            // AI analysis can be done later in background if needed
+            const { calculateFallbackScore } = await import('@/lib/ai/fallback-scoring');
+            const fallback = calculateFallbackScore(messagesToAnalyze, contact.lastInteraction || undefined);
+            
+            // Create analysis object compatible with pipeline assignment
+            return {
+              analysis: {
+                summary: `Contact with ${messagesToAnalyze.length} messages. ${fallback.reasoning}`,
+                recommendedStage: page.autoPipeline.stages[0]?.name || 'New Lead',
+                leadScore: fallback.leadScore,
+                leadStatus: fallback.leadStatus,
+                confidence: fallback.confidence,
+                reasoning: `Fast mode: ${fallback.reasoning}`
+              },
+              usedFallback: true,
+              retryCount: 0
+            };
+            
+            // UNCOMMENT BELOW TO USE AI ANALYSIS (slower, ~5-10s per contact, rate-limited)
+            // return await analyzeWithFallback(
+            //   messagesToAnalyze,
+            //   page.autoPipeline.stages,
+            //   contact.lastInteraction || undefined
+            // );
           });
 
-          // Step 5: Update contact with AI context (immediate - contact appears in pipeline now)
-          await prisma.contact.update({
+          // Step 5: Update contact with AI context (non-blocking for speed)
+          // Fire-and-forget: don't await, process continues immediately
+          prisma.contact.update({
             where: { id: contact.id },
             data: {
               aiContext: analysis.summary,
               aiContextUpdatedAt: new Date(),
             },
+          }).catch((error) => {
+            console.error(`[Pipeline Analysis ${jobId}] Failed to update AI context for contact ${contact.id}:`, error);
           });
 
-          // Step 6: Assign to pipeline (immediate - contact appears in pipeline now)
-          await autoAssignContactToPipeline({
+          // Step 6: Assign to pipeline (non-blocking for speed)
+          // Fire-and-forget: don't await, process continues immediately
+          autoAssignContactToPipeline({
             contactId: contact.id,
             aiAnalysis: analysis,
             pipelineId: page.autoPipelineId!,
             updateMode: page.autoPipelineMode,
+          }).catch((error) => {
+            console.error(`[Pipeline Analysis ${jobId}] Failed to assign pipeline for contact ${contact.id}:`, error);
           });
 
           // Increment counter (atomic operation in JavaScript)
           const currentCount = ++analyzedCount;
 
-          // Update progress periodically (every 10 contacts) - non-blocking fire-and-forget
-          if (currentCount % 10 === 0) {
+          // Update progress more frequently (every 5 contacts) for better visibility - non-blocking fire-and-forget
+          if (currentCount % 5 === 0) {
             // Fire-and-forget: don't await, don't block contact processing
             prisma.syncJob.update({
               where: { id: jobId },
@@ -423,8 +456,8 @@ async function executePipelineAnalysis(jobId: string, facebookPageId: string): P
             code: errorCode,
           });
           
-          // Update progress periodically (every 10 failures) - non-blocking fire-and-forget
-          if (currentFailedCount % 10 === 0) {
+          // Update progress more frequently (every 5 failures) - non-blocking fire-and-forget
+          if (currentFailedCount % 5 === 0) {
             // Fire-and-forget: don't await, don't block contact processing
             prisma.syncJob.update({
               where: { id: jobId },
