@@ -566,8 +566,8 @@ async function executeBackgroundSync(jobId: string, facebookPageId: string): Pro
                 let aiContext: string | null = null;
                 let aiAnalysis = null;
                 
-                if (shouldSkipAI) {
-                  console.log(`[Background Sync ${jobId}] Skipping AI analysis for ${task.participantId} - conversation unchanged since ${existing!.aiContextUpdatedAt.toISOString()}`);
+                if (shouldSkipAI && existing?.aiContextUpdatedAt) {
+                  console.log(`[Background Sync ${jobId}] Skipping AI analysis for ${task.participantId} - conversation unchanged since ${existing.aiContextUpdatedAt.toISOString()}`);
                   // Keep existing AI context, don't re-analyze
                   aiContext = null; // Will be preserved in update if not provided
                   aiAnalysis = null;
@@ -931,8 +931,8 @@ async function executeBackgroundSync(jobId: string, facebookPageId: string): Pro
                   let aiContext: string | null = null;
                   let aiAnalysis = null;
                   
-                  if (shouldSkipAI) {
-                    console.log(`[Background Sync ${jobId}] IG: Skipping AI analysis for ${task.participantId} - conversation unchanged since ${existing!.aiContextUpdatedAt.toISOString()}`);
+                  if (shouldSkipAI && existing?.aiContextUpdatedAt) {
+                    console.log(`[Background Sync ${jobId}] IG: Skipping AI analysis for ${task.participantId} - conversation unchanged since ${existing.aiContextUpdatedAt.toISOString()}`);
                     aiContext = null; // Will be preserved in update if not provided
                     aiAnalysis = null;
                   } else {
