@@ -128,13 +128,7 @@ class ApiKeyManager {
       // Invalidate cache to exclude this key
       await this.refreshActiveKeys();
       
-      // Fetch full record to get name for logging
-      const fullKey = await prisma.apiKey.findUnique({
-        where: { id: apiKey.id },
-        select: { id: true, name: true },
-      });
-      const keyName = fullKey?.name || 'unnamed';
-      console.log(`[ApiKeyManager] Marked key ${apiKey.id} (${keyName}) as rate-limited`);
+      console.log(`[ApiKeyManager] Marked key ${apiKey.id} as rate-limited`);
     } catch (error) {
       console.error('[ApiKeyManager] Error marking key as rate-limited:', error);
     }
