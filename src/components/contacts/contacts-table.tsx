@@ -702,16 +702,74 @@ export function ContactsTable({ contacts, tags, pipelines, isLoading }: Contacts
                 variant="outline"
                 size="sm"
                 onClick={async () => {
-                  // CRITICAL: Read selection directly at click time
-                  const currentSelection = new Set(selectedIdsRef.current);
-                  const selectionSize = currentSelection.size;
-                  const selectionArray = Array.from(currentSelection);
+                  // CRITICAL: Read selection from MULTIPLE sources to ensure accuracy
+                  // 1. Read from ref (most up-to-date)
+                  const refSelection = new Set(selectedIdsRef.current);
+                  // 2. Read from state
+                  const stateSelection = new Set(selectedIds);
+                  // 3. Read from DOM checkboxes (most reliable - actual UI state)
+                  const domSelection = new Set<string>();
+                  if (typeof document !== 'undefined') {
+                    const checkboxes = document.querySelectorAll<HTMLInputElement>(
+                      'input[type="checkbox"][aria-label^="Select"]:checked'
+                    );
+                    checkboxes.forEach((checkbox) => {
+                      // Try to find the contact ID from the row
+                      const row = checkbox.closest('tr');
+                      if (row) {
+                        const link = row.querySelector('a[href^="/contacts/"]');
+                        if (link) {
+                          const href = link.getAttribute('href');
+                          const contactId = href?.replace('/contacts/', '');
+                          if (contactId) {
+                            domSelection.add(contactId);
+                          }
+                        }
+                      }
+                    });
+                  }
                   
-                  console.log('[ContactsTable] 🔍 Analyze button clicked');
-                  console.log('  Selection size:', selectionSize);
-                  console.log('  Selected IDs:', selectionArray);
+                  // Use the intersection of all three sources (most conservative)
+                  const finalSelection = new Set<string>();
+                  const allSources = [refSelection, stateSelection, domSelection];
+                  
+                  // If any source has only 1, use that
+                  if (refSelection.size === 1) {
+                    refSelection.forEach(id => finalSelection.add(id));
+                  } else if (stateSelection.size === 1) {
+                    stateSelection.forEach(id => finalSelection.add(id));
+                  } else if (domSelection.size === 1) {
+                    domSelection.forEach(id => finalSelection.add(id));
+                  } else {
+                    // Use the smallest selection (most conservative)
+                    const smallest = [refSelection, stateSelection, domSelection].reduce((a, b) => 
+                      a.size <= b.size ? a : b
+                    );
+                    smallest.forEach(id => finalSelection.add(id));
+                  }
+                  
+                  const selectionSize = finalSelection.size;
+                  const selectionArray = Array.from(finalSelection);
+                  
+                  console.log('[ContactsTable] 🔍 Analyze button clicked - MULTI-SOURCE CHECK');
+                  console.log('  Ref selection size:', refSelection.size, Array.from(refSelection));
+                  console.log('  State selection size:', stateSelection.size, Array.from(stateSelection));
+                  console.log('  DOM selection size:', domSelection.size, Array.from(domSelection));
+                  console.log('  FINAL selection size:', selectionSize);
+                  console.log('  FINAL selected IDs:', selectionArray);
                   console.log('  selectAllPages:', selectAllPages);
                   console.log('  allContactIds length:', allContactIds.length);
+                  
+                  // CRITICAL: If final selection is 1, force clear all "select all" flags
+                  if (selectionSize === 1) {
+                    console.log('[ContactsTable] 🔒 SINGLE SELECTION DETECTED - Clearing all flags');
+                    setSelectAllPages(false);
+                    setAllContactIds([]);
+                    setTotalContactsCount(0);
+                    // Update ref and state to match
+                    setSelectedIds(finalSelection);
+                    selectedIdsRef.current = finalSelection;
+                  }
                   
                   // Safety check: If only 1 is selected but flags suggest more, warn user
                   if (selectionSize === 1 && (selectAllPages || allContactIds.length > 1)) {
@@ -730,8 +788,21 @@ export function ContactsTable({ contacts, tags, pipelines, isLoading }: Contacts
                     setTotalContactsCount(0);
                   }
                   
-                  // Proceed with analysis
-                  await handleBulkAction('analyze');
+                  // Proceed with analysis using the final selection
+                  // Temporarily update state to ensure handleBulkAction uses correct selection
+                  const originalSelection = selectedIds;
+                  setSelectedIds(finalSelection);
+                  selectedIdsRef.current = finalSelection;
+                  
+                  try {
+                    await handleBulkAction('analyze');
+                  } finally {
+                    // Restore original selection (in case it was different)
+                    if (originalSelection.size !== finalSelection.size) {
+                      setSelectedIds(originalSelection);
+                      selectedIdsRef.current = originalSelection;
+                    }
+                  }
                 }}
                 disabled={bulkActionLoading}
                 className="bg-purple-50 hover:bg-purple-100 dark:bg-purple-950/20 dark:hover:bg-purple-950/40"
