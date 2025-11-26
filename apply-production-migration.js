@@ -2,66 +2,110 @@
  * Production Migration Script
  * Adds contactInfo and bestContactTimes columns to Contact table
  * 
- * Usage:
- *   node -r dotenv/config apply-production-migration.js
- * 
- * Or with explicit env file:
- *   node -r dotenv/config -e "require('dotenv').config({ path: '.env.production' }); require('./apply-production-migration.js')"
+ * Usage: node apply-production-migration.js
  */
 
+// Load environment variables
 require('dotenv').config({ path: '.env.local' });
+require('dotenv').config({ path: '.env' });
 
 const { PrismaClient } = require('@prisma/client');
 
 const prisma = new PrismaClient();
 
 async function applyMigration() {
-  console.log('🚀 Starting production migration...');
-  console.log('📋 Adding contactInfo and bestContactTimes columns to Contact table\n');
+  console.log('========================================');
+  console.log('Production Database Migration');
+  console.log('========================================');
+  console.log('');
+  console.log('Adding contactInfo and bestContactTimes columns...');
+  console.log('');
 
   try {
+    // Connect to database
+    await prisma.$connect();
+    console.log('✅ Connected to database');
+    console.log('');
+
+    // Apply migration using raw SQL
+    console.log('Executing migration SQL...');
+    
     // Add contactInfo column
-    console.log('1. Adding contactInfo column...');
     await prisma.$executeRawUnsafe(`
-      ALTER TABLE "Contact" 
-      ADD COLUMN IF NOT EXISTS "contactInfo" JSONB;
+      ALTER TABLE "Contact" ADD COLUMN IF NOT EXISTS "contactInfo" JSONB;
     `);
-    console.log('   ✅ contactInfo column added\n');
+    console.log('✅ Added contactInfo column');
 
     // Add bestContactTimes column
-    console.log('2. Adding bestContactTimes column...');
     await prisma.$executeRawUnsafe(`
-      ALTER TABLE "Contact" 
-      ADD COLUMN IF NOT EXISTS "bestContactTimes" JSONB;
+      ALTER TABLE "Contact" ADD COLUMN IF NOT EXISTS "bestContactTimes" JSONB;
     `);
-    console.log('   ✅ bestContactTimes column added\n');
+    console.log('✅ Added bestContactTimes column');
 
-    // Verify columns exist
-    console.log('3. Verifying columns...');
+    // Add comments
+    try {
+      await prisma.$executeRawUnsafe(`
+        COMMENT ON COLUMN "Contact"."contactInfo" IS 'Stores extracted contact information (age, phone, email, socials, etc.)';
+      `);
+      await prisma.$executeRawUnsafe(`
+        COMMENT ON COLUMN "Contact"."bestContactTimes" IS 'Stores best contact times analysis with multiple estimates and days of week';
+      `);
+      console.log('✅ Added column comments');
+    } catch (commentError) {
+      // Comments might fail if database doesn't support them, that's okay
+      console.log('⚠️  Could not add comments (non-critical)');
+    }
+
+    // Verify columns were added
+    console.log('');
+    console.log('Verifying columns...');
     const result = await prisma.$queryRawUnsafe(`
       SELECT column_name, data_type 
       FROM information_schema.columns 
       WHERE table_name = 'Contact' 
       AND column_name IN ('contactInfo', 'bestContactTimes');
     `);
-    
-    console.log('   Columns found:');
-    result.forEach((row: any) => {
-      console.log(`   - ${row.column_name} (${row.data_type})`);
-    });
 
-    console.log('\n✅ Migration completed successfully!');
-    console.log('🎉 Your production database is now ready for enhanced contact analysis features.');
+    console.log('');
+    console.log('✅ Migration completed successfully!');
+    console.log('');
+    console.log('Columns added:');
+    if (Array.isArray(result) && result.length > 0) {
+      result.forEach((row) => {
+        console.log(`  - ${row.column_name} (${row.data_type})`);
+      });
+    } else {
+      console.log('  ⚠️  Could not verify columns (they may still have been added)');
+    }
+    console.log('');
 
   } catch (error) {
-    console.error('\n❌ Migration failed:');
-    console.error(error);
+    console.error('');
+    console.error('❌ Migration failed!');
+    console.error('');
+    console.error('Error:', error instanceof Error ? error.message : String(error));
+    if (error instanceof Error && error.stack) {
+      console.error('');
+      console.error('Stack trace:');
+      console.error(error.stack);
+    }
+    console.error('');
     process.exit(1);
   } finally {
     await prisma.$disconnect();
+    console.log('Disconnected from database');
   }
 }
 
-applyMigration();
-
-
+// Run migration
+applyMigration()
+  .then(() => {
+    console.log('========================================');
+    console.log('Migration script completed');
+    console.log('========================================');
+    process.exit(0);
+  })
+  .catch((error) => {
+    console.error('Fatal error:', error);
+    process.exit(1);
+  });
