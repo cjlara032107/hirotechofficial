@@ -727,18 +727,41 @@ export async function startInstantSync(
 
     console.log(`[Instant Sync ${syncJob.id}] 🚀 Starting instant sync...`);
 
-    // Start the sync process asynchronously (don't await)
-    // For Vercel serverless, we need to ensure the promise chain starts before response
-    // Use immediate execution with proper error handling
-    (async () => {
+    // CRITICAL: Start the sync process asynchronously and ensure it begins executing
+    // For Vercel serverless, we must ensure the promise is actively executing before returning
+    // The IIFE pattern ensures the promise starts immediately
+    const backgroundPromise = (async () => {
       try {
-        console.log(`[Instant Sync ${syncJob.id}] 🚀 Starting background execution immediately...`);
+        // CRITICAL: Log immediately to confirm promise is executing
+        console.log(`[Instant Sync ${syncJob.id}] 📍 Inside background promise - starting execution NOW`);
+        
+        // CRITICAL: Start the first async operation immediately
+        // This ensures the promise is actively executing, not just created
+        await new Promise(resolve => setTimeout(resolve, 0)); // Yield to event loop
+        console.log(`[Instant Sync ${syncJob.id}] ✅ Promise is executing, starting sync...`);
+        
+        // Now call the actual sync function
         await executeInstantSync(syncJob.id, facebookPageId, userId);
+        console.log(`[Instant Sync ${syncJob.id}] ✅ Background execution completed`);
       } catch (error) {
-        console.error(`[Instant Sync ${syncJob.id}] ❌ Background execution failed:`, error);
+        console.error(`[Instant Sync ${syncJob.id}] ❌ CRITICAL ERROR:`, error);
+        console.error(`[Instant Sync ${syncJob.id}] Error stack:`, error instanceof Error ? error.stack : 'No stack trace');
         // Error handling is done in executeInstantSync
       }
-    })(); // Immediately invoked async function
+    })(); // Immediately invoked async function - starts executing NOW
+    
+    // CRITICAL: In Vercel, we need to keep the promise alive
+    // Store it globally to prevent garbage collection
+    if (typeof globalThis !== 'undefined') {
+      // Store promise to keep it alive
+      (globalThis as any).__activeSyncPromises = (globalThis as any).__activeSyncPromises || new Set();
+      (globalThis as any).__activeSyncPromises.add(backgroundPromise);
+      
+      // Clean up when done
+      backgroundPromise.finally(() => {
+        (globalThis as any).__activeSyncPromises?.delete(backgroundPromise);
+      });
+    }
 
     return {
       success: true,
