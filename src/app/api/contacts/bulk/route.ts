@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { auth } from '@/auth';
 import { prisma } from '@/lib/db';
 import { analyzeSelectedContacts } from '@/lib/facebook/analyze-selected-contacts';
+import { startBackgroundAnalysis } from '@/lib/facebook/background-analysis';
 import { validateSession } from '@/lib/api/validate-session';
 
 export async function POST(request: NextRequest) {
@@ -31,6 +32,9 @@ export async function POST(request: NextRequest) {
         { status: 400 }
       );
     }
+
+    // CRITICAL: Log exactly what contact IDs we received
+    console.log(`[Bulk API] Received ${action} action for ${contactIds.length} contact(s):`, contactIds);
 
     // Verify all contacts belong to user's organization
     let contacts;
@@ -235,18 +239,21 @@ export async function POST(request: NextRequest) {
         break;
 
       case 'analyze':
-        // Analyze selected contacts with AI and assign to pipeline
+        // Start background analysis for selected contacts
         try {
-          const analyzeResult = await analyzeSelectedContacts(
+          console.log(`[Bulk API] Starting analysis for ${contactIds.length} contact(s):`, contactIds);
+          const backgroundResult = await startBackgroundAnalysis(
             contactIds,
-            validatedSession.user.organizationId
+            validatedSession.user.organizationId,
+            validatedSession.user.id
           );
+          console.log(`[Bulk API] Analysis started with jobId: ${backgroundResult.jobId}`);
 
           result = {
             success: true,
-            analyzed: analyzeResult.successCount,
-            failed: analyzeResult.failedCount,
-            errors: analyzeResult.errors,
+            jobId: backgroundResult.jobId,
+            message: backgroundResult.message,
+            analyzing: true, // Indicates this is a background job
           };
         } catch (analyzeError: any) {
           // Handle database connection errors during analysis

@@ -321,11 +321,22 @@ export function ContactsTable({ contacts, tags, pipelines, isLoading }: Contacts
     }
     setSelectedIds(newSelected);
     
-    // Reset "select all pages" if user manually deselects
-    if (selectAllPages && !checked) {
-      setSelectAllPages(false);
-      setAllContactIds([]);
-      setTotalContactsCount(0);
+    // CRITICAL FIX: Reset "select all pages" if user manually changes selection
+    // This ensures that if selectAllPages was true, any manual selection change resets it
+    if (selectAllPages) {
+      // Check if the new selection matches allContactIds
+      const newSelectedArray = Array.from(newSelected);
+      const matchesAllPages = 
+        newSelectedArray.length === allContactIds.length &&
+        newSelectedArray.every(id => allContactIds.includes(id));
+      
+      // If selection doesn't match "all pages" anymore, reset the flag
+      if (!matchesAllPages) {
+        console.log('[ContactsTable] Manual selection change detected, resetting selectAllPages');
+        setSelectAllPages(false);
+        setAllContactIds([]);
+        setTotalContactsCount(0);
+      }
     }
   }
 
@@ -335,6 +346,21 @@ export function ContactsTable({ contacts, tags, pipelines, isLoading }: Contacts
   ) {
     if (selectedIds.size === 0) return;
 
+    // CRITICAL FIX: Ensure we only use manually selected IDs, not "select all pages" IDs
+    // If selectAllPages is true but selectedIds doesn't match allContactIds, reset selectAllPages
+    const contactIdsToSend = Array.from(selectedIds);
+    
+    // Safety check: if selectAllPages is true but selectedIds size doesn't match totalContactsCount,
+    // it means user manually changed selection, so reset selectAllPages
+    if (selectAllPages && contactIdsToSend.length !== totalContactsCount) {
+      console.warn('[ContactsTable] selectAllPages was true but selection changed, resetting state');
+      setSelectAllPages(false);
+      setAllContactIds([]);
+      setTotalContactsCount(0);
+    }
+    
+    console.log(`[ContactsTable] Sending bulk action "${action}" for ${contactIdsToSend.length} contact(s):`, contactIdsToSend);
+
     try {
       setBulkActionLoading(true);
       const response = await fetch('/api/contacts/bulk', {
@@ -342,7 +368,7 @@ export function ContactsTable({ contacts, tags, pipelines, isLoading }: Contacts
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           action,
-          contactIds: Array.from(selectedIds),
+          contactIds: contactIdsToSend,
           data,
         }),
       });
@@ -357,14 +383,29 @@ export function ContactsTable({ contacts, tags, pipelines, isLoading }: Contacts
 
       if (response.ok) {
         if (action === 'analyze') {
-          const analyzed = result.analyzed || 0;
-          const failed = result.failed || 0;
-          if (analyzed > 0) {
-            toast.success(
-              `Successfully analyzed ${analyzed} contact(s)${failed > 0 ? ` (${failed} failed)` : ''}`
-            );
+          // Check if this is a background job
+          if (result.analyzing && result.jobId) {
+            toast.info('Analysis started in background', {
+              description: 'You can continue working while contacts are analyzed',
+              duration: 3000,
+            });
+            // Store job ID for indicator
+            if (typeof window !== 'undefined') {
+              sessionStorage.setItem('activeAnalysisJobId', result.jobId);
+              // Trigger custom event to show indicator
+              window.dispatchEvent(new CustomEvent('analysisStarted', { detail: { jobId: result.jobId } }));
+            }
           } else {
-            toast.error(`Failed to analyze contacts${failed > 0 ? `: ${failed} failed` : ''}`);
+            // Legacy synchronous response
+            const analyzed = result.analyzed || 0;
+            const failed = result.failed || 0;
+            if (analyzed > 0) {
+              toast.success(
+                `Successfully analyzed ${analyzed} contact(s)${failed > 0 ? ` (${failed} failed)` : ''}`
+              );
+            } else {
+              toast.error(`Failed to analyze contacts${failed > 0 ? `: ${failed} failed` : ''}`);
+            }
           }
         } else {
           toast.success(
