@@ -119,13 +119,23 @@ export async function analyzeSelectedContacts(
     console.log(`[Analyze Selected] Contact ID to fetch: ${contactIds[0]}`);
   }
 
-  // Fetch contacts with their Facebook page info
+  // Fetch contacts with their Facebook page info (including contactInfo for optimization)
   const contacts = await prisma.contact.findMany({
     where: {
       id: { in: contactIds },
       organizationId,
     },
-    include: {
+    select: {
+      id: true,
+      messengerPSID: true,
+      instagramSID: true,
+      firstName: true,
+      lastName: true,
+      lastInteraction: true,
+      contactInfo: true,
+      contactInfoUpdatedAt: true,
+      aiContext: true,
+      aiContextUpdatedAt: true,
       facebookPage: {
         include: {
           autoPipeline: {
@@ -279,9 +289,10 @@ export async function analyzeSelectedContacts(
     }
 
     // Process all contacts continuously - each contact completes independently
-    // Increased concurrency for maximum speed
-    const conversationFetchLimiter = new ConcurrencyLimiter(100); // Very high concurrency for fetching
-    const analysisLimiter = new ConcurrencyLimiter(100); // Very high concurrency for AI analysis
+    // Optimized concurrency: Higher for fetching, lower for AI to prevent rate limits
+    const conversationFetchLimiter = new ConcurrencyLimiter(200); // Very high concurrency for fetching (no API limits)
+    const analysisLimiter = new ConcurrencyLimiter(50); // Lower for AI analysis to prevent rate limit exhaustion
+    const contactInfoLimiter = new ConcurrencyLimiter(30); // Lower for contact info extraction (separate API calls)
 
     console.log(`[Analyze Selected] Processing ${pageContacts.length} contacts continuously...`);
     batchStartTime = Date.now();
@@ -342,31 +353,38 @@ export async function analyzeSelectedContacts(
           }
 
           // Step 3.5: Extract contact information and analyze reply times (parallel)
+          // OPTIMIZATION: Skip contact info extraction if contact already has recent data (saves 5-10s per contact)
+          const shouldExtractContactInfo = !contact.contactInfo || 
+            !contact.contactInfoUpdatedAt || 
+            (Date.now() - new Date(contact.contactInfoUpdatedAt).getTime()) > 7 * 24 * 60 * 60 * 1000; // 7 days
+          
           const [contactInfo, replyTimeAnalysis] = await Promise.all([
-            // Extract comprehensive contact information
-            analysisLimiter.execute(async () => {
-              try {
-                const info = await extractContactInfo(messagesToAnalyze);
-                if (info && Object.keys(info).length > 0) {
-                  console.log(`[Analyze Selected] ✅ Successfully extracted contact info for ${contact.id}`);
-                  const extractedFields = Object.keys(info).filter(key => {
-                    const value = info[key as keyof typeof info];
-                    if (Array.isArray(value)) return value.length > 0;
-                    if (typeof value === 'object' && value !== null) return Object.keys(value).length > 0;
-                    return value !== null && value !== undefined;
-                  });
-                  if (extractedFields.length > 0) {
-                    console.log(`[Analyze Selected] Extracted fields: ${extractedFields.join(', ')}`);
+            // Extract comprehensive contact information (only if needed)
+            shouldExtractContactInfo 
+              ? contactInfoLimiter.execute(async () => {
+                  try {
+                    const info = await extractContactInfo(messagesToAnalyze);
+                    if (info && Object.keys(info).length > 0) {
+                      console.log(`[Analyze Selected] ✅ Successfully extracted contact info for ${contact.id}`);
+                      const extractedFields = Object.keys(info).filter(key => {
+                        const value = info[key as keyof typeof info];
+                        if (Array.isArray(value)) return value.length > 0;
+                        if (typeof value === 'object' && value !== null) return Object.keys(value).length > 0;
+                        return value !== null && value !== undefined;
+                      });
+                      if (extractedFields.length > 0) {
+                        console.log(`[Analyze Selected] Extracted fields: ${extractedFields.join(', ')}`);
+                      }
+                    }
+                    return info;
+                  } catch (error) {
+                    const errorMessage = error instanceof Error ? error.message : String(error);
+                    console.warn(`[Analyze Selected] Failed to extract contact info for ${contact.id}:`, errorMessage);
+                    // Don't fail the entire analysis if contact info extraction fails
+                    return null;
                   }
-                }
-                return info;
-              } catch (error) {
-                const errorMessage = error instanceof Error ? error.message : String(error);
-                console.warn(`[Analyze Selected] Failed to extract contact info for ${contact.id}:`, errorMessage);
-                // Don't fail the entire analysis if contact info extraction fails
-                return null;
-              }
-            }),
+                })
+              : Promise.resolve(null), // Skip if already has recent data
             // Analyze reply times for best contact times (synchronous, no API calls)
             (() => {
               try {
@@ -385,36 +403,57 @@ export async function analyzeSelectedContacts(
           ]);
 
           // Step 4: Analyze with AI (concurrency limited)
+          // OPTIMIZATION: Skip AI analysis if contact already has recent analysis (saves 5-10s per contact)
+          const shouldAnalyze = !contact.aiContext || 
+            !contact.aiContextUpdatedAt || 
+            (Date.now() - new Date(contact.aiContextUpdatedAt).getTime()) > 7 * 24 * 60 * 60 * 1000; // 7 days
+          
           let analysis: { summary: string; leadScore?: number; recommendedStage?: string; leadStatus?: string; confidence?: number; reasoning?: string } | null = null;
           
-          if (hasAutoPipeline && page.autoPipeline) {
-            // Use pipeline-based analysis with stage recommendation
-            const result = await analysisLimiter.execute(async () => {
-              return await analyzeWithFallback(
-                messagesToAnalyze,
-                page.autoPipeline!.stages,
-                contact.lastInteraction || undefined
-              );
-            });
-            analysis = result.analysis;
-          } else {
-            // Use simple analysis without pipeline
-            const summary = await analysisLimiter.execute(async () => {
-              return await analyzeConversation(messagesToAnalyze);
-            });
-            
-            if (!summary) {
-              throw new Error('AI analysis returned no summary');
+          if (shouldAnalyze) {
+            if (hasAutoPipeline && page.autoPipeline) {
+              // Use pipeline-based analysis with stage recommendation
+              const result = await analysisLimiter.execute(async () => {
+                return await analyzeWithFallback(
+                  messagesToAnalyze,
+                  page.autoPipeline!.stages,
+                  contact.lastInteraction || undefined
+                );
+              });
+              analysis = result.analysis;
+            } else {
+              // Use simple analysis without pipeline
+              const summary = await analysisLimiter.execute(async () => {
+                return await analyzeConversation(messagesToAnalyze);
+              });
+              
+              if (!summary) {
+                throw new Error('AI analysis returned no summary');
+              }
+              
+              analysis = {
+                summary,
+                leadScore: 50, // Default score when no pipeline
+                recommendedStage: undefined,
+                leadStatus: undefined,
+                confidence: undefined,
+                reasoning: undefined,
+              };
             }
-            
-            analysis = {
-              summary,
-              leadScore: 50, // Default score when no pipeline
-              recommendedStage: undefined,
-              leadStatus: undefined,
-              confidence: undefined,
-              reasoning: undefined,
-            };
+          } else {
+            // Use existing AI context (skip slow AI API call)
+            console.log(`[Analyze Selected] ⚡ Skipping AI analysis for ${contact.id} - has recent analysis (${contact.aiContextUpdatedAt})`);
+            if (contact.aiContext) {
+              // Parse existing context or create minimal analysis
+              analysis = {
+                summary: typeof contact.aiContext === 'string' ? contact.aiContext : 'Existing analysis',
+                leadScore: 50,
+                recommendedStage: undefined,
+                leadStatus: undefined,
+                confidence: 80,
+                reasoning: 'Using existing AI context',
+              };
+            }
           }
           
           if (!analysis) {

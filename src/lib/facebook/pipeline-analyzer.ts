@@ -119,6 +119,79 @@ async function isJobCancelled(jobId: string): Promise<boolean> {
 }
 
 /**
+ * Process batch of contact updates (bulk database operations for speed)
+ */
+async function processBatch(
+  batch: Array<{ contactId: string; aiContext: string; aiAnalysis: any }>,
+  jobId: string,
+  pipelineId: string,
+  updateMode: string
+): Promise<void> {
+  try {
+    // Bulk update AI context for all contacts in batch (single transaction)
+    await prisma.$transaction(
+      async (tx) => {
+        await Promise.all(
+          batch.map((item) =>
+            tx.contact.update({
+              where: { id: item.contactId },
+              data: {
+                aiContext: item.aiContext,
+                aiContextUpdatedAt: new Date(),
+              },
+            })
+          )
+        );
+      },
+      { timeout: 30000 } // 30 second timeout
+    );
+
+    // Assign to pipeline in parallel (but limited to prevent pool exhaustion)
+    const pipelineLimiter = new ConcurrencyLimiter(20);
+    await Promise.all(
+      batch.map((item) =>
+        pipelineLimiter.execute(async () => {
+          try {
+            const { autoAssignContactToPipeline } = await import('@/lib/pipelines/auto-assign');
+            await autoAssignContactToPipeline({
+              contactId: item.contactId,
+              aiAnalysis: item.aiAnalysis,
+              pipelineId,
+              updateMode: updateMode as any,
+            });
+          } catch (error) {
+            console.error(`[Pipeline Analysis ${jobId}] Failed to assign pipeline for contact ${item.contactId}:`, error);
+          }
+        })
+      )
+    );
+  } catch (error) {
+    console.error(`[Pipeline Analysis ${jobId}] Batch processing error:`, error);
+    // Fallback: process individually if batch fails
+    for (const item of batch) {
+      try {
+        await prisma.contact.update({
+          where: { id: item.contactId },
+          data: {
+            aiContext: item.aiContext,
+            aiContextUpdatedAt: new Date(),
+          },
+        });
+        const { autoAssignContactToPipeline } = await import('@/lib/pipelines/auto-assign');
+        await autoAssignContactToPipeline({
+          contactId: item.contactId,
+          aiAnalysis: item.aiAnalysis,
+          pipelineId,
+          updateMode: updateMode as any,
+        });
+      } catch (itemError) {
+        console.error(`[Pipeline Analysis ${jobId}] Failed to process contact ${item.contactId}:`, itemError);
+      }
+    }
+  }
+}
+
+/**
  * Executes the pipeline analysis - fetches conversations on-demand and analyzes contacts
  */
 async function executePipelineAnalysis(jobId: string, facebookPageId: string): Promise<void> {
@@ -283,14 +356,20 @@ async function executePipelineAnalysis(jobId: string, facebookPageId: string): P
     }
 
     // Process all contacts continuously - each contact completes independently
-    // Optimized concurrency: 50 concurrent operations to match database connection pool (20 connections)
-    // With connection pooling, 50 concurrent operations can share 20 connections efficiently
-    // This prevents connection pool exhaustion while maintaining good performance
-    const conversationFetchLimiter = new ConcurrencyLimiter(50); // Limit API calls
-    const analysisLimiter = new ConcurrencyLimiter(50); // Limit AI analysis
-    const dbUpdateLimiter = new ConcurrencyLimiter(20); // Limit database operations to match pool size
-
+    // Increased concurrency for non-DB operations (message fetching, analysis)
+    // Database operations are batched separately to prevent pool exhaustion
+    const conversationFetchLimiter = new ConcurrencyLimiter(100); // Higher concurrency for API calls
+    const analysisLimiter = new ConcurrencyLimiter(100); // Higher concurrency for analysis
+    
     console.log(`[Pipeline Analysis ${jobId}] Processing ${contactsWithoutPipeline.length} contacts continuously...`);
+
+    // Batch database updates for efficiency (process in batches of 50)
+    const BATCH_SIZE = 50;
+    const updateQueue: Array<{
+      contactId: string;
+      aiContext: string;
+      aiAnalysis: any;
+    }> = [];
 
     // Process all contacts in one continuous flow
     await Promise.all(
@@ -405,34 +484,21 @@ async function executePipelineAnalysis(jobId: string, facebookPageId: string): P
             // );
           });
 
-          // Step 5: Update contact with AI context (rate-limited to prevent pool exhaustion)
-          await dbUpdateLimiter.execute(async () => {
-            try {
-              await prisma.contact.update({
-                where: { id: contact.id },
-                data: {
-                  aiContext: analysis.summary,
-                  aiContextUpdatedAt: new Date(),
-                },
-              });
-            } catch (error) {
-              console.error(`[Pipeline Analysis ${jobId}] Failed to update AI context for contact ${contact.id}:`, error);
-            }
+          // Step 5 & 6: Queue for batch database update (much faster than individual updates)
+          updateQueue.push({
+            contactId: contact.id,
+            aiContext: analysis.summary,
+            aiAnalysis: analysis,
           });
 
-          // Step 6: Assign to pipeline (rate-limited to prevent pool exhaustion)
-          await dbUpdateLimiter.execute(async () => {
-            try {
-              await autoAssignContactToPipeline({
-                contactId: contact.id,
-                aiAnalysis: analysis,
-                pipelineId: page.autoPipelineId!,
-                updateMode: page.autoPipelineMode,
-              });
-            } catch (error) {
-              console.error(`[Pipeline Analysis ${jobId}] Failed to assign pipeline for contact ${contact.id}:`, error);
-            }
-          });
+          // Process batch when queue reaches BATCH_SIZE
+          if (updateQueue.length >= BATCH_SIZE) {
+            const batch = updateQueue.splice(0, BATCH_SIZE);
+            // Fire-and-forget batch processing (non-blocking)
+            processBatch(batch, jobId, page.autoPipelineId!, page.autoPipelineMode).catch((error) => {
+              console.error(`[Pipeline Analysis ${jobId}] Batch processing error:`, error);
+            });
+          }
 
           // Increment counter (atomic operation in JavaScript)
           const currentCount = ++analyzedCount;
@@ -487,6 +553,12 @@ async function executePipelineAnalysis(jobId: string, facebookPageId: string): P
         }
       })
     );
+
+    // Process remaining items in queue
+    if (updateQueue.length > 0) {
+      console.log(`[Pipeline Analysis ${jobId}] Processing final batch of ${updateQueue.length} contacts...`);
+      await processBatch(updateQueue, jobId, page.autoPipelineId!, page.autoPipelineMode);
+    }
 
     // Update job with final results
     await prisma.syncJob.update({
