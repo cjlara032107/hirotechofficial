@@ -50,10 +50,18 @@ export async function extractContactInfo(
   retries = 2
 ): Promise<ContactInfo | null> {
   try {
-    const apiKey = await apiKeyManager.getNextKey();
+    // CRITICAL: Try database keys first, then fall back to environment variables
+    // This ensures contactInfo extraction works even if database keys are unavailable
+    let apiKey = await apiKeyManager.getNextKey();
     if (!apiKey) {
-      console.warn('[Contact Info Extraction] No API key available');
-      return null;
+      // Fall back to environment variables if no database keys available
+      apiKey = process.env.NVIDIA_API_KEY || process.env.GOOGLE_AI_API_KEY || null;
+      if (apiKey) {
+        console.log('[Contact Info Extraction] Using fallback API key from environment variables');
+      } else {
+        console.warn('[Contact Info Extraction] No API key available (database or environment)');
+        return null;
+      }
     }
 
     const openai = createNvidiaClient(apiKey);
