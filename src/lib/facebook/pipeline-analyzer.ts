@@ -381,9 +381,9 @@ async function executePipelineAnalysis(jobId: string, facebookPageId: string): P
     const pendingBatches: Array<Array<{ contactId: string; aiContext: string; aiAnalysis: any }>> = [];
     
     async function processBatchSequentially() {
-      // If already processing, wait for it to complete
+      // If already processing, just queue and return (the existing processor will handle it)
       if (batchProcessorPromise) {
-        await batchProcessorPromise;
+        return; // Don't create a new processor, the existing one will process all batches
       }
       
       // Start processing if there are pending batches
@@ -401,7 +401,6 @@ async function executePipelineAnalysis(jobId: string, facebookPageId: string): P
           }
           batchProcessorPromise = null;
         })();
-        await batchProcessorPromise;
       }
     }
 
