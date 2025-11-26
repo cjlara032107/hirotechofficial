@@ -4,7 +4,7 @@ import { FacebookClient, FacebookApiError } from './client';
 import { analyzeWithFallback } from '@/lib/ai/enhanced-analysis';
 import { autoAssignContactToPipeline } from '@/lib/pipelines/auto-assign';
 import { applyStageScoreRanges } from '@/lib/pipelines/stage-analyzer';
-import { withDbRetry } from '@/lib/db-retry';
+import { withRetry } from '@/lib/db-retry';
 
 interface PipelineAnalysisResult {
   success: boolean;
@@ -380,7 +380,7 @@ async function processBatch(
 async function executePipelineAnalysis(jobId: string, facebookPageId: string): Promise<void> {
   try {
     // Update job status to in progress (with retry)
-    await withDbRetry(() => prisma.syncJob.update({
+    await withRetry(() => prisma.syncJob.update({
       where: { id: jobId },
       data: {
         status: 'IN_PROGRESS',
@@ -388,7 +388,7 @@ async function executePipelineAnalysis(jobId: string, facebookPageId: string): P
       },
     }));
 
-    const page = await withDbRetry(() => prisma.facebookPage.findUnique({
+    const page = await withRetry(() => prisma.facebookPage.findUnique({
       where: { id: facebookPageId },
       include: {
         autoPipeline: {
@@ -445,7 +445,7 @@ async function executePipelineAnalysis(jobId: string, facebookPageId: string): P
     }
 
     // Query contacts without pipelineId for this page (with retry)
-    const contactsWithoutPipeline = await withDbRetry(() => prisma.contact.findMany({
+    const contactsWithoutPipeline = await withRetry(() => prisma.contact.findMany({
       where: {
         facebookPageId: page.id,
         pipelineId: null,
@@ -467,7 +467,7 @@ async function executePipelineAnalysis(jobId: string, facebookPageId: string): P
     console.log(`[Pipeline Analysis ${jobId}] Found ${contactsWithoutPipeline.length} contacts without pipeline`);
 
     if (contactsWithoutPipeline.length === 0) {
-      await withDbRetry(() => prisma.syncJob.update({
+      await withRetry(() => prisma.syncJob.update({
         where: { id: jobId },
         data: {
           status: 'COMPLETED',
