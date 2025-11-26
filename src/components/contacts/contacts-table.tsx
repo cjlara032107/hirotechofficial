@@ -383,45 +383,47 @@ export function ContactsTable({ contacts, tags, pipelines, isLoading }: Contacts
     action: string,
     data?: { tags?: string[]; stageId?: string }
   ) {
-    // CRITICAL: Get selection from BOTH ref and state to ensure accuracy
-    const refSelectedIds = selectedIdsRef.current;
-    const stateSelectedIds = selectedIds;
+    // CRITICAL: Read selection DIRECTLY from ref (updated synchronously) at the moment of click
+    // This avoids any React state batching or closure issues
+    const currentSelection = new Set(selectedIdsRef.current);
+    const currentSelectionArray = Array.from(currentSelection);
     
     console.log('[ContactsTable] 🔍 DEBUG: Selection check before bulk action');
-    console.log('  Ref selection size:', refSelectedIds.size);
-    console.log('  State selection size:', stateSelectedIds.size);
-    console.log('  Ref IDs:', Array.from(refSelectedIds));
-    console.log('  State IDs:', Array.from(stateSelectedIds));
+    console.log('  Current selection size (from ref):', currentSelection.size);
+    console.log('  Current selection IDs:', currentSelectionArray);
+    console.log('  State selectedIds size:', selectedIds.size);
     console.log('  selectAllPages:', selectAllPages);
     console.log('  totalContactsCount:', totalContactsCount);
     console.log('  allContactIds length:', allContactIds.length);
     
-    // CRITICAL: ALWAYS use the actual selectedIds state - never trust flags or refs
-    // This is the single source of truth for what the user actually selected
-    let contactIdsToSend = Array.from(stateSelectedIds);
-    
-    // If ref and state don't match, use the smaller one (more conservative)
-    if (refSelectedIds.size !== stateSelectedIds.size) {
-      console.warn('[ContactsTable] ⚠️ Ref and state mismatch! Using state as source of truth.');
-      contactIdsToSend = Array.from(stateSelectedIds);
-    }
+    // CRITICAL: Use ONLY the ref selection - it's the most up-to-date
+    let contactIdsToSend = currentSelectionArray;
     
     // CRITICAL SAFETY: If user only selected 1 contact, ensure we ONLY send that 1 contact
-    // This prevents any edge cases where allContactIds might leak through
-    if (stateSelectedIds.size === 1) {
-      const singleId = Array.from(stateSelectedIds)[0];
+    // This is a hard stop - no exceptions
+    if (currentSelection.size === 1) {
+      const singleId = currentSelectionArray[0];
       console.log('[ContactsTable] 🔒 SINGLE SELECTION MODE: User selected exactly 1 contact');
       console.log(`  Contact ID: ${singleId}`);
-      console.log(`  Ignoring allContactIds (${allContactIds.length} contacts) and selectAllPages flag`);
-      // Force reset any "select all" state
+      console.log(`  IGNORING allContactIds (${allContactIds.length} contacts) and selectAllPages flag`);
+      
+      // Force reset any "select all" state immediately
       if (selectAllPages || allContactIds.length > 0) {
         console.warn('[ContactsTable] 🚨 Clearing stale selectAllPages state for single selection');
         setSelectAllPages(false);
         setAllContactIds([]);
         setTotalContactsCount(0);
       }
-      // Ensure we ONLY send the single selected contact
+      
+      // HARD LIMIT: Only send the single selected contact, nothing else
       contactIdsToSend = [singleId];
+      
+      // Double-check: if somehow we have more than 1, force it to 1
+      if (contactIdsToSend.length !== 1) {
+        console.error('[ContactsTable] 🚨 CRITICAL: Single selection but contactIdsToSend has wrong count!');
+        console.error(`  Expected 1, got ${contactIdsToSend.length}`);
+        contactIdsToSend = [singleId];
+      }
     }
     
     // CRITICAL FIX: If selectAllPages is true, we MUST verify the selection matches
@@ -489,18 +491,27 @@ export function ContactsTable({ contacts, tags, pipelines, isLoading }: Contacts
       }
     }
     
-    // FINAL HARD LIMIT: If stateSelectedIds says 1, we MUST only send 1
-    if (stateSelectedIds.size === 1 && contactIdsToSend.length !== 1) {
-      console.error('[ContactsTable] 🚨 CRITICAL: State says 1 selected but contactIdsToSend has different count!');
-      console.error(`  stateSelectedIds.size: ${stateSelectedIds.size}`);
+    // FINAL HARD LIMIT: If currentSelection says 1, we MUST only send 1
+    if (currentSelection.size === 1 && contactIdsToSend.length !== 1) {
+      console.error('[ContactsTable] 🚨 CRITICAL: Current selection says 1 but contactIdsToSend has different count!');
+      console.error(`  currentSelection.size: ${currentSelection.size}`);
       console.error(`  contactIdsToSend.length: ${contactIdsToSend.length}`);
       console.error('  FORCING to use only the selected contact');
-      contactIdsToSend = Array.from(stateSelectedIds);
+      contactIdsToSend = currentSelectionArray;
+    }
+    
+    // ABSOLUTE FINAL CHECK: Never send more contacts than what's actually selected
+    if (contactIdsToSend.length > currentSelection.size) {
+      console.error('[ContactsTable] 🚨 CRITICAL BUG: contactIdsToSend has more contacts than selected!');
+      console.error(`  Selected: ${currentSelection.size}, Sending: ${contactIdsToSend.length}`);
+      console.error('  FORCING to match selection exactly');
+      contactIdsToSend = currentSelectionArray;
     }
     
     console.log(`[ContactsTable] 🚀 FINAL: Sending bulk action "${action}" for ${contactIdsToSend.length} contact(s)`);
     console.log(`[ContactsTable] Contact IDs being sent:`, contactIdsToSend);
-    console.log(`[ContactsTable] State selectedIds size: ${stateSelectedIds.size}`);
+    console.log(`[ContactsTable] Current selection size (ref): ${currentSelection.size}`);
+    console.log(`[ContactsTable] State selectedIds size: ${selectedIds.size}`);
     console.log(`[ContactsTable] selectAllPages: ${selectAllPages}`);
     console.log(`[ContactsTable] allContactIds length: ${allContactIds.length}`);
 
@@ -690,7 +701,38 @@ export function ContactsTable({ contacts, tags, pipelines, isLoading }: Contacts
               <Button
                 variant="outline"
                 size="sm"
-                onClick={() => handleBulkAction('analyze')}
+                onClick={async () => {
+                  // CRITICAL: Read selection directly at click time
+                  const currentSelection = new Set(selectedIdsRef.current);
+                  const selectionSize = currentSelection.size;
+                  const selectionArray = Array.from(currentSelection);
+                  
+                  console.log('[ContactsTable] 🔍 Analyze button clicked');
+                  console.log('  Selection size:', selectionSize);
+                  console.log('  Selected IDs:', selectionArray);
+                  console.log('  selectAllPages:', selectAllPages);
+                  console.log('  allContactIds length:', allContactIds.length);
+                  
+                  // Safety check: If only 1 is selected but flags suggest more, warn user
+                  if (selectionSize === 1 && (selectAllPages || allContactIds.length > 1)) {
+                    console.warn('[ContactsTable] 🚨 WARNING: Only 1 selected but flags suggest more!');
+                    const confirmed = window.confirm(
+                      `You have selected 1 contact. However, the system detected that "select all pages" might be active. ` +
+                      `Do you want to analyze only the selected contact, or cancel to review your selection?`
+                    );
+                    if (!confirmed) {
+                      console.log('[ContactsTable] User cancelled analysis');
+                      return;
+                    }
+                    // Force clear the flags
+                    setSelectAllPages(false);
+                    setAllContactIds([]);
+                    setTotalContactsCount(0);
+                  }
+                  
+                  // Proceed with analysis
+                  await handleBulkAction('analyze');
+                }}
                 disabled={bulkActionLoading}
                 className="bg-purple-50 hover:bg-purple-100 dark:bg-purple-950/20 dark:hover:bg-purple-950/40"
               >

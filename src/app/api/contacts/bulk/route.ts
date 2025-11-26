@@ -254,6 +254,19 @@ export async function POST(request: NextRequest) {
             console.error(`[Bulk API] 🚨 WARNING: Received ${contactIds.length} contacts! This might be an error.`);
             console.error(`[Bulk API] Contact IDs:`, contactIds);
             console.error(`[Bulk API] If user only selected 1 contact, this is a BUG!`);
+            
+            // SAFETY: If more than 50 contacts, this is almost certainly a bug
+            if (contactIds.length > 50) {
+              console.error(`[Bulk API] 🚨 CRITICAL: Received ${contactIds.length} contacts - this is likely a bug!`);
+              console.error(`[Bulk API] Blocking request to prevent accidental analysis of all contacts`);
+              return NextResponse.json(
+                { 
+                  error: `Received ${contactIds.length} contacts for analysis. This seems like an error. Please select contacts individually and try again.`,
+                  details: 'If you intended to analyze all contacts, please use the "AI Analyze All" button instead.'
+                },
+                { status: 400 }
+              );
+            }
           }
           
           // ADDITIONAL VALIDATION: Check if this looks like an accidental "select all"
@@ -263,6 +276,15 @@ export async function POST(request: NextRequest) {
             console.log(`[Bulk API] ⚠️ Processing ${contactIds.length} contacts - ensure this is intentional`);
           } else if (contactIds.length === 1) {
             console.log(`[Bulk API] ✅ Processing 1 contact - this is correct for single selection`);
+            console.log(`[Bulk API] Contact ID: ${contactIds[0]}`);
+          }
+          
+          // FINAL VALIDATION: Verify all contact IDs are valid and belong to the organization
+          if (contactIds.length === 0) {
+            return NextResponse.json(
+              { error: 'No contacts selected for analysis' },
+              { status: 400 }
+            );
           }
           
           const backgroundResult = await startBackgroundAnalysis(
