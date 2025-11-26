@@ -15,6 +15,7 @@ import {
   Users2,
   Bot,
   Calendar,
+  MessageSquare,
 } from 'lucide-react';
 
 const navigation = [
@@ -24,6 +25,7 @@ const navigation = [
   { name: 'Scheduled', href: '/campaigns/scheduled', icon: Calendar },
   { name: 'Pipelines', href: '/pipelines', icon: GitBranch },
   { name: 'AI Automations', href: '/ai-automations', icon: Bot },
+  { name: 'AI Assistant', href: '/ai-assistant', icon: MessageSquare },
   { name: 'Templates', href: '/templates', icon: FileText },
   { name: 'Tags', href: '/tags', icon: Tag },
   { name: 'Team', href: '/team', icon: Users2 },
