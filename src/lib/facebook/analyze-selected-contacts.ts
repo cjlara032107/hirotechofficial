@@ -347,8 +347,17 @@ export async function analyzeSelectedContacts(
             analysisLimiter.execute(async () => {
               try {
                 const info = await extractContactInfo(messagesToAnalyze);
-                if (info) {
-                  console.log(`[Analyze Selected] Successfully extracted contact info for ${contact.id}`);
+                if (info && Object.keys(info).length > 0) {
+                  console.log(`[Analyze Selected] ✅ Successfully extracted contact info for ${contact.id}`);
+                  const extractedFields = Object.keys(info).filter(key => {
+                    const value = info[key as keyof typeof info];
+                    if (Array.isArray(value)) return value.length > 0;
+                    if (typeof value === 'object' && value !== null) return Object.keys(value).length > 0;
+                    return value !== null && value !== undefined;
+                  });
+                  if (extractedFields.length > 0) {
+                    console.log(`[Analyze Selected] Extracted fields: ${extractedFields.join(', ')}`);
+                  }
                 }
                 return info;
               } catch (error) {

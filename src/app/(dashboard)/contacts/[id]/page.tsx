@@ -64,6 +64,8 @@ async function getContact(id: string, organizationId: string) {
     return contact;
   } catch (error: unknown) {
     // Handle case where contactInfo or bestContactTimes columns don't exist
+    console.warn('[Contact Page] ⚠️ Database schema error - contactInfo/bestContactTimes columns may not exist');
+    console.warn('[Contact Page] If you see this error, run the migration: apply-production-migration.sql');
     const dbError = error as { code?: string; message?: string };
     if (dbError.code === 'P2022' || dbError.message?.includes('does not exist')) {
       // Retry without the new columns
