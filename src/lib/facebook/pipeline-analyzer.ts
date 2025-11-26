@@ -482,7 +482,7 @@ async function executePipelineAnalysis(jobId: string, facebookPageId: string): P
     }
 
     // Update total contacts (with retry)
-    await withDbRetry(() => prisma.syncJob.update({
+    await withRetry(() => prisma.syncJob.update({
       where: { id: jobId },
       data: {
         totalContacts: contactsWithoutPipeline.length,
