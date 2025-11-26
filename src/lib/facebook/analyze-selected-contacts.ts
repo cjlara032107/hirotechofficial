@@ -133,7 +133,6 @@ export async function analyzeSelectedContacts(
       lastName: true,
       lastInteraction: true,
       contactInfo: true,
-      contactInfoUpdatedAt: true,
       aiContext: true,
       aiContextUpdatedAt: true,
       facebookPage: {
@@ -353,10 +352,9 @@ export async function analyzeSelectedContacts(
           }
 
           // Step 3.5: Extract contact information and analyze reply times (parallel)
-          // OPTIMIZATION: Skip contact info extraction if contact already has recent data (saves 5-10s per contact)
+          // OPTIMIZATION: Skip contact info extraction if contact already has data (saves 5-10s per contact)
           const shouldExtractContactInfo = !contact.contactInfo || 
-            !contact.contactInfoUpdatedAt || 
-            (Date.now() - new Date(contact.contactInfoUpdatedAt).getTime()) > 7 * 24 * 60 * 60 * 1000; // 7 days
+            (typeof contact.contactInfo === 'object' && contact.contactInfo !== null && Object.keys(contact.contactInfo).length === 0);
           
           const [contactInfo, replyTimeAnalysis] = await Promise.all([
             // Extract comprehensive contact information (only if needed)
