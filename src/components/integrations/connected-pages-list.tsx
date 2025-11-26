@@ -18,7 +18,7 @@ import { LoadingSpinner } from '@/components/ui/loading-spinner';
 import { Progress } from '@/components/ui/progress';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Input } from '@/components/ui/input';
-import { Facebook, Instagram, RefreshCw, Unplug, CheckCircle2, Users, ChevronLeft, ChevronRight, Settings, XCircle, Sparkles } from 'lucide-react';
+import { Facebook, Instagram, RefreshCw, Unplug, CheckCircle2, Users, ChevronLeft, ChevronRight, Settings, XCircle, Sparkles, Zap } from 'lucide-react';
 import { toast } from 'sonner';
 import { formatDistanceToNow } from 'date-fns';
 import Link from 'next/link';
@@ -249,6 +249,89 @@ export function ConnectedPagesList({ onRefresh, onSyncComplete }: ConnectedPages
     }
   }, [activeSyncJobs, pages, fetchConnectedPages, onSyncComplete]);
 
+  // Start instant sync (contacts in < 1 minute, AI in background)
+  const handleInstantSync = async (page: ConnectedPage) => {
+    // Optimistic UI: Show immediate feedback
+    const tempJobId = `temp-${Date.now()}`;
+    setActiveSyncJobs(prev => ({
+      ...prev,
+      [page.id]: {
+        id: tempJobId,
+        status: 'PENDING',
+        syncedContacts: 0,
+        failedContacts: 0,
+        totalContacts: 0,
+        tokenExpired: false,
+        startedAt: null,
+        completedAt: null,
+      },
+    }));
+
+    toast.info(`Starting instant sync for ${page.pageName}...`, {
+      description: 'Contacts will appear in < 1 minute, AI analysis in background',
+      duration: 3000,
+    });
+
+    try {
+      const response = await fetch('/api/facebook/sync-instant', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          facebookPageId: page.id,
+        }),
+      });
+
+      const contentType = response.headers.get('content-type');
+      if (!contentType?.includes('application/json')) {
+        throw new Error('Server returned non-JSON response');
+      }
+
+      if (!response.ok) {
+        const data = await response.json();
+        throw new Error(data.error || 'Failed to start instant sync');
+      }
+
+      const data = await response.json();
+      
+      // Update with real job ID
+      setActiveSyncJobs(prev => ({
+        ...prev,
+        [page.id]: {
+          id: data.jobId,
+          status: 'IN_PROGRESS',
+          syncedContacts: data.contactsStored || 0,
+          failedContacts: 0,
+          totalContacts: data.contactsStored || 0,
+          tokenExpired: false,
+          startedAt: new Date().toISOString(),
+          completedAt: null,
+        },
+      }));
+
+      toast.success(`Instant sync completed for ${page.pageName}!`, {
+        description: `${data.contactsStored} contacts stored in ${data.message.split('in ')[1] || 'under 1 minute'}. AI analysis queued in background.`,
+        duration: 5000,
+      });
+
+      // Refresh contact count immediately
+      await fetchContactCount(page.id);
+      onSyncComplete?.();
+    } catch (error) {
+      // Remove optimistic update on error
+      setActiveSyncJobs(prev => {
+        const updated = { ...prev };
+        delete updated[page.id];
+        return updated;
+      });
+
+      const errorMessage = error instanceof Error ? error.message : 'Failed to start instant sync';
+      console.error('Error starting instant sync:', error);
+      toast.error(errorMessage);
+    }
+  };
+
   // Start sync using background API
   const handleSync = async (page: ConnectedPage) => {
     // Optimistic UI: Show immediate feedback
@@ -267,13 +350,13 @@ export function ConnectedPagesList({ onRefresh, onSyncComplete }: ConnectedPages
       },
     }));
 
-    toast.info(`Starting fast sync for ${page.pageName}...`, {
-      description: 'Syncing contacts only (no AI analysis)',
+    toast.info(`Starting sync for ${page.pageName}...`, {
+      description: 'Syncing contacts with AI analysis',
       duration: 2000,
     });
 
     try {
-      const response = await fetch('/api/facebook/fast-sync', {
+      const response = await fetch('/api/facebook/sync-background', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -310,8 +393,8 @@ export function ConnectedPagesList({ onRefresh, onSyncComplete }: ConnectedPages
         },
       }));
 
-      toast.success(`Fast sync started for ${page.pageName}`, {
-        description: 'Syncing contacts in the background',
+      toast.success(`Sync started for ${page.pageName}`, {
+        description: 'Syncing contacts with AI analysis in the background',
         duration: 3000,
       });
     } catch (error) {
@@ -808,13 +891,23 @@ export function ConnectedPagesList({ onRefresh, onSyncComplete }: ConnectedPages
                       ) : (
                         <>
                           <Button
+                            variant="default"
+                            size="sm"
+                            onClick={() => handleInstantSync(page)}
+                            disabled={disconnectingPageId === page.id}
+                            className="bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white"
+                          >
+                            <Zap className="mr-2 h-4 w-4" />
+                            Instant Sync
+                          </Button>
+                          <Button
                             variant="outline"
                             size="sm"
                             onClick={() => handleSync(page)}
                             disabled={disconnectingPageId === page.id}
                           >
                             <RefreshCw className="mr-2 h-4 w-4" />
-                            Sync
+                            Full Sync
                           </Button>
                           {page.autoPipelineId && (
                             <Button
