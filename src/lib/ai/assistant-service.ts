@@ -5,6 +5,18 @@ import apiKeyManager from './api-key-manager';
 const MODEL = 'openai/gpt-oss-20b';
 const BASE_URL = 'https://integrate.api.nvidia.com/v1';
 
+// Get API key from database first, then fall back to environment variables
+async function getApiKey(): Promise<string | null> {
+  // Try database first (preferred method - can be managed through UI)
+  const dbKey = await apiKeyManager.getNextKey();
+  if (dbKey) {
+    return dbKey;
+  }
+  
+  // Fall back to environment variables if no database keys available
+  return process.env.NVIDIA_API_KEY || process.env.GOOGLE_AI_API_KEY || null;
+}
+
 function createNvidiaClient(apiKey: string): OpenAI {
   return new OpenAI({
     baseURL: BASE_URL,
@@ -383,9 +395,9 @@ export async function processAssistantMessage(
   userId: string,
   chatHistory: Array<{ role: 'user' | 'assistant'; content: string }> = []
 ): Promise<{ response: string; sources?: string[] }> {
-  const apiKey = await apiKeyManager.getNextKey();
+  const apiKey = await getApiKey();
   if (!apiKey) {
-    throw new Error('No NVIDIA API key available. Please add one in Settings → API Keys.');
+    throw new Error('No NVIDIA API key available. Please configure an API key in Settings → API Keys or set NVIDIA_API_KEY environment variable.');
   }
 
   // Build user data context
