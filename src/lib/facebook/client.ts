@@ -353,6 +353,86 @@ export class FacebookClient {
   }
 
   /**
+   * Stream Messenger conversations as they're fetched (yields conversations page by page)
+   * This allows processing to start immediately instead of waiting for all conversations
+   */
+  async *fetchMessengerConversationsStream(pageId: string, limit = 100) {
+    let nextUrl: string | null = null;
+    let hasMore = true;
+    let pageCount = 0;
+
+    try {
+      // Fetch first page
+      const response = await axios.get(
+        `${FB_GRAPH_URL}/${pageId}/conversations`,
+        {
+          params: {
+            access_token: this.accessToken,
+            fields: 'id,participants,updated_time,message_count',
+            limit,
+          },
+        }
+      );
+
+      const conversations = response.data.data || [];
+      
+      // Yield each conversation immediately
+      for (const convo of conversations) {
+        yield convo;
+      }
+
+      // Check if there's a next page
+      nextUrl = response.data.paging?.next || null;
+      hasMore = !!nextUrl;
+      pageCount = 1;
+
+      // Fetch subsequent pages and yield conversations as they arrive
+      while (hasMore && nextUrl) {
+        try {
+          if (pageCount % 10 === 0) {
+            console.log(`[Facebook API] Streaming: Fetched ${pageCount} pages of Messenger conversations so far...`);
+          }
+
+          const nextResponse = await axios.get(nextUrl, {
+            timeout: 30000, // 30 second timeout per request
+          });
+
+          const nextConversations = nextResponse.data.data || [];
+
+          // Yield each conversation immediately
+          for (const convo of nextConversations) {
+            yield convo;
+          }
+
+          // Update pagination info
+          nextUrl = nextResponse.data.paging?.next || null;
+          hasMore = !!nextUrl && nextConversations.length > 0;
+          pageCount++;
+
+          // Add small delay to avoid rate limiting
+          if (hasMore) {
+            await new Promise(resolve => setTimeout(resolve, 100));
+          }
+        } catch (paginationError: any) {
+          console.error('Error fetching next page of Messenger conversations:', paginationError);
+
+          // If we get rate limited, throw the error
+          const fbError = paginationError.response?.data?.error;
+          if (fbError && (fbError.code === 613 || fbError.code === 4 || fbError.code === 17)) {
+            throw parseFacebookError(paginationError, `Rate limited while paginating conversations for Page ID: ${pageId}`);
+          }
+
+          // For other pagination errors, log but continue with what we have
+          console.warn(`Failed to fetch page, continuing with conversations already fetched`);
+          break;
+        }
+      }
+    } catch (error: any) {
+      throw parseFacebookError(error, `Failed to fetch conversations for Page ID: ${pageId}`);
+    }
+  }
+
+  /**
    * Fetch ALL messages for a specific conversation with pagination
    * This ensures we get the complete conversation history for accurate AI analysis
    */
@@ -624,6 +704,86 @@ export class FacebookClient {
       }
 
       return allConversations;
+    } catch (error: any) {
+      throw parseFacebookError(error, `Failed to fetch Instagram conversations for Account ID: ${igAccountId}`);
+    }
+  }
+
+  /**
+   * Stream Instagram conversations as they're fetched (yields conversations page by page)
+   * This allows processing to start immediately instead of waiting for all conversations
+   */
+  async *fetchInstagramConversationsStream(igAccountId: string, limit = 100) {
+    let nextUrl: string | null = null;
+    let hasMore = true;
+    let pageCount = 0;
+
+    try {
+      // Fetch first page
+      const response = await axios.get(
+        `${FB_GRAPH_URL}/${igAccountId}/conversations`,
+        {
+          params: {
+            access_token: this.accessToken,
+            fields: 'id,participants,updated_time,message_count',
+            limit,
+          },
+        }
+      );
+
+      const conversations = response.data.data || [];
+
+      // Yield each conversation immediately
+      for (const convo of conversations) {
+        yield convo;
+      }
+
+      // Check if there's a next page
+      nextUrl = response.data.paging?.next || null;
+      hasMore = !!nextUrl;
+      pageCount = 1;
+
+      // Fetch subsequent pages and yield conversations as they arrive
+      while (hasMore && nextUrl) {
+        try {
+          if (pageCount % 10 === 0) {
+            console.log(`[Facebook API] Streaming: Fetched ${pageCount} pages of Instagram conversations so far...`);
+          }
+
+          const nextResponse = await axios.get(nextUrl, {
+            timeout: 30000, // 30 second timeout per request
+          });
+
+          const nextConversations = nextResponse.data.data || [];
+
+          // Yield each conversation immediately
+          for (const convo of nextConversations) {
+            yield convo;
+          }
+
+          // Update pagination info
+          nextUrl = nextResponse.data.paging?.next || null;
+          hasMore = !!nextUrl && nextConversations.length > 0;
+          pageCount++;
+
+          // Add small delay to avoid rate limiting
+          if (hasMore) {
+            await new Promise(resolve => setTimeout(resolve, 100));
+          }
+        } catch (paginationError: any) {
+          console.error('Error fetching next page of Instagram conversations:', paginationError);
+
+          // If we get rate limited, throw the error
+          const fbError = paginationError.response?.data?.error;
+          if (fbError && (fbError.code === 613 || fbError.code === 4 || fbError.code === 17)) {
+            throw parseFacebookError(paginationError, `Rate limited while paginating Instagram conversations for Account ID: ${igAccountId}`);
+          }
+
+          // For other pagination errors, log but continue with what we have
+          console.warn(`Failed to fetch Instagram page, continuing with conversations already fetched`);
+          break;
+        }
+      }
     } catch (error: any) {
       throw parseFacebookError(error, `Failed to fetch Instagram conversations for Account ID: ${igAccountId}`);
     }

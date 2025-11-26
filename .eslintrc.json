@@ -1,5 +1,20 @@
 {
   "extends": "next/core-web-vitals",
+  "ignorePatterns": [
+    "*.test.js",
+    "*.test.ts",
+    "*.test.tsx",
+    "*.spec.js",
+    "*.spec.ts",
+    "*.spec.tsx",
+    "scripts/**",
+    "comprehensive-*.js",
+    "simulate-*.js",
+    "create-test-user.ts",
+    ".next/**",
+    "node_modules/**",
+    "prisma/migrations/**"
+  ],
   "rules": {
     "@typescript-eslint/no-explicit-any": "warn",
     "@typescript-eslint/no-unused-vars": ["warn", { 

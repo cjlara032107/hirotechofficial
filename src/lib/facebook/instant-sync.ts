@@ -123,18 +123,213 @@ export async function startInstantSync(
     const contactIds: string[] = [];
     const errors: Array<{ platform: string; id: string; error: string }> = [];
 
-    // Phase 1: Fast contact storage (NO AI ANALYSIS)
-    try {
-      // Fetch Messenger conversations
-      console.log(`[Instant Sync ${syncJob.id}] Fetching Messenger conversations...`);
-      const messengerConvos = await client.getMessengerConversations(page.pageId);
-      console.log(`[Instant Sync ${syncJob.id}] Found ${messengerConvos.length} Messenger conversations`);
+    // OPTIMIZATION: Process contacts in batches during streaming for immediate storage
+    const processContactBatch = async (
+      participants: Array<[string, { updatedTime: string; name?: string }]>,
+      platform: 'Messenger' | 'Instagram'
+    ) => {
+      if (participants.length === 0) return;
 
-      // Collect unique participants
+      const participantIds = participants.map(([id]) => id);
+      
+      // Batch fetch existing contacts
+      const existingContacts = await prisma.contact.findMany({
+        where: {
+          OR: platform === 'Messenger' 
+            ? [{ messengerPSID: { in: participantIds }, facebookPageId: page.id }]
+            : [
+                { instagramSID: { in: participantIds }, facebookPageId: page.id },
+                { messengerPSID: { in: participantIds }, facebookPageId: page.id },
+              ],
+        },
+        select: { id: true, messengerPSID: true, instagramSID: true },
+      });
+
+      const existingMap = new Map<string, string>();
+      for (const contact of existingContacts) {
+        const id = platform === 'Messenger' ? contact.messengerPSID : (contact.instagramSID || contact.messengerPSID);
+        if (id) existingMap.set(id, contact.id);
+      }
+
+      // Separate new contacts from updates
+      const toCreate: Array<{
+        messengerPSID?: string;
+        instagramSID?: string;
+        firstName: string;
+        lastName: string | null;
+        hasMessenger: boolean;
+        hasInstagram: boolean;
+        organizationId: string;
+        facebookPageId: string;
+        lastInteraction: Date;
+      }> = [];
+      
+      const toUpdate: Array<{
+        id: string;
+        firstName: string;
+        lastName: string | null;
+        lastInteraction: Date;
+        hasMessenger?: boolean;
+        hasInstagram?: boolean;
+        instagramSID?: string;
+      }> = [];
+
+      for (const [participantId, info] of participants) {
+        // Extract name
+        let firstName = platform === 'Messenger' 
+          ? `User ${participantId.slice(-6)}`
+          : `IG User ${participantId.slice(-6)}`;
+        let lastName: string | null = null;
+
+        if (info.name) {
+          const nameParts = info.name.trim().split(' ');
+          firstName = nameParts[0] || firstName;
+          if (nameParts.length > 1) {
+            lastName = nameParts.slice(1).join(' ');
+          }
+        }
+
+        const existingId = existingMap.get(participantId);
+        const lastInteraction = new Date(info.updatedTime);
+
+        if (existingId) {
+          toUpdate.push({
+            id: existingId,
+            firstName,
+            lastName,
+            lastInteraction,
+            ...(platform === 'Messenger' ? { hasMessenger: true } : { hasInstagram: true, instagramSID: participantId }),
+          });
+        } else {
+          toCreate.push({
+            ...(platform === 'Messenger' 
+              ? { messengerPSID: participantId, hasMessenger: true, hasInstagram: false }
+              : { instagramSID: participantId, hasInstagram: true, hasMessenger: false }),
+            firstName,
+            lastName,
+            organizationId: page.organizationId,
+            facebookPageId: page.id,
+            lastInteraction,
+          });
+        }
+      }
+
+      // OPTIMIZATION: Use bulk operations
+      try {
+        // Bulk create new contacts
+        if (toCreate.length > 0) {
+          const created = await prisma.$transaction(
+            async (tx) => {
+              return Promise.all(toCreate.map(data => tx.contact.create({ data })));
+            }
+          );
+          contactIds.push(...created.map(c => c.id));
+          contactsStored += created.length;
+        }
+
+        // Bulk update existing contacts
+        if (toUpdate.length > 0) {
+          await Promise.all(
+            toUpdate.map(update => 
+              prisma.contact.update({
+                where: { id: update.id },
+                data: {
+                  firstName: update.firstName,
+                  lastName: update.lastName,
+                  lastInteraction: update.lastInteraction,
+                  ...(update.hasMessenger !== undefined && { hasMessenger: update.hasMessenger }),
+                  ...(update.hasInstagram !== undefined && { hasInstagram: update.hasInstagram }),
+                  ...(update.instagramSID && { instagramSID: update.instagramSID }),
+                },
+              })
+            )
+          );
+          contactIds.push(...toUpdate.map(u => u.id));
+          contactsStored += toUpdate.length;
+        }
+      } catch (error) {
+        console.error(`[Instant Sync ${syncJob.id}] Bulk operation failed, falling back to individual operations:`, error);
+        // Fallback to individual operations
+        const contactLimiter = new ConcurrencyLimiter(50);
+        await Promise.all(
+          participants.map(([participantId, info]) =>
+            contactLimiter.execute(async () => {
+              try {
+                let firstName = platform === 'Messenger' 
+                  ? `User ${participantId.slice(-6)}`
+                  : `IG User ${participantId.slice(-6)}`;
+                let lastName: string | null = null;
+
+                if (info.name) {
+                  const nameParts = info.name.trim().split(' ');
+                  firstName = nameParts[0] || firstName;
+                  if (nameParts.length > 1) {
+                    lastName = nameParts.slice(1).join(' ');
+                  }
+                }
+
+                const existingId = existingMap.get(participantId);
+                let savedContact;
+
+                if (existingId) {
+                  savedContact = await prisma.contact.update({
+                    where: { id: existingId },
+                    data: {
+                      firstName,
+                      lastName,
+                      lastInteraction: new Date(info.updatedTime),
+                      ...(platform === 'Messenger' ? { hasMessenger: true } : { hasInstagram: true, instagramSID: participantId }),
+                    },
+                  });
+                } else {
+                  savedContact = await prisma.contact.create({
+                    data: {
+                      ...(platform === 'Messenger' 
+                        ? { messengerPSID: participantId, hasMessenger: true }
+                        : { instagramSID: participantId, hasInstagram: true }),
+                      firstName,
+                      lastName,
+                      organizationId: page.organizationId,
+                      facebookPageId: page.id,
+                      lastInteraction: new Date(info.updatedTime),
+                    },
+                  });
+                }
+
+                contactIds.push(savedContact.id);
+                contactsStored++;
+              } catch (error) {
+                console.error(`[Instant Sync ${syncJob.id}] Failed to store ${platform} contact ${participantId}:`, error);
+                errors.push({
+                  platform,
+                  id: participantId,
+                  error: error instanceof Error ? error.message : 'Unknown error',
+                });
+              }
+            })
+          )
+        );
+      }
+    };
+
+    // Phase 1: Fast contact storage (NO AI ANALYSIS)
+    // OPTIMIZATION: Stream conversations and process contacts in batches as they arrive
+    try {
+      console.log(`[Instant Sync ${syncJob.id}] Streaming Messenger conversations...`);
+      
+      // Collect unique participants as we stream conversations
       const participantMap = new Map<string, { updatedTime: string; name?: string }>();
-      for (const convo of messengerConvos) {
+      let conversationCount = 0;
+      const PROCESS_BATCH_SIZE = 50; // Process every 50 conversations
+      
+      // OPTIMIZATION: Process conversations as they're fetched (streaming)
+      // Process contacts in batches during streaming for immediate storage
+      for await (const convo of client.fetchMessengerConversationsStream(page.pageId)) {
+        conversationCount++;
+        
         if (!convo.participants?.data) continue;
         
+        // Extract participants from this conversation immediately
         for (const participant of convo.participants.data) {
           if (participant.id === page.pageId) continue;
           
@@ -146,96 +341,32 @@ export async function startInstantSync(
             });
           }
         }
-      }
-
-      const participants = Array.from(participantMap.entries());
-      console.log(`[Instant Sync ${syncJob.id}] Processing ${participants.length} Messenger participants...`);
-
-      // Batch fetch existing contacts
-      const participantIds = participants.map(([id]) => id);
-      const existingContacts = await prisma.contact.findMany({
-        where: {
-          messengerPSID: { in: participantIds },
-          facebookPageId: page.id,
-        },
-        select: { id: true, messengerPSID: true },
-      });
-
-      const existingMap = new Map(existingContacts.map(c => [c.messengerPSID!, c.id]));
-
-      // Process contacts in parallel (fast storage, no AI)
-      const contactLimiter = new ConcurrencyLimiter(100); // High concurrency for fast storage
-      const BATCH_SIZE = 100;
-
-      for (let i = 0; i < participants.length; i += BATCH_SIZE) {
-        const batch = participants.slice(i, i + BATCH_SIZE);
         
-        await Promise.all(
-          batch.map(([participantId, info]) =>
-            contactLimiter.execute(async () => {
-              try {
-                // Extract name
-                let firstName = `User ${participantId.slice(-6)}`;
-                let lastName: string | null = null;
+        // OPTIMIZATION: Process contacts in batches during streaming (every 50 conversations)
+        // This allows contacts to appear immediately instead of waiting for all conversations
+        if (conversationCount % PROCESS_BATCH_SIZE === 0 && participantMap.size > 0) {
+          const batchToProcess = Array.from(participantMap.entries());
+          participantMap.clear(); // Clear processed participants
+          
+          await processContactBatch(batchToProcess, 'Messenger');
+          
+          // Update progress (non-blocking)
+          prisma.syncJob.update({
+            where: { id: syncJob.id },
+            data: {
+              syncedContacts: contactsStored,
+              totalContacts: contactsStored + participantMap.size, // Estimate
+            },
+          }).catch(err => console.error(`[Instant Sync ${syncJob.id}] Failed to update progress:`, err));
+        }
+      }
+      
+      console.log(`[Instant Sync ${syncJob.id}] Fetched ${conversationCount} Messenger conversations`);
 
-                if (info.name) {
-                  const nameParts = info.name.trim().split(' ');
-                  firstName = nameParts[0] || firstName;
-                  if (nameParts.length > 1) {
-                    lastName = nameParts.slice(1).join(' ');
-                  }
-                }
-
-                // Store contact (NO AI ANALYSIS)
-                const existingId = existingMap.get(participantId);
-                let savedContact;
-
-                if (existingId) {
-                  savedContact = await prisma.contact.update({
-                    where: { id: existingId },
-                    data: {
-                      firstName,
-                      lastName,
-                      lastInteraction: new Date(info.updatedTime),
-                      hasMessenger: true,
-                    },
-                  });
-                } else {
-                  savedContact = await prisma.contact.create({
-                    data: {
-                      messengerPSID: participantId,
-                      firstName,
-                      lastName,
-                      hasMessenger: true,
-                      organizationId: page.organizationId,
-                      facebookPageId: page.id,
-                      lastInteraction: new Date(info.updatedTime),
-                    },
-                  });
-                }
-
-                contactIds.push(savedContact.id);
-                contactsStored++;
-              } catch (error) {
-                console.error(`[Instant Sync ${syncJob.id}] Failed to store contact ${participantId}:`, error);
-                errors.push({
-                  platform: 'Messenger',
-                  id: participantId,
-                  error: error instanceof Error ? error.message : 'Unknown error',
-                });
-              }
-            })
-          )
-        );
-
-        // Update progress
-        await prisma.syncJob.update({
-          where: { id: syncJob.id },
-          data: {
-            syncedContacts: contactsStored,
-            totalContacts: participants.length,
-          },
-        });
+      // Process any remaining participants
+      if (participantMap.size > 0) {
+        const remaining = Array.from(participantMap.entries());
+        await processContactBatch(remaining, 'Messenger');
       }
 
       console.log(`[Instant Sync ${syncJob.id}] ✅ Stored ${contactsStored} Messenger contacts`);
@@ -249,17 +380,23 @@ export async function startInstantSync(
     }
 
     // Handle Instagram if connected
+    // OPTIMIZATION: Stream Instagram conversations and process in batches
     if (page.instagramAccountId) {
       try {
-        console.log(`[Instant Sync ${syncJob.id}] Fetching Instagram conversations...`);
-        const igConvos = await client.getInstagramConversations(page.instagramAccountId);
-        console.log(`[Instant Sync ${syncJob.id}] Found ${igConvos.length} Instagram conversations`);
-
-        // Collect unique participants
+        console.log(`[Instant Sync ${syncJob.id}] Streaming Instagram conversations...`);
+        
+        // Collect unique participants as we stream conversations
         const igParticipantMap = new Map<string, { updatedTime: string; name?: string }>();
-        for (const convo of igConvos) {
+        let igConversationCount = 0;
+        const IG_PROCESS_BATCH_SIZE = 50; // Process every 50 conversations
+        
+        // OPTIMIZATION: Process conversations as they're fetched (streaming)
+        for await (const convo of client.fetchInstagramConversationsStream(page.instagramAccountId)) {
+          igConversationCount++;
+          
           if (!convo.participants?.data) continue;
           
+          // Extract participants from this conversation immediately
           for (const participant of convo.participants.data) {
             if (participant.id === page.instagramAccountId) continue;
             
@@ -271,102 +408,31 @@ export async function startInstantSync(
               });
             }
           }
-        }
-
-        const igParticipants = Array.from(igParticipantMap.entries());
-        console.log(`[Instant Sync ${syncJob.id}] Processing ${igParticipants.length} Instagram participants...`);
-
-        // Batch fetch existing contacts
-        const igParticipantIds = igParticipants.map(([id]) => id);
-        const existingIgContacts = await prisma.contact.findMany({
-          where: {
-            OR: [
-              { instagramSID: { in: igParticipantIds }, facebookPageId: page.id },
-              { messengerPSID: { in: igParticipantIds }, facebookPageId: page.id },
-            ],
-          },
-          select: { id: true, instagramSID: true, messengerPSID: true },
-        });
-
-        const existingIgMap = new Map<string, string>();
-        for (const contact of existingIgContacts) {
-          const id = contact.instagramSID || contact.messengerPSID;
-          if (id) existingIgMap.set(id, contact.id);
-        }
-
-        // Process Instagram contacts
-        const igContactLimiter = new ConcurrencyLimiter(100);
-        const IG_BATCH_SIZE = 100;
-
-        for (let i = 0; i < igParticipants.length; i += IG_BATCH_SIZE) {
-          const batch = igParticipants.slice(i, i + IG_BATCH_SIZE);
           
-          await Promise.all(
-            batch.map(([participantId, info]) =>
-              igContactLimiter.execute(async () => {
-                try {
-                  // Extract name
-                  let firstName = `IG User ${participantId.slice(-6)}`;
-                  let lastName: string | null = null;
+          // OPTIMIZATION: Process contacts in batches during streaming (every 50 conversations)
+          if (igConversationCount % IG_PROCESS_BATCH_SIZE === 0 && igParticipantMap.size > 0) {
+            const batchToProcess = Array.from(igParticipantMap.entries());
+            igParticipantMap.clear(); // Clear processed participants
+            
+            await processContactBatch(batchToProcess, 'Instagram');
+            
+            // Update progress (non-blocking)
+            prisma.syncJob.update({
+              where: { id: syncJob.id },
+              data: {
+                syncedContacts: contactsStored,
+                totalContacts: contactsStored + igParticipantMap.size, // Estimate
+              },
+            }).catch(err => console.error(`[Instant Sync ${syncJob.id}] Failed to update progress:`, err));
+          }
+        }
+        
+        console.log(`[Instant Sync ${syncJob.id}] Fetched ${igConversationCount} Instagram conversations`);
 
-                  if (info.name) {
-                    const nameParts = info.name.trim().split(' ');
-                    firstName = nameParts[0] || firstName;
-                    if (nameParts.length > 1) {
-                      lastName = nameParts.slice(1).join(' ');
-                    }
-                  }
-
-                  // Store contact (NO AI ANALYSIS)
-                  const existingId = existingIgMap.get(participantId);
-                  let savedContact;
-
-                  if (existingId) {
-                    savedContact = await prisma.contact.update({
-                      where: { id: existingId },
-                      data: {
-                        instagramSID: participantId,
-                        firstName,
-                        lastName,
-                        hasInstagram: true,
-                        lastInteraction: new Date(info.updatedTime),
-                      },
-                    });
-                  } else {
-                    savedContact = await prisma.contact.create({
-                      data: {
-                        instagramSID: participantId,
-                        firstName,
-                        lastName,
-                        hasInstagram: true,
-                        organizationId: page.organizationId,
-                        facebookPageId: page.id,
-                        lastInteraction: new Date(info.updatedTime),
-                      },
-                    });
-                  }
-
-                  contactIds.push(savedContact.id);
-                  contactsStored++;
-                } catch (error) {
-                  console.error(`[Instant Sync ${syncJob.id}] Failed to store IG contact ${participantId}:`, error);
-                  errors.push({
-                    platform: 'Instagram',
-                    id: participantId,
-                    error: error instanceof Error ? error.message : 'Unknown error',
-                  });
-                }
-              })
-            )
-          );
-
-          // Update progress
-          await prisma.syncJob.update({
-            where: { id: syncJob.id },
-            data: {
-              syncedContacts: contactsStored,
-            },
-          });
+        // Process any remaining Instagram participants
+        if (igParticipantMap.size > 0) {
+          const remaining = Array.from(igParticipantMap.entries());
+          await processContactBatch(remaining, 'Instagram');
         }
 
         console.log(`[Instant Sync ${syncJob.id}] ✅ Stored ${contactsStored} total contacts (including Instagram)`);
