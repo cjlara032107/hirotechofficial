@@ -3,6 +3,39 @@ import apiKeyManager from './api-key-manager';
 
 const MODEL = 'google/gemini-2.0-flash-exp:free';
 
+// Get API key from database first, then fall back to environment variables
+// CRITICAL: Use the same logic as google-ai-service.ts to ensure consistency
+async function getApiKey(): Promise<string | null> {
+  // Try database first (preferred method - can be managed through UI)
+  const dbKey = await apiKeyManager.getNextKey();
+  if (dbKey) {
+    console.log('[Contact Info Extraction] ✅ Using API key from database');
+    return dbKey;
+  }
+  
+  // Fall back to environment variables if no database keys available
+  const nvidiaKey = process.env.NVIDIA_API_KEY;
+  const googleKey = process.env.GOOGLE_AI_API_KEY;
+  const envKey = nvidiaKey || googleKey || null;
+  
+  if (envKey) {
+    const source = nvidiaKey ? 'NVIDIA_API_KEY' : 'GOOGLE_AI_API_KEY';
+    console.log(`[Contact Info Extraction] ✅ Using fallback API key from environment variable: ${source}`);
+    return envKey;
+  }
+  
+  // CRITICAL: Detailed logging for debugging
+  console.error('[Contact Info Extraction] ❌ No API key available');
+  console.error('[Contact Info Extraction] Checked sources:');
+  console.error('  - Database (apiKeyManager.getNextKey()): No active keys');
+  console.error(`  - process.env.NVIDIA_API_KEY: ${nvidiaKey ? 'EXISTS' : 'NOT SET'}`);
+  console.error(`  - process.env.GOOGLE_AI_API_KEY: ${googleKey ? 'EXISTS' : 'NOT SET'}`);
+  console.error('[Contact Info Extraction] Action required:');
+  console.error('  1. Add API key via Settings → API Keys in the UI, OR');
+  console.error('  2. Set NVIDIA_API_KEY or GOOGLE_AI_API_KEY environment variable in Vercel');
+  return null;
+}
+
 // Helper function to create OpenAI client configured for NVIDIA API
 function createNvidiaClient(apiKey: string): OpenAI {
   return new OpenAI({
@@ -50,20 +83,16 @@ export async function extractContactInfo(
   retries = 2
 ): Promise<ContactInfo | null> {
   try {
-    // CRITICAL: Try database keys first, then fall back to environment variables
-    // This ensures contactInfo extraction works even if database keys are unavailable
-    let apiKey = await apiKeyManager.getNextKey();
+    // CRITICAL: Use the same API key logic as google-ai-service.ts
+    // This ensures consistency and proper fallback behavior
+    const apiKey = await getApiKey();
     if (!apiKey) {
-      // Fall back to environment variables if no database keys available
-      apiKey = process.env.NVIDIA_API_KEY || process.env.GOOGLE_AI_API_KEY || null;
-      if (apiKey) {
-        console.log('[Contact Info Extraction] Using fallback API key from environment variables');
-      } else {
-        console.warn('[Contact Info Extraction] No API key available (database or environment)');
-        return null;
-      }
+      console.error('[Contact Info Extraction] ❌ Cannot extract contact info: No API key available');
+      console.error('[Contact Info Extraction] Action required: Add API key via Settings → API Keys or set NVIDIA_API_KEY environment variable');
+      return null;
     }
 
+    console.log('[Contact Info Extraction] 🔑 API key obtained, starting extraction...');
     const openai = createNvidiaClient(apiKey);
 
     const conversationText = messages

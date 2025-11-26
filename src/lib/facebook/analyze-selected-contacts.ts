@@ -346,6 +346,7 @@ export async function analyzeSelectedContacts(
             // Extract comprehensive contact information
             analysisLimiter.execute(async () => {
               try {
+                console.log(`[Analyze Selected] 🔍 Starting contact info extraction for ${contact.id}...`);
                 const info = await extractContactInfo(messagesToAnalyze);
                 if (info && Object.keys(info).length > 0) {
                   console.log(`[Analyze Selected] ✅ Successfully extracted contact info for ${contact.id}`);
@@ -358,11 +359,15 @@ export async function analyzeSelectedContacts(
                   if (extractedFields.length > 0) {
                     console.log(`[Analyze Selected] Extracted fields: ${extractedFields.join(', ')}`);
                   }
+                } else {
+                  console.warn(`[Analyze Selected] ⚠️ Contact info extraction returned null or empty for ${contact.id}`);
+                  console.warn(`[Analyze Selected] This usually means: 1) No API key available, 2) No contact info found in messages, or 3) Extraction failed`);
                 }
                 return info;
               } catch (error) {
                 const errorMessage = error instanceof Error ? error.message : String(error);
-                console.warn(`[Analyze Selected] Failed to extract contact info for ${contact.id}:`, errorMessage);
+                console.error(`[Analyze Selected] ❌ Failed to extract contact info for ${contact.id}:`, errorMessage);
+                console.error(`[Analyze Selected] Stack trace:`, error instanceof Error ? error.stack : 'No stack trace');
                 // Don't fail the entire analysis if contact info extraction fails
                 return null;
               }
