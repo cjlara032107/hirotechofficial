@@ -375,7 +375,61 @@ async function ContactActivity({
         </Card>
       )}
 
-      {contact.contactInfo && (
+      {(() => {
+        // Helper function to check if contactInfo has meaningful data
+        // This prevents showing an empty card when contactInfo is {} or has no actual data
+        const hasContactInfoData = (info: unknown): boolean => {
+          if (!info || typeof info !== 'object' || info === null) {
+            return false;
+          }
+          
+          const data = info as Record<string, unknown>;
+          
+          // Check age
+          if (data.age !== null && data.age !== undefined && typeof data.age === 'number') {
+            return true;
+          }
+          
+          // Check arrays
+          const arrayFields = ['phoneNumbers', 'emails', 'businessNames', 'pageLinks', 
+            'facebookPages', 'locations', 'occupations', 'companies', 'websites'];
+          for (const field of arrayFields) {
+            const value = data[field];
+            if (Array.isArray(value) && value.length > 0) {
+              return true;
+            }
+          }
+          
+          // Check legacy single-value fields
+          const singleFields = ['phoneNumber', 'email', 'facebookPage', 'location', 
+            'occupation', 'company', 'website'];
+          for (const field of singleFields) {
+            const value = data[field];
+            if (value !== null && value !== undefined && value !== '') {
+              return true;
+            }
+          }
+          
+          // Check socialMedia
+          if (data.socialMedia && typeof data.socialMedia === 'object') {
+            const socialValues = Object.values(data.socialMedia);
+            if (socialValues.some(v => v !== null && v !== undefined && v !== '' && 
+              (Array.isArray(v) ? v.length > 0 : true))) {
+              return true;
+            }
+          }
+          
+          // Check otherInfo
+          if (data.otherInfo && typeof data.otherInfo === 'object' && 
+              Object.keys(data.otherInfo).length > 0) {
+            return true;
+          }
+          
+          return false;
+        };
+        
+        return hasContactInfoData(contact.contactInfo);
+      })() && (
         <Card>
           <CardHeader>
             <CardTitle>Contact Information</CardTitle>

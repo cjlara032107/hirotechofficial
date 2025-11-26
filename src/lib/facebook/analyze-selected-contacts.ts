@@ -424,7 +424,31 @@ export async function analyzeSelectedContacts(
           // Step 5: Update contact with AI context, contact info, and best contact times
           try {
             // Build update data - only include new fields if they exist in database
-            const hasContactInfo = !!contactInfo && Object.keys(contactInfo).length > 0;
+            // CRITICAL: More thorough check - ensure object has meaningful data, not just keys
+            const hasContactInfo = !!contactInfo && (() => {
+              if (typeof contactInfo !== 'object' || contactInfo === null) return false;
+              const info = contactInfo as Record<string, unknown>;
+              
+              // Check if any field has actual data
+              const hasAge = info.age !== null && info.age !== undefined && typeof info.age === 'number';
+              const hasArrays = ['phoneNumbers', 'emails', 'businessNames', 'pageLinks', 
+                'facebookPages', 'locations', 'occupations', 'companies', 'websites'].some(field => {
+                const value = info[field];
+                return Array.isArray(value) && value.length > 0;
+              });
+              const hasSingles = ['phoneNumber', 'email', 'facebookPage', 'location', 
+                'occupation', 'company', 'website'].some(field => {
+                const value = info[field];
+                return value !== null && value !== undefined && value !== '';
+              });
+              const hasSocial = info.socialMedia && typeof info.socialMedia === 'object' && 
+                Object.values(info.socialMedia).some(v => v !== null && v !== undefined && v !== '' && 
+                  (Array.isArray(v) ? v.length > 0 : true));
+              const hasOther = info.otherInfo && typeof info.otherInfo === 'object' && 
+                Object.keys(info.otherInfo).length > 0;
+              
+              return hasAge || hasArrays || hasSingles || hasSocial || hasOther;
+            })();
             const hasBestContactTimes = !!replyTimeAnalysis;
             const updateData: any = {
               aiContext: analysis.summary,

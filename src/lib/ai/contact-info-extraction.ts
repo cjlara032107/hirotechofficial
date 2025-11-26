@@ -144,8 +144,76 @@ Respond ONLY with valid JSON (no markdown, no explanation):
       const jsonContent = content.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
       const contactInfo = JSON.parse(jsonContent) as ContactInfo;
       
-      console.log('[Contact Info Extraction] Successfully extracted contact information');
-      return contactInfo;
+      // CRITICAL: Validate that the extracted object has meaningful data
+      // An empty object {} would pass truthy checks but has no actual data
+      const hasData = (info: ContactInfo): boolean => {
+        // Check age
+        if (info.age !== null && info.age !== undefined && typeof info.age === 'number') {
+          return true;
+        }
+        
+        // Check arrays (phoneNumbers, emails, etc.)
+        const arrayFields: (keyof ContactInfo)[] = [
+          'phoneNumbers', 'emails', 'businessNames', 'pageLinks', 
+          'facebookPages', 'locations', 'occupations', 'companies', 'websites'
+        ];
+        for (const field of arrayFields) {
+          const value = info[field];
+          if (Array.isArray(value) && value.length > 0) {
+            return true;
+          }
+        }
+        
+        // Check legacy single-value fields
+        const singleFields: (keyof ContactInfo)[] = [
+          'phoneNumber', 'email', 'facebookPage', 'location', 'occupation', 'company', 'website'
+        ];
+        for (const field of singleFields) {
+          const value = info[field];
+          if (value !== null && value !== undefined && value !== '') {
+            return true;
+          }
+        }
+        
+        // Check socialMedia object
+        if (info.socialMedia && typeof info.socialMedia === 'object') {
+          const socialValues = Object.values(info.socialMedia);
+          if (socialValues.some(v => v !== null && v !== undefined && v !== '' && 
+            (Array.isArray(v) ? v.length > 0 : true))) {
+            return true;
+          }
+        }
+        
+        // Check otherInfo object
+        if (info.otherInfo && typeof info.otherInfo === 'object' && 
+            Object.keys(info.otherInfo).length > 0) {
+          return true;
+        }
+        
+        return false;
+      };
+      
+      if (hasData(contactInfo)) {
+        console.log('[Contact Info Extraction] ✅ Successfully extracted contact information with data');
+        const extractedFields = Object.keys(contactInfo).filter(key => {
+          const value = contactInfo[key as keyof ContactInfo];
+          if (Array.isArray(value)) return value.length > 0;
+          if (typeof value === 'object' && value !== null) {
+            if (key === 'socialMedia') {
+              return Object.values(value).some(v => v !== null && v !== undefined && v !== '');
+            }
+            return Object.keys(value).length > 0;
+          }
+          return value !== null && value !== undefined && value !== '';
+        });
+        if (extractedFields.length > 0) {
+          console.log('[Contact Info Extraction] Extracted fields:', extractedFields.join(', '));
+        }
+        return contactInfo;
+      } else {
+        console.log('[Contact Info Extraction] ⚠️ Extracted object has no meaningful data, returning null');
+        return null;
+      }
     } catch (parseError) {
       console.error('[Contact Info Extraction] Failed to parse JSON response:', parseError);
       console.error('[Contact Info Extraction] Response content:', content);
