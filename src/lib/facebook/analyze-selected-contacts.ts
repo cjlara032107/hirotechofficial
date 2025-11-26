@@ -66,11 +66,30 @@ export async function analyzeSelectedContacts(
   organizationId: string,
   onProgress?: (analyzed: number, failed: number, total: number) => void
 ): Promise<AnalyzeSelectedContactsResult> {
+  // Use atomic counters to avoid race conditions
   let successCount = 0;
   let failedCount = 0;
   const errors: Array<{ contactId: string; error: string }> = [];
+  const overallStartTime = Date.now();
+  let batchStartTime: number | undefined;
+  
+  // Helper to safely increment and call progress callback
+  const incrementSuccess = () => {
+    successCount++;
+    if (onProgress) {
+      onProgress(successCount, failedCount, contactIds.length);
+    }
+  };
+  
+  const incrementFailed = (error: string, contactId: string) => {
+    failedCount++;
+    errors.push({ contactId, error });
+    if (onProgress) {
+      onProgress(successCount, failedCount, contactIds.length);
+    }
+  };
 
-  console.log(`[Analyze Selected] Starting analysis for ${contactIds.length} contacts`);
+  console.log(`[Analyze Selected] 🚀 Starting analysis for ${contactIds.length} contacts at ${new Date().toISOString()}`);
 
   // Fetch contacts with their Facebook page info
   const contacts = await prisma.contact.findMany({
@@ -202,10 +221,12 @@ export async function analyzeSelectedContacts(
     const analysisLimiter = new ConcurrencyLimiter(100); // Very high concurrency for AI analysis
 
     console.log(`[Analyze Selected] Processing ${pageContacts.length} contacts continuously...`);
+    batchStartTime = Date.now();
 
     // Process all contacts in one continuous flow
     await Promise.all(
       pageContacts.map(async (contact) => {
+        const contactStartTime = Date.now();
         try {
           // Step 1: Find conversation ID
           let conversationInfo = contact.messengerPSID 
@@ -217,8 +238,7 @@ export async function analyzeSelectedContacts(
           }
 
           if (!conversationInfo) {
-            failedCount++;
-            errors.push({ contactId: contact.id, error: 'Conversation not found' });
+            incrementFailed('Conversation not found', contact.id);
             return;
           }
 
@@ -234,8 +254,7 @@ export async function analyzeSelectedContacts(
           });
 
           if (!messages || messages.length === 0) {
-            failedCount++;
-            errors.push({ contactId: contact.id, error: 'No messages found' });
+            incrementFailed('No messages found', contact.id);
             return;
           }
 
@@ -255,8 +274,7 @@ export async function analyzeSelectedContacts(
             .reverse();
 
           if (messagesToAnalyze.length === 0) {
-            failedCount++;
-            errors.push({ contactId: contact.id, error: 'No valid messages to analyze' });
+            incrementFailed('No valid messages to analyze', contact.id);
             return;
           }
 
@@ -356,11 +374,7 @@ export async function analyzeSelectedContacts(
             const dbErrorObj = dbError as { code?: string; message?: string };
             if (dbErrorObj?.code === 'P1001' || dbErrorObj?.message?.includes("Can't reach database")) {
               console.error(`[Analyze Selected] Database connection error for contact ${contact.id}:`, dbErrorObj.message);
-              failedCount++;
-              errors.push({ 
-                contactId: contact.id, 
-                error: 'Database connection failed. Please try again.' 
-              });
+              incrementFailed('Database connection failed. Please try again.', contact.id);
               return; // Skip pipeline assignment if DB update failed
             }
             
@@ -379,11 +393,7 @@ export async function analyzeSelectedContacts(
                 console.log(`[Analyze Selected] Successfully updated contact ${contact.id} without new fields`);
               } catch (fallbackError) {
                 console.error(`[Analyze Selected] Fallback update also failed for contact ${contact.id}:`, fallbackError);
-                failedCount++;
-                errors.push({ 
-                  contactId: contact.id, 
-                  error: 'Database schema mismatch. Please run migration.' 
-                });
+                incrementFailed('Database schema mismatch. Please run migration.', contact.id);
                 return;
               }
             } else {
@@ -428,11 +438,7 @@ export async function analyzeSelectedContacts(
               } catch (fallbackError: unknown) {
                 const fallbackErrorObj = fallbackError as { code?: string; message?: string };
                 console.error(`[Analyze Selected] Failed to assign contact ${contact.id} to pipeline even with fallback values:`, fallbackErrorObj.message);
-                failedCount++;
-                errors.push({ 
-                  contactId: contact.id, 
-                  error: `Pipeline assignment failed: ${fallbackErrorObj.message || 'Unknown error'}` 
-                });
+                incrementFailed(`Pipeline assignment failed: ${fallbackErrorObj.message || 'Unknown error'}`, contact.id);
               }
             } else {
               // All required fields present - normal assignment
@@ -457,11 +463,7 @@ export async function analyzeSelectedContacts(
                 if (pipelineErrorObj?.code === 'P1001' || pipelineErrorObj?.message?.includes("Can't reach database")) {
                   console.error(`[Analyze Selected] Database connection error during pipeline assignment for contact ${contact.id}:`, pipelineErrorObj.message);
                   // Contact was updated but pipeline assignment failed - still count as partial success
-                  failedCount++;
-                  errors.push({ 
-                    contactId: contact.id, 
-                    error: 'Contact analyzed but pipeline assignment failed due to database connection issue.' 
-                  });
+                  incrementFailed('Contact analyzed but pipeline assignment failed due to database connection issue.', contact.id);
                   return;
                 }
                 console.error(`[Analyze Selected] Pipeline assignment error for contact ${contact.id}:`, pipelineErrorObj.message);
@@ -477,25 +479,24 @@ export async function analyzeSelectedContacts(
             console.log(`[Analyze Selected] Skipping pipeline assignment for contact ${contact.id} - ${reason}`);
           }
 
-          successCount++;
-          // Call progress callback if provided
-          if (onProgress) {
-            onProgress(successCount, failedCount, contactIds.length);
-          }
+          const contactDuration = Date.now() - contactStartTime;
+          console.log(`[Analyze Selected] ✅ Contact ${contact.id} completed in ${contactDuration}ms`);
+          incrementSuccess();
         } catch (error) {
-          failedCount++;
+          const contactDuration = Date.now() - contactStartTime;
           const errorMessage = error instanceof Error ? error.message : (typeof error === 'string' ? error : 'Unknown error');
-          errors.push({ contactId: contact.id, error: errorMessage });
-          // Call progress callback even on failure
-          if (onProgress) {
-            onProgress(successCount, failedCount, contactIds.length);
-          }
+          console.error(`[Analyze Selected] ❌ Contact ${contact.id} failed after ${contactDuration}ms:`, errorMessage);
+          incrementFailed(errorMessage, contact.id);
         }
       })
     );
+    
+    const batchDuration = Date.now() - (batchStartTime || Date.now());
+    console.log(`[Analyze Selected] Batch completed in ${batchDuration}ms (${pageContacts.length} contacts)`);
   }
 
-  console.log(`[Analyze Selected] Completed: ${successCount} analyzed, ${failedCount} failed`);
+  const totalDuration = Date.now() - overallStartTime;
+  console.log(`[Analyze Selected] ✅ Completed: ${successCount} analyzed, ${failedCount} failed in ${totalDuration}ms (${Math.round(totalDuration / 1000)}s)`);
   return { successCount, failedCount, errors };
 }
 
