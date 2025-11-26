@@ -1,5 +1,5 @@
 import { prisma } from '@/lib/db';
-import { Prisma } from '@prisma/client';
+import { Prisma, LeadStatus } from '@prisma/client';
 import { FacebookClient, FacebookApiError } from './client';
 import { analyzeWithFallback } from '@/lib/ai/enhanced-analysis';
 import { autoAssignContactToPipeline } from '@/lib/pipelines/auto-assign';
@@ -194,7 +194,6 @@ async function processBatch(
 
     // Import utilities
     const { shouldPreventDowngrade } = await import('@/lib/pipelines/stage-analyzer');
-    const { LeadStatus } = await import('@prisma/client');
 
     // Process assignments (calculate stage for each contact)
     const assignments: Array<{
