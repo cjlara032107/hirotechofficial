@@ -118,12 +118,33 @@ export async function startBackgroundAnalysis(
       const backgroundPromise = (async () => {
         try {
           console.log(`[Background Analysis ${exactMatchJob.id}] 📍 Restarting background execution`);
-          await connectPrisma();
+          console.log(`[Background Analysis ${exactMatchJob.id}] ⏱️ Execution started at: ${new Date().toISOString()}`);
+          
+          // CRITICAL: Start the first async operation immediately
+          const dbConnectionPromise = connectPrisma();
+          console.log(`[Background Analysis ${exactMatchJob.id}] 🔄 Database connection initiated`);
+          
+          await dbConnectionPromise;
           console.log(`[Background Analysis ${exactMatchJob.id}] ✅ Database connection established`);
+          
+          // CRITICAL: Verify job is still active before proceeding
+          const jobCheck = await prisma.analysisJob.findUnique({
+            where: { id: exactMatchJob.id },
+            select: { status: true },
+          });
+          
+          if (jobCheck?.status === 'CANCELLED') {
+            console.log(`[Background Analysis ${exactMatchJob.id}] ⚠️ Job was cancelled, aborting`);
+            return;
+          }
+          
+          console.log(`[Background Analysis ${exactMatchJob.id}] ✅ Job verified active (${jobCheck?.status}), proceeding with analysis`);
+          
           await executeBackgroundAnalysis(exactMatchJob.id, contactIds, organizationId);
           console.log(`[Background Analysis ${exactMatchJob.id}] ✅ Background execution completed`);
         } catch (error) {
           console.error(`[Background Analysis ${exactMatchJob.id}] ❌ CRITICAL ERROR:`, error);
+          console.error(`[Background Analysis ${exactMatchJob.id}] Error occurred at: ${new Date().toISOString()}`);
           try {
             await connectPrisma();
             await prisma.analysisJob.update({
@@ -156,13 +177,32 @@ export async function startBackgroundAnalysis(
       }
       
       // Wait a tick to ensure promise starts
+      console.log(`[Background Analysis ${exactMatchJob.id}] ⏳ Waiting for promise to start executing...`);
       await new Promise<void>((resolve) => {
         if (typeof process !== 'undefined' && process.nextTick) {
-          process.nextTick(() => resolve());
+          process.nextTick(() => {
+            console.log(`[Background Analysis ${exactMatchJob.id}] ✅ Promise chain confirmed active (nextTick)`);
+            setTimeout(() => {
+              console.log(`[Background Analysis ${exactMatchJob.id}] ✅ 500ms delay completed - promise should be executing`);
+              resolve();
+            }, 500);
+          });
         } else if (typeof setImmediate !== 'undefined') {
-          setImmediate(() => resolve());
+          setImmediate(() => {
+            console.log(`[Background Analysis ${exactMatchJob.id}] ✅ Promise chain confirmed active (setImmediate)`);
+            setTimeout(() => {
+              console.log(`[Background Analysis ${exactMatchJob.id}] ✅ 500ms delay completed - promise should be executing`);
+              resolve();
+            }, 500);
+          });
         } else {
-          setTimeout(() => resolve(), 0);
+          setTimeout(() => {
+            console.log(`[Background Analysis ${exactMatchJob.id}] ✅ Promise chain confirmed active (setTimeout)`);
+            setTimeout(() => {
+              console.log(`[Background Analysis ${exactMatchJob.id}] ✅ 500ms delay completed - promise should be executing`);
+              resolve();
+            }, 500);
+          }, 0);
         }
       });
       
@@ -243,11 +283,30 @@ export async function startBackgroundAnalysis(
       try {
         // CRITICAL: Log immediately to confirm promise is executing
         console.log(`[Background Analysis ${analysisJob.id}] 📍 Inside background promise - starting execution`);
+        console.log(`[Background Analysis ${analysisJob.id}] ⏱️ Execution started at: ${new Date().toISOString()}`);
         
         // CRITICAL: Start the first async operation immediately
         // This ensures the promise is actively executing, not just created
-        await connectPrisma();
+        // Don't await yet - start it and let it run
+        const dbConnectionPromise = connectPrisma();
+        console.log(`[Background Analysis ${analysisJob.id}] 🔄 Database connection initiated`);
+        
+        // Now await it to ensure it actually starts
+        await dbConnectionPromise;
         console.log(`[Background Analysis ${analysisJob.id}] ✅ Database connection established`);
+        
+        // CRITICAL: Verify job is still active before proceeding
+        const jobCheck = await prisma.analysisJob.findUnique({
+          where: { id: analysisJob.id },
+          select: { status: true },
+        });
+        
+        if (jobCheck?.status === 'CANCELLED') {
+          console.log(`[Background Analysis ${analysisJob.id}] ⚠️ Job was cancelled, aborting`);
+          return;
+        }
+        
+        console.log(`[Background Analysis ${analysisJob.id}] ✅ Job verified active (${jobCheck?.status}), proceeding with analysis`);
         
         // Now call the actual analysis function
         await executeBackgroundAnalysis(analysisJob.id, contactIds, organizationId);
@@ -255,6 +314,7 @@ export async function startBackgroundAnalysis(
       } catch (error) {
         console.error(`[Background Analysis ${analysisJob.id}] ❌ CRITICAL ERROR:`, error);
         console.error(`[Background Analysis ${analysisJob.id}] Error stack:`, error instanceof Error ? error.stack : 'No stack trace');
+        console.error(`[Background Analysis ${analysisJob.id}] Error occurred at: ${new Date().toISOString()}`);
         
         // Mark job as failed in database
         try {
@@ -290,31 +350,48 @@ export async function startBackgroundAnalysis(
       });
     }
 
-    // CRITICAL: Ensure promise starts executing by waiting for the first microtask
-    // This guarantees the promise chain begins before we return the response
-    // The IIFE above already started the promise, but we wait a tick to ensure it's executing
+    // CRITICAL: In Vercel serverless, we need to ensure the promise actually starts executing
+    // The function can terminate immediately after response, so we need to:
+    // 1. Start the promise (already done with IIFE)
+    // 2. Wait long enough for the promise to actually begin executing its first async operation
+    // 3. Use a longer delay (500ms) to ensure Vercel keeps the function alive
+    
+    console.log(`[Background Analysis ${analysisJob.id}] ⏳ Waiting for promise to start executing...`);
+    
+    // CRITICAL: Use a longer delay (500ms) to ensure Vercel doesn't terminate before promise starts
+    // This gives the promise time to actually begin executing its first async operation
     await new Promise<void>((resolve) => {
-      // Use process.nextTick if available (Node.js), otherwise setImmediate/setTimeout
-      // This ensures the promise chain has started executing before we return
       if (typeof process !== 'undefined' && process.nextTick) {
         process.nextTick(() => {
           console.log(`[Background Analysis ${analysisJob.id}] ✅ Promise chain confirmed active (nextTick)`);
-          resolve();
+          // CRITICAL: Use 500ms delay to ensure Vercel keeps function alive long enough
+          setTimeout(() => {
+            console.log(`[Background Analysis ${analysisJob.id}] ✅ 500ms delay completed - promise should be executing`);
+            resolve();
+          }, 500);
         });
       } else if (typeof setImmediate !== 'undefined') {
         setImmediate(() => {
           console.log(`[Background Analysis ${analysisJob.id}] ✅ Promise chain confirmed active (setImmediate)`);
-          resolve();
+          setTimeout(() => {
+            console.log(`[Background Analysis ${analysisJob.id}] ✅ 500ms delay completed - promise should be executing`);
+            resolve();
+          }, 500);
         });
       } else {
         setTimeout(() => {
           console.log(`[Background Analysis ${analysisJob.id}] ✅ Promise chain confirmed active (setTimeout)`);
-          resolve();
+          setTimeout(() => {
+            console.log(`[Background Analysis ${analysisJob.id}] ✅ 500ms delay completed - promise should be executing`);
+            resolve();
+          }, 500);
         }, 0);
       }
     });
     
-    console.log(`[Background Analysis] ✅ Background promise execution started - returning response`);
+    console.log(`[Background Analysis ${analysisJob.id}] ✅ Background promise execution started - returning response`);
+    console.log(`[Background Analysis ${analysisJob.id}] ⏱️ Response returning at: ${new Date().toISOString()}`);
+    console.log(`[Background Analysis ${analysisJob.id}] 🔍 If you don't see "📍 Inside background promise" logs, the promise didn't start executing`);
 
     return {
       success: true,
