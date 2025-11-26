@@ -3,6 +3,8 @@ import { FacebookClient } from './client';
 import { analyzeWithFallback } from '@/lib/ai/enhanced-analysis';
 import { analyzeConversation } from '@/lib/ai/google-ai-service';
 import { autoAssignContactToPipeline } from '@/lib/pipelines/auto-assign';
+import { extractContactInfo } from '@/lib/ai/contact-info-extraction';
+import { analyzeReplyTimes } from '@/lib/ai/reply-time-analyzer';
 
 /**
  * Concurrency limiter utility for parallel operations
@@ -194,8 +196,9 @@ export async function analyzeSelectedContacts(
     }
 
     // Process all contacts continuously - each contact completes independently
-    const conversationFetchLimiter = new ConcurrencyLimiter(50); // Higher concurrency
-    const analysisLimiter = new ConcurrencyLimiter(50); // Higher concurrency
+    // Increased concurrency for maximum speed
+    const conversationFetchLimiter = new ConcurrencyLimiter(100); // Very high concurrency for fetching
+    const analysisLimiter = new ConcurrencyLimiter(100); // Very high concurrency for AI analysis
 
     console.log(`[Analyze Selected] Processing ${pageContacts.length} contacts continuously...`);
 
@@ -221,8 +224,8 @@ export async function analyzeSelectedContacts(
           // Step 2: Fetch messages (concurrency limited)
           const messages = await conversationFetchLimiter.execute(async () => {
             try {
-              // Use recent messages only (last 100) for faster analysis
-              return await client.getRecentMessagesForConversation(conversationInfo!.conversationId, 100);
+              // Use recent messages only (last 20) for faster analysis - optimized for speed
+              return await client.getRecentMessagesForConversation(conversationInfo!.conversationId, 20);
             } catch (error) {
               const errorMessage = error instanceof Error ? error.message : 'Unknown error';
               throw errorMessage;
@@ -246,6 +249,7 @@ export async function analyzeSelectedContacts(
               from: msg.from?.name || msg.from?.username || msg.from?.id || 'Unknown',
               text: msg.message || '',
               timestamp: msg.created_time ? new Date(msg.created_time) : undefined,
+              isFromBusiness: msg.from?.id === page.pageId || msg.from?.name?.includes('Page') || false,
             }))
             .reverse();
 
@@ -254,6 +258,40 @@ export async function analyzeSelectedContacts(
             errors.push({ contactId: contact.id, error: 'No valid messages to analyze' });
             return;
           }
+
+          // Step 3.5: Extract contact information and analyze reply times (parallel)
+          const [contactInfo, replyTimeAnalysis] = await Promise.all([
+            // Extract comprehensive contact information
+            analysisLimiter.execute(async () => {
+              try {
+                const info = await extractContactInfo(messagesToAnalyze);
+                if (info) {
+                  console.log(`[Analyze Selected] Successfully extracted contact info for ${contact.id}`);
+                }
+                return info;
+              } catch (error) {
+                const errorMessage = error instanceof Error ? error.message : String(error);
+                console.warn(`[Analyze Selected] Failed to extract contact info for ${contact.id}:`, errorMessage);
+                // Don't fail the entire analysis if contact info extraction fails
+                return null;
+              }
+            }),
+            // Analyze reply times for best contact times (synchronous, no API calls)
+            (() => {
+              try {
+                const analysis = analyzeReplyTimes(messagesToAnalyze, page.pageId);
+                if (analysis) {
+                  console.log(`[Analyze Selected] Successfully analyzed reply times for ${contact.id}`);
+                }
+                return analysis;
+              } catch (error) {
+                const errorMessage = error instanceof Error ? error.message : String(error);
+                console.warn(`[Analyze Selected] Failed to analyze reply times for ${contact.id}:`, errorMessage);
+                // Don't fail the entire analysis if reply time analysis fails
+                return null;
+              }
+            })(),
+          ]);
 
           // Step 4: Analyze with AI (concurrency limited)
           let analysis: { summary: string; leadScore?: number; recommendedStage?: string; leadStatus?: string; confidence?: number; reasoning?: string } | null = null;
@@ -292,14 +330,25 @@ export async function analyzeSelectedContacts(
             throw new Error('Analysis failed');
           }
 
-          // Step 5: Update contact with AI context (immediate - contact appears in pipeline now)
+          // Step 5: Update contact with AI context, contact info, and best contact times
           try {
+            // Build update data - only include new fields if they exist in database
+            const updateData: any = {
+              aiContext: analysis.summary,
+              aiContextUpdatedAt: new Date(),
+            };
+
+            // Only add new fields if they have values (will fail gracefully if columns don't exist)
+            if (contactInfo) {
+              updateData.contactInfo = contactInfo;
+            }
+            if (replyTimeAnalysis) {
+              updateData.bestContactTimes = replyTimeAnalysis;
+            }
+
             await prisma.contact.update({
               where: { id: contact.id },
-              data: {
-                aiContext: analysis.summary,
-                aiContextUpdatedAt: new Date(),
-              },
+              data: updateData,
             });
           } catch (dbError: unknown) {
             // Handle database connection errors
@@ -313,7 +362,32 @@ export async function analyzeSelectedContacts(
               });
               return; // Skip pipeline assignment if DB update failed
             }
-            throw dbError; // Re-throw other errors
+            
+            // Handle missing column error (P2022) - try update without new fields
+            if (dbErrorObj?.code === 'P2022' || dbErrorObj?.message?.includes('does not exist')) {
+              console.warn(`[Analyze Selected] New columns not found in database for contact ${contact.id}, updating without them`);
+              try {
+                // Fallback: update only existing fields
+                await prisma.contact.update({
+                  where: { id: contact.id },
+                  data: {
+                    aiContext: analysis.summary,
+                    aiContextUpdatedAt: new Date(),
+                  },
+                });
+                console.log(`[Analyze Selected] Successfully updated contact ${contact.id} without new fields`);
+              } catch (fallbackError) {
+                console.error(`[Analyze Selected] Fallback update also failed for contact ${contact.id}:`, fallbackError);
+                failedCount++;
+                errors.push({ 
+                  contactId: contact.id, 
+                  error: 'Database schema mismatch. Please run migration.' 
+                });
+                return;
+              }
+            } else {
+              throw dbError; // Re-throw other errors
+            }
           }
 
           // Step 6: Assign to pipeline (only if auto-pipeline is configured and analysis has required fields)

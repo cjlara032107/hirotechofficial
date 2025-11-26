@@ -1,7 +1,7 @@
 import OpenAI from 'openai';
 import apiKeyManager from './api-key-manager';
 
-const RATE_LIMIT_RETRY_DELAY_MS = 6000; // 6 seconds between retries
+const RATE_LIMIT_RETRY_DELAY_MS = 2000; // 2 seconds between retries (reduced from 6s for speed)
 const MAX_ATTEMPTS = 3;
 
 // NVIDIA API model - using openai/gpt-oss-20b
@@ -97,6 +97,8 @@ Summary:`;
           content: prompt,
         },
       ],
+      temperature: 0.3, // Lower temperature for faster, more consistent responses
+      max_tokens: 500, // Limit tokens for faster response (3-5 sentence summary)
     });
 
     console.log(
@@ -316,7 +318,7 @@ Respond ONLY with valid JSON (no markdown, no explanation):
       // Retry with different API key if available
       if (retries > 0) {
         console.log(`[NVIDIA] Retrying with different API key (${retries} retries remaining)...`);
-        await sleep(1000); // Brief delay before retry
+        await sleep(500); // Reduced delay for faster retries
         return generateFollowUpMessage(
           contactName,
           conversationHistory,
@@ -336,7 +338,7 @@ Respond ONLY with valid JSON (no markdown, no explanation):
       // Retry with different API key if available
       if (retries > 0) {
         console.log(`[NVIDIA] Retrying with different API key (${retries} retries remaining)...`);
-        await sleep(1000); // Brief delay before retry
+        await sleep(500); // Reduced delay for faster retries
         return generateFollowUpMessage(
           contactName,
           conversationHistory,
