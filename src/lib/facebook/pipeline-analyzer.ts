@@ -374,6 +374,9 @@ async function executePipelineAnalysis(jobId: string, facebookPageId: string): P
     }> = [];
     
     // Sequential batch processor to prevent multiple batches from running simultaneously
+    // Capture pipeline values to avoid closure issues
+    const pipelineId = page.autoPipelineId!;
+    const pipelineMode = page.autoPipelineMode;
     let batchProcessorPromise: Promise<void> | null = null;
     const pendingBatches: Array<Array<{ contactId: string; aiContext: string; aiAnalysis: any }>> = [];
     
@@ -390,7 +393,7 @@ async function executePipelineAnalysis(jobId: string, facebookPageId: string): P
             const batch = pendingBatches.shift();
             if (batch) {
               try {
-                await processBatch(batch, jobId, page.autoPipelineId!, page.autoPipelineMode);
+                await processBatch(batch, jobId, pipelineId, pipelineMode);
               } catch (error) {
                 console.error(`[Pipeline Analysis ${jobId}] Batch processing error:`, error);
               }
@@ -593,7 +596,7 @@ async function executePipelineAnalysis(jobId: string, facebookPageId: string): P
     
     if (updateQueue.length > 0) {
       console.log(`[Pipeline Analysis ${jobId}] Processing final batch of ${updateQueue.length} contacts...`);
-      await processBatch(updateQueue, jobId, page.autoPipelineId!, page.autoPipelineMode);
+      await processBatch(updateQueue, jobId, pipelineId, pipelineMode);
     }
 
     // Update job with final results
