@@ -484,10 +484,10 @@ export function ContactsTable({ contacts, tags, pipelines, isLoading }: Contacts
       console.error('[ContactsTable] 🚨 WARNING: Sending more than 20 contacts! This might be an error.');
       console.error('  Contact IDs being sent:', contactIdsToSend);
       // If user only selected 1 but we're sending many, something is wrong
-      if (stateSelectedIds.size === 1 && contactIdsToSend.length > 1) {
+      if (currentSelection.size === 1 && contactIdsToSend.length > 1) {
         console.error('[ContactsTable] 🚨 CRITICAL BUG: User selected 1 but sending multiple!');
         console.error('  Forcing to send only the selected contact');
-        contactIdsToSend = Array.from(stateSelectedIds);
+        contactIdsToSend = currentSelectionArray;
       }
     }
     
