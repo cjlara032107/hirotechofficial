@@ -889,7 +889,7 @@ export function ContactsTable({ contacts, tags, pipelines, isLoading }: Contacts
                   }
                   
                   const selectionSize = finalSelection.size;
-                  const selectionArray = Array.from(finalSelection);
+                  let selectionArray = Array.from(finalSelection);
                   
                   console.log('[ContactsTable] 🔍 Analyze button clicked - MULTI-SOURCE CHECK');
                   console.log('  Ref selection size:', refSelection.size, Array.from(refSelection));
@@ -900,6 +900,21 @@ export function ContactsTable({ contacts, tags, pipelines, isLoading }: Contacts
                   console.log('  selectAllPages:', selectAllPages);
                   console.log('  allContactIds length:', allContactIds.length);
                   
+                  // CRITICAL: If final selection is 1 but allContactIds suggests more, force clear it
+                  // This handles the case where user manually changed from "select all" to single selection
+                  if (finalSelection.size === 1 && allContactIds.length > 1) {
+                    console.warn('[ContactsTable] 🚨 CRITICAL: Final selection is 1 but allContactIds has more!');
+                    console.warn(`  Final selection: ${Array.from(finalSelection)}`);
+                    console.warn(`  allContactIds: ${allContactIds.length} contacts`);
+                    console.warn('  FORCING clear of allContactIds to prevent analyzing all contacts');
+                    setSelectAllPages(false);
+                    setAllContactIds([]);
+                    setTotalContactsCount(0);
+                    // Ensure ref and state match final selection
+                    setSelectedIds(finalSelection);
+                    selectedIdsRef.current = finalSelection;
+                  }
+                  
                   // CRITICAL: If final selection is 1, force clear all "select all" flags
                   if (selectionSize === 1) {
                     console.log('[ContactsTable] 🔒 SINGLE SELECTION DETECTED - Clearing all flags');
@@ -909,6 +924,16 @@ export function ContactsTable({ contacts, tags, pipelines, isLoading }: Contacts
                     // Update ref and state to match
                     setSelectedIds(finalSelection);
                     selectedIdsRef.current = finalSelection;
+                  }
+                  
+                  // ABSOLUTE SAFETY: If finalSelection is 1, ensure we ONLY send that 1 contact
+                  // This is a hard stop - no exceptions, regardless of any flags or arrays
+                  if (finalSelection.size === 1) {
+                    const singleId = Array.from(finalSelection)[0];
+                    console.log('[ContactsTable] 🔒 HARD LIMIT: Final selection is 1, forcing to send only that contact');
+                    console.log(`  Contact ID: ${singleId}`);
+                    // Override selectionArray to ensure only 1 contact is sent
+                    selectionArray = [singleId];
                   }
                   
                   // Safety check: If only 1 is selected but flags suggest more, warn user
@@ -930,6 +955,14 @@ export function ContactsTable({ contacts, tags, pipelines, isLoading }: Contacts
                   
                   // CRITICAL: Pass selection directly to handleBulkAction to bypass all state checks
                   // This ensures we use the exact selection we just determined
+                  // FINAL VALIDATION: Ensure selectionArray matches finalSelection
+                  if (selectionArray.length !== finalSelection.size) {
+                    console.error('[ContactsTable] 🚨 CRITICAL: selectionArray length mismatch!');
+                    console.error(`  finalSelection.size: ${finalSelection.size}`);
+                    console.error(`  selectionArray.length: ${selectionArray.length}`);
+                    selectionArray = Array.from(finalSelection);
+                  }
+                  
                   await handleBulkAction('analyze', undefined, selectionArray);
                 }}
                 disabled={bulkActionLoading}
