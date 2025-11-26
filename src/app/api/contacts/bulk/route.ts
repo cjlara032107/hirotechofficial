@@ -244,13 +244,24 @@ export async function POST(request: NextRequest) {
       case 'analyze':
         // Start background analysis for selected contacts
         try {
-          console.log(`[Bulk API] Starting analysis for ${contactIds.length} contact(s):`, contactIds);
+          console.log(`[Bulk API] 🔍 DEBUG: Starting analysis for ${contactIds.length} contact(s)`);
+          console.log(`[Bulk API] Contact IDs received:`, contactIds);
+          console.log(`[Bulk API] Organization ID: ${validatedSession.user.organizationId}`);
+          console.log(`[Bulk API] User ID: ${validatedSession.user.id}`);
+          
+          // CRITICAL VALIDATION: Ensure we're not accidentally analyzing all contacts
+          if (contactIds.length > 20) {
+            console.error(`[Bulk API] 🚨 WARNING: Received ${contactIds.length} contacts! This might be an error.`);
+            console.error(`[Bulk API] Contact IDs:`, contactIds);
+          }
+          
           const backgroundResult = await startBackgroundAnalysis(
             contactIds,
             validatedSession.user.organizationId,
             validatedSession.user.id
           );
-          console.log(`[Bulk API] Analysis started with jobId: ${backgroundResult.jobId}`);
+          console.log(`[Bulk API] ✅ Analysis started with jobId: ${backgroundResult.jobId}`);
+          console.log(`[Bulk API] Job created for ${contactIds.length} contact(s)`);
 
           result = {
             success: true,
