@@ -283,10 +283,12 @@ async function executePipelineAnalysis(jobId: string, facebookPageId: string): P
     }
 
     // Process all contacts continuously - each contact completes independently
-    // MAXIMUM concurrency for fastest processing (300 concurrent operations)
-    // This allows processing 100+ contacts per minute when AI is fast
-    const conversationFetchLimiter = new ConcurrencyLimiter(300); // Limit API calls
-    const analysisLimiter = new ConcurrencyLimiter(300); // Limit AI analysis
+    // Optimized concurrency: 50 concurrent operations to match database connection pool (20 connections)
+    // With connection pooling, 50 concurrent operations can share 20 connections efficiently
+    // This prevents connection pool exhaustion while maintaining good performance
+    const conversationFetchLimiter = new ConcurrencyLimiter(50); // Limit API calls
+    const analysisLimiter = new ConcurrencyLimiter(50); // Limit AI analysis
+    const dbUpdateLimiter = new ConcurrencyLimiter(20); // Limit database operations to match pool size
 
     console.log(`[Pipeline Analysis ${jobId}] Processing ${contactsWithoutPipeline.length} contacts continuously...`);
 
@@ -403,27 +405,33 @@ async function executePipelineAnalysis(jobId: string, facebookPageId: string): P
             // );
           });
 
-          // Step 5: Update contact with AI context (non-blocking for speed)
-          // Fire-and-forget: don't await, process continues immediately
-          prisma.contact.update({
-            where: { id: contact.id },
-            data: {
-              aiContext: analysis.summary,
-              aiContextUpdatedAt: new Date(),
-            },
-          }).catch((error) => {
-            console.error(`[Pipeline Analysis ${jobId}] Failed to update AI context for contact ${contact.id}:`, error);
+          // Step 5: Update contact with AI context (rate-limited to prevent pool exhaustion)
+          await dbUpdateLimiter.execute(async () => {
+            try {
+              await prisma.contact.update({
+                where: { id: contact.id },
+                data: {
+                  aiContext: analysis.summary,
+                  aiContextUpdatedAt: new Date(),
+                },
+              });
+            } catch (error) {
+              console.error(`[Pipeline Analysis ${jobId}] Failed to update AI context for contact ${contact.id}:`, error);
+            }
           });
 
-          // Step 6: Assign to pipeline (non-blocking for speed)
-          // Fire-and-forget: don't await, process continues immediately
-          autoAssignContactToPipeline({
-            contactId: contact.id,
-            aiAnalysis: analysis,
-            pipelineId: page.autoPipelineId!,
-            updateMode: page.autoPipelineMode,
-          }).catch((error) => {
-            console.error(`[Pipeline Analysis ${jobId}] Failed to assign pipeline for contact ${contact.id}:`, error);
+          // Step 6: Assign to pipeline (rate-limited to prevent pool exhaustion)
+          await dbUpdateLimiter.execute(async () => {
+            try {
+              await autoAssignContactToPipeline({
+                contactId: contact.id,
+                aiAnalysis: analysis,
+                pipelineId: page.autoPipelineId!,
+                updateMode: page.autoPipelineMode,
+              });
+            } catch (error) {
+              console.error(`[Pipeline Analysis ${jobId}] Failed to assign pipeline for contact ${contact.id}:`, error);
+            }
           });
 
           // Increment counter (atomic operation in JavaScript)
