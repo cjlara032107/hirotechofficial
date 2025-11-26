@@ -96,6 +96,15 @@ export async function analyzeSelectedContacts(
   if (contactIds.length > 50) {
     console.error(`[Analyze Selected] 🚨 WARNING: Received ${contactIds.length} contacts! This might be an error.`);
     console.error(`[Analyze Selected] Contact IDs:`, contactIds);
+    console.error(`[Analyze Selected] If user only selected 1 contact, this is a BUG!`);
+  }
+  
+  // ADDITIONAL VALIDATION: Log the exact count to help debug
+  if (contactIds.length === 1) {
+    console.log(`[Analyze Selected] ✅ Processing exactly 1 contact - this is correct for single selection`);
+    console.log(`[Analyze Selected] Contact ID: ${contactIds[0]}`);
+  } else {
+    console.log(`[Analyze Selected] ⚠️ Processing ${contactIds.length} contacts - ensure this matches user's selection`);
   }
 
   // Fetch contacts with their Facebook page info

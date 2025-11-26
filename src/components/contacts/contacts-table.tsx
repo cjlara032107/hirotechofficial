@@ -344,23 +344,37 @@ export function ContactsTable({ contacts, tags, pipelines, isLoading }: Contacts
       
       // CRITICAL FIX: Reset "select all pages" if user manually changes selection
       // This ensures that if selectAllPages was true, any manual selection change resets it
+      const newSelectedArray = Array.from(newSelected);
+      
       if (selectAllPages) {
         // Check if the new selection matches allContactIds
-        const newSelectedArray = Array.from(newSelected);
         const matchesAllPages = 
           newSelectedArray.length === allContactIds.length &&
           newSelectedArray.every(contactId => allContactIds.includes(contactId));
         
         // If selection doesn't match "all pages" anymore, reset the flag
         if (!matchesAllPages) {
-          console.log('[ContactsTable] Manual selection change detected, resetting selectAllPages. New selection:', newSelectedArray.length, 'contacts');
+          console.log('[ContactsTable] 🔄 Manual selection change detected, resetting selectAllPages');
+          console.log(`  Previous: ${allContactIds.length} contacts (selectAllPages=true)`);
+          console.log(`  New: ${newSelectedArray.length} contact(s) selected`);
+          console.log(`  Selected IDs:`, newSelectedArray);
           setSelectAllPages(false);
           setAllContactIds([]);
           setTotalContactsCount(0);
         }
       }
       
-      console.log(`[ContactsTable] Selection updated: ${newSelected.size} contact(s) selected`, Array.from(newSelected));
+      // ADDITIONAL SAFETY: If only 1 contact is selected, ensure selectAllPages is false
+      // This prevents any edge cases where the flag might be incorrectly set
+      if (newSelectedArray.length === 1 && selectAllPages) {
+        console.warn('[ContactsTable] 🚨 SAFETY CHECK: Only 1 contact selected but selectAllPages=true!');
+        console.warn('  Forcing reset of selectAllPages flag');
+        setSelectAllPages(false);
+        setAllContactIds([]);
+        setTotalContactsCount(0);
+      }
+      
+      console.log(`[ContactsTable] Selection updated: ${newSelected.size} contact(s) selected`, newSelectedArray);
       return newSelected;
     });
   }
@@ -394,31 +408,47 @@ export function ContactsTable({ contacts, tags, pipelines, isLoading }: Contacts
     // CRITICAL FIX: If selectAllPages is true, we MUST verify the selection matches
     // If it doesn't match, force reset and use only what's actually selected
     if (selectAllPages) {
-      if (contactIdsToSend.length !== totalContactsCount) {
+      // CRITICAL: Always verify that selectedIds actually matches allContactIds
+      // If they don't match, it means the user manually changed the selection
+      const selectedArray = Array.from(contactIdsToSend).sort();
+      const allIdsArray = [...allContactIds].sort();
+      const matchesAllIds = selectedArray.length === allIdsArray.length && 
+        selectedArray.every((id, idx) => id === allIdsArray[idx]);
+      
+      if (!matchesAllIds || contactIdsToSend.length !== totalContactsCount) {
         console.warn('[ContactsTable] ⚠️ CRITICAL: selectAllPages=true but selection mismatch!');
-        console.warn(`  Expected ${totalContactsCount} contacts, got ${contactIdsToSend.length}`);
-        console.warn('  FORCING RESET of selectAllPages flag');
+        console.warn(`  Expected ${totalContactsCount} contacts (from allContactIds), got ${contactIdsToSend.length}`);
+        console.warn(`  Selected IDs match allContactIds: ${matchesAllIds}`);
+        console.warn('  FORCING RESET of selectAllPages flag - user manually changed selection');
         setSelectAllPages(false);
         setAllContactIds([]);
         setTotalContactsCount(0);
         // CRITICAL: Don't re-read from state (it's async), use the value we already have
         // contactIdsToSend already has the correct value from stateSelectedIds above
       } else {
-        // If selectAllPages is true AND the count matches, verify we're not accidentally using allContactIds
-        // This is a safety check to prevent analyzing all contacts when user only selected one
-        if (contactIdsToSend.length > 1 && allContactIds.length > 0) {
-          // Check if the selected IDs match allContactIds (which would mean "select all" is active)
-          const selectedArray = Array.from(contactIdsToSend).sort();
-          const allIdsArray = [...allContactIds].sort();
-          const matchesAllIds = selectedArray.length === allIdsArray.length && 
-            selectedArray.every((id, idx) => id === allIdsArray[idx]);
-          
-          if (matchesAllIds) {
-            console.warn('[ContactsTable] 🚨 CRITICAL: Selected IDs match allContactIds! This might be "select all" mode.');
-            console.warn('  This should only happen if user explicitly clicked "Select all pages"');
-            console.warn('  If user only selected 1 contact, this is a BUG!');
-          }
-        }
+        // If selectAllPages is true AND everything matches, this is a legitimate "select all" action
+        console.log('[ContactsTable] ✅ Valid "select all pages" action confirmed');
+        console.log(`  Processing ${contactIdsToSend.length} contacts from "select all pages"`);
+      }
+    }
+    
+    // ADDITIONAL SAFETY CHECK: If selectAllPages is false but allContactIds is populated,
+    // make sure we're not accidentally using allContactIds instead of selectedIds
+    if (!selectAllPages && allContactIds.length > 0) {
+      const selectedArray = Array.from(contactIdsToSend).sort();
+      const allIdsArray = [...allContactIds].sort();
+      const matchesAllIds = selectedArray.length === allIdsArray.length && 
+        selectedArray.every((id, idx) => id === allIdsArray[idx]);
+      
+      if (matchesAllIds && contactIdsToSend.length > 1) {
+        console.error('[ContactsTable] 🚨 CRITICAL BUG: selectAllPages=false but selectedIds matches allContactIds!');
+        console.error('  This should NEVER happen - clearing allContactIds to prevent incorrect analysis');
+        console.error(`  Selected: ${contactIdsToSend.length} contacts`);
+        console.error(`  All IDs: ${allContactIds.length} contacts`);
+        // Clear the stale allContactIds to prevent future issues
+        setAllContactIds([]);
+        setTotalContactsCount(0);
+        // Continue with the actual selectedIds (which should be correct)
       }
     }
     

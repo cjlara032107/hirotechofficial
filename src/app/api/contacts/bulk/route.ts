@@ -253,6 +253,16 @@ export async function POST(request: NextRequest) {
           if (contactIds.length > 20) {
             console.error(`[Bulk API] 🚨 WARNING: Received ${contactIds.length} contacts! This might be an error.`);
             console.error(`[Bulk API] Contact IDs:`, contactIds);
+            console.error(`[Bulk API] If user only selected 1 contact, this is a BUG!`);
+          }
+          
+          // ADDITIONAL VALIDATION: Check if this looks like an accidental "select all"
+          // If user selected 1 contact but we received many, something is wrong
+          if (contactIds.length > 1) {
+            // Log a warning but don't block - user might have legitimately selected many
+            console.log(`[Bulk API] ⚠️ Processing ${contactIds.length} contacts - ensure this is intentional`);
+          } else if (contactIds.length === 1) {
+            console.log(`[Bulk API] ✅ Processing 1 contact - this is correct for single selection`);
           }
           
           const backgroundResult = await startBackgroundAnalysis(
