@@ -142,6 +142,14 @@ export async function startBackgroundAnalysis(
     
     console.log(`[Background Analysis] ✅ Job created: ${analysisJob.id} with ${analysisJob.totalContacts} contact(s)`);
 
+    // CRITICAL: Update status to IN_PROGRESS immediately to confirm execution will start
+    // This ensures the UI shows progress even if the background promise is delayed
+    await prisma.analysisJob.update({
+      where: { id: analysisJob.id },
+      data: { status: 'IN_PROGRESS', startedAt: new Date() },
+    });
+    console.log(`[Background Analysis] ✅ Job status updated to IN_PROGRESS - execution will start immediately`);
+
     // Start the analysis process asynchronously (don't await)
     // For Vercel serverless, we need to ensure the promise chain starts before response
     // Use immediate execution with proper error handling
@@ -153,6 +161,16 @@ export async function startBackgroundAnalysis(
         
         // CRITICAL: Ensure we have a connection before starting
         await connectPrisma();
+        
+        // CRITICAL: Verify job is still active before starting
+        const jobCheck = await prisma.analysisJob.findUnique({
+          where: { id: analysisJob.id },
+          select: { status: true },
+        });
+        if (jobCheck?.status === 'CANCELLED') {
+          console.log(`[Background Analysis ${analysisJob.id}] Job was cancelled before execution started`);
+          return;
+        }
         
         await executeBackgroundAnalysis(analysisJob.id, contactIds, organizationId);
         console.log(`[Background Analysis ${analysisJob.id}] ✅ Background execution completed`);
@@ -194,6 +212,19 @@ export async function startBackgroundAnalysis(
       });
     }
 
+    // CRITICAL: Ensure promise starts executing by giving it a microtask
+    // This guarantees the promise chain begins before we return the response
+    // Using setImmediate ensures the promise gets scheduled in the event loop
+    await new Promise<void>((resolve) => {
+      if (typeof setImmediate !== 'undefined') {
+        setImmediate(() => resolve());
+      } else {
+        // Fallback for environments without setImmediate
+        setTimeout(() => resolve(), 0);
+      }
+    });
+    console.log(`[Background Analysis] ✅ Background promise execution started - returning response`);
+
     return {
       success: true,
       jobId: analysisJob.id,
@@ -233,14 +264,17 @@ async function executeBackgroundAnalysis(
     // CRITICAL: Ensure database connection is established (required for Vercel serverless)
     await connectPrisma();
     
-    // Update job status to IN_PROGRESS
-    await prisma.analysisJob.update({
+    // Status already updated to IN_PROGRESS in startBackgroundAnalysis
+    // Just verify it's still active and log confirmation
+    const jobStatus = await prisma.analysisJob.findUnique({
       where: { id: jobId },
-      data: {
-        status: 'IN_PROGRESS',
-        startedAt: new Date(),
-      },
+      select: { status: true, startedAt: true },
     });
+    if (jobStatus?.status === 'CANCELLED') {
+      console.log(`[Background Analysis ${jobId}] Job was cancelled, aborting execution`);
+      return;
+    }
+    console.log(`[Background Analysis ${jobId}] ✅ Job status verified: ${jobStatus?.status}, started at: ${jobStatus?.startedAt?.toISOString()}`);
 
     console.log(`[Background Analysis ${jobId}] ✅ Starting analysis for ${contactIds.length} contacts at ${new Date().toISOString()}`);
 
@@ -255,8 +289,8 @@ async function executeBackgroundAnalysis(
 
     // Helper function to update progress (non-blocking)
     const updateProgress = async (force = false) => {
-      // Always update for small jobs, or every 5 contacts for large jobs
-      const shouldUpdate = force || useIndividualProcessing || (analyzedCount + failedCount) % 5 === 0;
+      // Always update for small jobs, or every 5 contacts for large jobs, or when count is 0 (initial state)
+      const shouldUpdate = force || useIndividualProcessing || analyzedCount === 0 || (analyzedCount + failedCount) % 5 === 0;
       
       if (shouldUpdate) {
         // Fire-and-forget progress update (don't block processing)
@@ -271,11 +305,16 @@ async function executeBackgroundAnalysis(
           console.error(`[Background Analysis ${jobId}] Failed to update progress:`, error);
         });
         
+        // CRITICAL: Log progress to help debug stuck jobs
         console.log(
-          `[Background Analysis ${jobId}] Progress: ${analyzedCount}/${contactIds.length} analyzed, ${failedCount} failed`
+          `[Background Analysis ${jobId}] 📊 Progress: ${analyzedCount}/${contactIds.length} analyzed, ${failedCount} failed`
         );
       }
     };
+    
+    // CRITICAL: Initial progress update to confirm execution started
+    await updateProgress(true);
+    console.log(`[Background Analysis ${jobId}] ✅ Initial progress update sent - analysis is running`);
 
     if (useIndividualProcessing) {
       // Process all contacts in a single batch for maximum efficiency!
