@@ -1,4 +1,4 @@
-import { prisma } from '@/lib/db';
+import { prisma, connectPrisma } from '@/lib/db';
 import { analyzeSelectedContacts } from './analyze-selected-contacts';
 import { AnalysisJobStatus } from '@prisma/client';
 
@@ -18,6 +18,9 @@ export async function startBackgroundAnalysis(
   userId: string
 ): Promise<BackgroundAnalysisResult> {
   try {
+    // CRITICAL: Ensure database connection is established (required for Vercel serverless)
+    await connectPrisma();
+    
     // Check if there's already an active analysis job for these contacts
     const existingJob = await prisma.analysisJob.findFirst({
       where: {
@@ -106,6 +109,9 @@ async function executeBackgroundAnalysis(
   organizationId: string
 ): Promise<void> {
   try {
+    // CRITICAL: Ensure database connection is established (required for Vercel serverless)
+    await connectPrisma();
+    
     // Update job status to IN_PROGRESS
     await prisma.analysisJob.update({
       where: { id: jobId },
