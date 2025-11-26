@@ -174,15 +174,19 @@ async function processBatch(
       console.log(`[Pipeline Analysis ${jobId}] All contacts in batch already assigned (SKIP_EXISTING mode)`);
       // Still update AI context
       await prisma.$transaction(
-        batch.map(item =>
-          prisma.contact.update({
-            where: { id: item.contactId },
-            data: {
-              aiContext: item.aiContext,
-              aiContextUpdatedAt: new Date(),
-            },
-          })
-        ),
+        async (tx) => {
+          await Promise.all(
+            batch.map(item =>
+              tx.contact.update({
+                where: { id: item.contactId },
+                data: {
+                  aiContext: item.aiContext,
+                  aiContextUpdatedAt: new Date(),
+                },
+              })
+            )
+          );
+        },
         { timeout: 30000 }
       );
       return;
