@@ -381,8 +381,89 @@ export function ContactsTable({ contacts, tags, pipelines, isLoading }: Contacts
 
   async function handleBulkAction(
     action: string,
-    data?: { tags?: string[]; stageId?: string }
+    data?: { tags?: string[]; stageId?: string },
+    overrideContactIds?: string[] // Allow passing contact IDs directly to bypass state
   ) {
+    // CRITICAL: If overrideContactIds is provided, use it directly (bypasses all state checks)
+    if (overrideContactIds && overrideContactIds.length > 0) {
+      console.log('[ContactsTable] 🔒 OVERRIDE MODE: Using provided contact IDs directly');
+      console.log('  Override contact IDs:', overrideContactIds);
+      console.log('  Count:', overrideContactIds.length);
+      
+      // If only 1 contact, force clear all flags
+      if (overrideContactIds.length === 1) {
+        setSelectAllPages(false);
+        setAllContactIds([]);
+        setTotalContactsCount(0);
+      }
+      
+      // Use override directly - no validation needed, caller is responsible
+      const contactIdsToSend = overrideContactIds;
+      
+      console.log(`[ContactsTable] 🚀 FINAL: Sending bulk action "${action}" for ${contactIdsToSend.length} contact(s) (OVERRIDE MODE)`);
+      console.log(`[ContactsTable] Contact IDs being sent:`, contactIdsToSend);
+      
+      try {
+        setBulkActionLoading(true);
+        const response = await fetch('/api/contacts/bulk', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            action,
+            contactIds: contactIdsToSend,
+            data,
+          }),
+        });
+
+        const contentType = response.headers.get('content-type');
+        if (!contentType?.includes('application/json')) {
+          throw new Error('Server returned non-JSON response');
+        }
+
+        const result = await response.json();
+        // Handle response (same as below)
+        if (response.ok) {
+          if (action === 'analyze') {
+            if (result.analyzing && result.jobId) {
+              toast.info('Analysis started in background', {
+                description: 'You can continue working while contacts are analyzed',
+                duration: 3000,
+              });
+              if (typeof window !== 'undefined') {
+                sessionStorage.setItem('activeAnalysisJobId', result.jobId);
+                window.dispatchEvent(new CustomEvent('analysisStarted', { detail: { jobId: result.jobId } }));
+              }
+            } else {
+              const analyzed = result.analyzed || 0;
+              const failed = result.failed || 0;
+              if (analyzed > 0) {
+                toast.success(
+                  `Successfully analyzed ${analyzed} contact(s)${failed > 0 ? `, ${failed} failed` : ''}`
+                );
+              }
+            }
+          } else {
+            toast.success(
+              `Successfully ${action === 'delete' ? 'deleted' : 'updated'} ${
+                contactIdsToSend.length
+              } contact(s)`
+            );
+          }
+          setSelectedIds(new Set());
+          queryClient.invalidateQueries({ queryKey: ['contacts'] });
+        } else {
+          toast.error(result.error || 'Failed to perform action');
+        }
+      } catch (error) {
+        console.error('Bulk action error:', error);
+        toast.error(error instanceof Error ? error.message : 'Failed to perform bulk action');
+      } finally {
+        setBulkActionLoading(false);
+      }
+      
+      return; // Exit early, we've handled the request
+    }
+    
     // CRITICAL: Read selection DIRECTLY from ref (updated synchronously) at the moment of click
     // This avoids any React state batching or closure issues
     const currentSelection = new Set(selectedIdsRef.current);
@@ -788,21 +869,9 @@ export function ContactsTable({ contacts, tags, pipelines, isLoading }: Contacts
                     setTotalContactsCount(0);
                   }
                   
-                  // Proceed with analysis using the final selection
-                  // Temporarily update state to ensure handleBulkAction uses correct selection
-                  const originalSelection = selectedIds;
-                  setSelectedIds(finalSelection);
-                  selectedIdsRef.current = finalSelection;
-                  
-                  try {
-                    await handleBulkAction('analyze');
-                  } finally {
-                    // Restore original selection (in case it was different)
-                    if (originalSelection.size !== finalSelection.size) {
-                      setSelectedIds(originalSelection);
-                      selectedIdsRef.current = originalSelection;
-                    }
-                  }
+                  // CRITICAL: Pass selection directly to handleBulkAction to bypass all state checks
+                  // This ensures we use the exact selection we just determined
+                  await handleBulkAction('analyze', undefined, selectionArray);
                 }}
                 disabled={bulkActionLoading}
                 className="bg-purple-50 hover:bg-purple-100 dark:bg-purple-950/20 dark:hover:bg-purple-950/40"
