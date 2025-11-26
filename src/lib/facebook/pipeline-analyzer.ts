@@ -4,6 +4,7 @@ import { FacebookClient, FacebookApiError } from './client';
 import { analyzeWithFallback } from '@/lib/ai/enhanced-analysis';
 import { autoAssignContactToPipeline } from '@/lib/pipelines/auto-assign';
 import { applyStageScoreRanges } from '@/lib/pipelines/stage-analyzer';
+import { withDbRetry } from '@/lib/db-retry';
 
 interface PipelineAnalysisResult {
   success: boolean;
@@ -378,16 +379,16 @@ async function processBatch(
  */
 async function executePipelineAnalysis(jobId: string, facebookPageId: string): Promise<void> {
   try {
-    // Update job status to in progress
-    await prisma.syncJob.update({
+    // Update job status to in progress (with retry)
+    await withDbRetry(() => prisma.syncJob.update({
       where: { id: jobId },
       data: {
         status: 'IN_PROGRESS',
         startedAt: new Date(),
       },
-    });
+    }));
 
-    const page = await prisma.facebookPage.findUnique({
+    const page = await withDbRetry(() => prisma.facebookPage.findUnique({
       where: { id: facebookPageId },
       include: {
         autoPipeline: {
@@ -396,7 +397,7 @@ async function executePipelineAnalysis(jobId: string, facebookPageId: string): P
           }
         }
       }
-    });
+    }));
 
     if (!page) {
       throw new Error('Facebook page not found');
@@ -443,8 +444,8 @@ async function executePipelineAnalysis(jobId: string, facebookPageId: string): P
       }
     }
 
-    // Query contacts without pipelineId for this page
-    const contactsWithoutPipeline = await prisma.contact.findMany({
+    // Query contacts without pipelineId for this page (with retry)
+    const contactsWithoutPipeline = await withDbRetry(() => prisma.contact.findMany({
       where: {
         facebookPageId: page.id,
         pipelineId: null,
@@ -461,12 +462,12 @@ async function executePipelineAnalysis(jobId: string, facebookPageId: string): P
         lastName: true,
         lastInteraction: true,
       },
-    });
+    }));
 
     console.log(`[Pipeline Analysis ${jobId}] Found ${contactsWithoutPipeline.length} contacts without pipeline`);
 
     if (contactsWithoutPipeline.length === 0) {
-      await prisma.syncJob.update({
+      await withDbRetry(() => prisma.syncJob.update({
         where: { id: jobId },
         data: {
           status: 'COMPLETED',
@@ -475,18 +476,18 @@ async function executePipelineAnalysis(jobId: string, facebookPageId: string): P
           totalContacts: 0,
           completedAt: new Date(),
         },
-      });
+      }));
       console.log(`[Pipeline Analysis ${jobId}] No contacts to analyze`);
       return;
     }
 
-    // Update total contacts
-    await prisma.syncJob.update({
+    // Update total contacts (with retry)
+    await withDbRetry(() => prisma.syncJob.update({
       where: { id: jobId },
       data: {
         totalContacts: contactsWithoutPipeline.length,
       },
-    });
+    }));
 
     // Fetch all conversations once (to match contacts to conversations)
     console.log(`[Pipeline Analysis ${jobId}] Fetching conversations to match contacts...`);
