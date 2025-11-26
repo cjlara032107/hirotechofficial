@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { prisma, connectPrisma } from '@/lib/db';
+import { prismaWithRetry } from '@/lib/db-retry';
 import { generateFollowUpMessage } from '@/lib/ai/google-ai-service';
 import { FacebookClient } from '@/lib/facebook/client';
 import { isContactEligibleForAutomation } from '@/lib/ai/conflict-prevention';
@@ -20,8 +21,8 @@ export async function GET(request: NextRequest) {
     console.log('[AI Automations Cron] Starting execution...');
     const startTime = Date.now();
 
-    // Get all enabled automation rules
-    const rules = await prisma.aIAutomationRule.findMany({
+    // Get all enabled automation rules (with retry for pool exhaustion)
+    const rules = await prismaWithRetry(() => prisma.aIAutomationRule.findMany({
       where: {
         enabled: true,
       },
@@ -34,7 +35,7 @@ export async function GET(request: NextRequest) {
           },
         },
       },
-    });
+    }));
 
     if (rules.length === 0) {
       console.log('[AI Automations Cron] No enabled rules found');

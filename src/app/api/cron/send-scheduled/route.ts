@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/db';
+import { prismaWithRetry } from '@/lib/db-retry';
 import { startCampaign, getTargetContacts } from '@/lib/campaigns/send';
 import { GoogleAIService } from '@/lib/ai/google-ai-service';
 import { FacebookClient } from '@/lib/facebook/client';
@@ -25,9 +26,9 @@ export async function GET(request: NextRequest) {
     const currentTime = new Date();
     console.log('[Cron Send Scheduled] Starting at', currentTime.toISOString());
 
-    // Find all campaigns that are scheduled and due to be sent
+    // Find all campaigns that are scheduled and due to be sent (with retry for pool exhaustion)
     // Query: status = SCHEDULED AND scheduledAt <= currentTime
-    const dueCampaigns = await prisma.campaign.findMany({
+    const dueCampaigns = await prismaWithRetry(() => prisma.campaign.findMany({
       where: {
         status: 'SCHEDULED',
         scheduledAt: {
@@ -43,7 +44,7 @@ export async function GET(request: NextRequest) {
         scheduledAt: 'asc', // Process oldest scheduled campaigns first
       },
       take: 10, // Process up to 10 campaigns per run to avoid timeout
-    });
+    }));
 
     if (dueCampaigns.length === 0) {
       console.log('[Cron Send Scheduled] No campaigns due');
