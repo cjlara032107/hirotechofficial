@@ -107,6 +107,18 @@ export async function analyzeSelectedContacts(
     console.log(`[Analyze Selected] ⚠️ Processing ${contactIds.length} contacts - ensure this matches user's selection`);
   }
 
+  // CRITICAL: Validate contactIds array before querying
+  if (!Array.isArray(contactIds) || contactIds.length === 0) {
+    console.error('[Analyze Selected] 🚨 CRITICAL: Invalid contactIds array!', contactIds);
+    return { successCount: 0, failedCount: 0, errors: [] };
+  }
+  
+  // CRITICAL: If only 1 contact ID provided, ensure we only fetch 1 contact
+  if (contactIds.length === 1) {
+    console.log(`[Analyze Selected] 🔒 SINGLE CONTACT MODE: Fetching exactly 1 contact from database`);
+    console.log(`[Analyze Selected] Contact ID to fetch: ${contactIds[0]}`);
+  }
+
   // Fetch contacts with their Facebook page info
   const contacts = await prisma.contact.findMany({
     where: {
@@ -126,9 +138,44 @@ export async function analyzeSelectedContacts(
     },
   });
 
+  // CRITICAL VALIDATION: Verify we fetched the correct number of contacts
+  if (contactIds.length === 1 && contacts.length !== 1) {
+    console.error(`[Analyze Selected] 🚨 CRITICAL BUG: Requested 1 contact but fetched ${contacts.length}!`);
+    console.error(`[Analyze Selected] Requested ID: ${contactIds[0]}`);
+    console.error(`[Analyze Selected] Fetched contacts:`, contacts.map(c => c.id));
+    if (contacts.length > 1) {
+      console.error(`[Analyze Selected] 🚨 This is a database query bug - returning only the requested contact`);
+      // Filter to only the requested contact
+      const requestedContact = contacts.find(c => c.id === contactIds[0]);
+      if (requestedContact) {
+        return await analyzeSelectedContacts([requestedContact.id], organizationId, onProgress);
+      }
+    }
+  }
+  
   if (contacts.length === 0) {
+    console.warn(`[Analyze Selected] No contacts found for provided IDs:`, contactIds);
     return { successCount: 0, failedCount: 0, errors: [] };
   }
+  
+  // CRITICAL: If we requested N contacts but got more, something is wrong
+  if (contacts.length > contactIds.length) {
+    console.error(`[Analyze Selected] 🚨 CRITICAL: Requested ${contactIds.length} contacts but fetched ${contacts.length}!`);
+    console.error(`[Analyze Selected] Requested IDs:`, contactIds);
+    console.error(`[Analyze Selected] Fetched contact IDs:`, contacts.map(c => c.id));
+    console.error(`[Analyze Selected] Filtering to only requested contacts`);
+    // Filter to only the requested contacts
+    const requestedContacts = contacts.filter(c => contactIds.includes(c.id));
+    if (requestedContacts.length !== contactIds.length) {
+      console.error(`[Analyze Selected] 🚨 Still have mismatch after filtering!`);
+      console.error(`[Analyze Selected] Requested: ${contactIds.length}, Filtered: ${requestedContacts.length}`);
+    }
+    // Continue with filtered contacts
+    const filteredContactIds = requestedContacts.map(c => c.id);
+    return await analyzeSelectedContacts(filteredContactIds, organizationId, onProgress);
+  }
+  
+  console.log(`[Analyze Selected] ✅ Fetched ${contacts.length} contact(s) matching ${contactIds.length} requested ID(s)`);
 
   // Group contacts by Facebook page (to reuse client and conversations)
   const contactsByPage = new Map<string, typeof contacts>();
