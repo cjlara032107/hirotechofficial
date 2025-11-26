@@ -68,14 +68,24 @@ export async function startBackgroundAnalysis(
     // Start the analysis process asynchronously (don't await)
     // For Vercel serverless, we need to ensure the promise chain starts before response
     // Use immediate execution with proper error handling
-    (async () => {
+    const backgroundPromise = (async () => {
       try {
         console.log(`[Background Analysis ${analysisJob.id}] 🚀 Starting background execution immediately...`);
+        console.log(`[Background Analysis ${analysisJob.id}] Contact IDs to process:`, contactIds);
+        console.log(`[Background Analysis ${analysisJob.id}] Total contacts: ${contactIds.length}`);
+        
+        // CRITICAL: Ensure we have a connection before starting
+        await connectPrisma();
+        
         await executeBackgroundAnalysis(analysisJob.id, contactIds, organizationId);
+        console.log(`[Background Analysis ${analysisJob.id}] ✅ Background execution completed`);
       } catch (error) {
-        console.error(`[Background Analysis ${analysisJob.id}] ❌ Failed:`, error);
+        console.error(`[Background Analysis ${analysisJob.id}] ❌ CRITICAL ERROR:`, error);
+        console.error(`[Background Analysis ${analysisJob.id}] Error stack:`, error instanceof Error ? error.stack : 'No stack trace');
+        
         // Mark job as failed in database
         try {
+          await connectPrisma(); // Ensure connection before update
           await prisma.analysisJob.update({
             where: { id: analysisJob.id },
             data: {
@@ -83,17 +93,29 @@ export async function startBackgroundAnalysis(
               errors: [
                 {
                   error: error instanceof Error ? error.message : String(error),
+                  stack: error instanceof Error ? error.stack : undefined,
                   timestamp: new Date().toISOString(),
                 },
               ],
               completedAt: new Date(),
             },
           });
+          console.log(`[Background Analysis ${analysisJob.id}] ✅ Job marked as FAILED in database`);
         } catch (dbError) {
-          console.error(`[Background Analysis ${analysisJob.id}] ❌ Failed to update job status:`, dbError);
+          console.error(`[Background Analysis ${analysisJob.id}] ❌ CRITICAL: Failed to update job status:`, dbError);
         }
       }
     })(); // Immediately invoked async function
+    
+    // CRITICAL: In Vercel, we need to keep the promise alive
+    // Store it globally to prevent garbage collection
+    if (typeof globalThis !== 'undefined') {
+      (globalThis as any).__backgroundAnalysisPromises = (globalThis as any).__backgroundAnalysisPromises || new Set();
+      (globalThis as any).__backgroundAnalysisPromises.add(backgroundPromise);
+      backgroundPromise.finally(() => {
+        (globalThis as any).__backgroundAnalysisPromises?.delete(backgroundPromise);
+      });
+    }
 
     return {
       success: true,
@@ -183,6 +205,9 @@ async function executeBackgroundAnalysis(
       }
 
       try {
+        console.log(`[Background Analysis ${jobId}] 🔍 About to call analyzeSelectedContacts with ${contactIds.length} contact(s)`);
+        console.log(`[Background Analysis ${jobId}] Contact IDs:`, contactIds);
+        
         // Process all contacts at once - analyzeSelectedContacts handles parallel processing internally
         // This is MUCH faster than calling it 15 times with 1 contact each
         // Pass progress callback to get real-time updates
@@ -193,12 +218,19 @@ async function executeBackgroundAnalysis(
             // Update counts and progress in real-time
             analyzedCount = analyzed;
             failedCount = failed;
+            console.log(`[Background Analysis ${jobId}] 📊 Progress callback: ${analyzed}/${total} analyzed, ${failed} failed`);
             // Update progress (non-blocking)
             updateProgress(true).catch((err) => {
               console.error(`[Background Analysis ${jobId}] Failed to update progress:`, err);
             });
           }
         );
+        
+        console.log(`[Background Analysis ${jobId}] ✅ analyzeSelectedContacts completed:`, {
+          successCount: result.successCount,
+          failedCount: result.failedCount,
+          errors: result.errors.length
+        });
         
         analyzedCount = result.successCount;
         failedCount = result.failedCount;
