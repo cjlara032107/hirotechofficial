@@ -299,7 +299,7 @@ export function ContactsTable({ contacts, tags, pipelines, isLoading }: Contacts
   async function handleSelectAllPages() {
     const ids = await fetchAllContactIds();
     if (ids.length > 0) {
-      const newSelected = new Set(ids);
+      const newSelected = new Set<string>(ids);
       setSelectedIds(newSelected);
       selectedIdsRef.current = newSelected; // Update ref immediately
       setSelectAllPages(true);
@@ -307,7 +307,7 @@ export function ContactsTable({ contacts, tags, pipelines, isLoading }: Contacts
   }
 
   function handleDeselectAllPages() {
-    const newSelected = new Set();
+    const newSelected = new Set<string>();
     setSelectedIds(newSelected);
     selectedIdsRef.current = newSelected; // Update ref immediately
     setSelectAllPages(false);
@@ -317,12 +317,12 @@ export function ContactsTable({ contacts, tags, pipelines, isLoading }: Contacts
 
   function handleSelectAll(checked: boolean) {
     if (checked) {
-      const newSelected = new Set(contacts.map((c) => c.id));
+      const newSelected = new Set<string>(contacts.map((c) => c.id));
       setSelectedIds(newSelected);
       selectedIdsRef.current = newSelected; // Update ref immediately
       setSelectAllPages(false);
     } else {
-      const newSelected = new Set();
+      const newSelected = new Set<string>();
       setSelectedIds(newSelected);
       selectedIdsRef.current = newSelected; // Update ref immediately
       setSelectAllPages(false);
