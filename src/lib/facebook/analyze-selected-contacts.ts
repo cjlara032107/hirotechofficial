@@ -455,16 +455,18 @@ export async function analyzeSelectedContacts(
               aiContextUpdatedAt: new Date(),
             };
 
-            // Only add new fields if they have values (will fail gracefully if columns don't exist)
-            // CRITICAL: Use hasContactInfo check instead of contactInfo truthy check
-            // This ensures we save contactInfo even if it's an object (not null/undefined)
+            // CRITICAL: Only add contactInfo if it has meaningful data
+            // This prevents saving empty objects that would pass truthy checks
             if (hasContactInfo && contactInfo) {
               updateData.contactInfo = contactInfo;
-              console.log(`[Analyze Selected] ✅ Adding contactInfo to update data for contact ${contact.id}`);
+              console.log(`[Analyze Selected] ✅ Contact info has data - will save to database for ${contact.id}`);
+            } else if (contactInfo) {
+              console.log(`[Analyze Selected] ⚠️ Contact info extracted but has no meaningful data for ${contact.id}`);
             }
+            
+            // Only add bestContactTimes if it has values
             if (hasBestContactTimes && replyTimeAnalysis) {
               updateData.bestContactTimes = replyTimeAnalysis;
-              console.log(`[Analyze Selected] ✅ Adding bestContactTimes to update data for contact ${contact.id}`);
             }
 
             await prisma.contact.update({

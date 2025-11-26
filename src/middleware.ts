@@ -2,28 +2,13 @@ import { createServerClient } from '@supabase/ssr';
 import { NextResponse, type NextRequest } from 'next/server';
 
 export async function middleware(request: NextRequest) {
-  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
-
-  // Validate environment variables
-  if (!supabaseUrl || !supabaseAnonKey) {
-    console.error('[Middleware] ❌ Supabase environment variables missing');
-    console.error('[Middleware] NEXT_PUBLIC_SUPABASE_URL:', supabaseUrl ? '✅ Set' : '❌ Missing');
-    console.error('[Middleware] NEXT_PUBLIC_SUPABASE_ANON_KEY:', supabaseAnonKey ? '✅ Set' : '❌ Missing');
-    
-    // Allow request to continue but log error
-    // This prevents middleware from crashing the entire app
-    return NextResponse.next({ request });
-  }
-
   let supabaseResponse = NextResponse.next({
     request,
   });
 
-  try {
-    const supabase = createServerClient(
-      supabaseUrl,
-      supabaseAnonKey,
+  const supabase = createServerClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
     {
       cookies: {
         getAll() {
@@ -42,16 +27,10 @@ export async function middleware(request: NextRequest) {
     }
   );
 
-    // IMPORTANT: DO NOT REMOVE auth.getUser()
-    const {
-      data: { user },
-      error: authError,
-    } = await supabase.auth.getUser();
-
-    if (authError) {
-      console.error('[Middleware] ❌ Supabase auth error:', authError.message);
-      // Continue with request even if auth fails - let pages handle auth
-    }
+  // IMPORTANT: DO NOT REMOVE auth.getUser()
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
 
   const { pathname } = request.nextUrl;
 
@@ -85,13 +64,8 @@ export async function middleware(request: NextRequest) {
   // Middleware runs in Edge Runtime which doesn't support Prisma
   // Developer page access is enforced at the page/API route level instead
 
-    console.log('[Middleware] ✅ Allowing request');
-    return supabaseResponse;
-  } catch (error) {
-    console.error('[Middleware] ❌ Error in middleware:', error);
-    // Return response even on error to prevent app crash
-    return NextResponse.next({ request });
-  }
+  console.log('[Middleware] ✅ Allowing request');
+  return supabaseResponse;
 }
 
 export const config = {

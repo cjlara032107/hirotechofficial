@@ -1,51 +1,43 @@
 'use client';
 
 import { useEffect } from 'react';
-import { useRouter, usePathname } from 'next/navigation';
+import { useRouter } from 'next/navigation';
 import { toast } from 'sonner';
+
+interface ContactDetailRefreshProps {
+  contactId: string;
+}
 
 /**
  * Client component that listens for analysis completion events
- * and refreshes the page if we're on a contact detail page
+ * and refreshes the page to show updated contact details
  */
-export function ContactDetailRefresh() {
+export function ContactDetailRefresh({ contactId }: ContactDetailRefreshProps) {
   const router = useRouter();
-  const pathname = usePathname();
 
   useEffect(() => {
-    // Only listen if we're on a contact detail page
-    const isContactDetailPage = pathname?.startsWith('/contacts/') && pathname !== '/contacts';
-    
-    if (!isContactDetailPage) {
-      return;
-    }
-
-    const handleAnalysisComplete = (event: Event) => {
-      const customEvent = event as CustomEvent;
-      const { jobId, analyzedContacts, failedContacts } = customEvent.detail || {};
+    const handleAnalysisCompleted = (event: CustomEvent) => {
+      const { jobId, status } = event.detail;
+      console.log(`[ContactDetailRefresh] Received analysisCompleted event for job ${jobId} with status ${status}`);
       
-      // Refresh the page data by calling router.refresh()
-      // This will re-fetch server components without losing client state
-      console.log('[Contact Detail Refresh] Analysis completed, refreshing page data...', { jobId, analyzedContacts, failedContacts });
-      
-      // Add a small delay to ensure database updates have propagated
+      // Provide a small delay to allow database updates to propagate
       setTimeout(() => {
-        router.refresh();
-        toast.info('Contact details updated', {
-          description: 'The contact information has been refreshed with the latest analysis results.',
-          duration: 3000,
+        console.log(`[ContactDetailRefresh] Refreshing page for contact ${contactId}`);
+        router.refresh(); // This will re-fetch data for all server components on the page
+        toast.info('Contact data refreshed', {
+          description: 'The contact details have been updated with the latest analysis results.',
+          duration: 2000,
         });
-      }, 1000); // 1 second delay to ensure DB updates are committed
+      }, 1000); // 1 second delay
     };
 
-    // Listen for custom event when analysis completes
-    window.addEventListener('analysisCompleted', handleAnalysisComplete);
+    window.addEventListener('analysisCompleted', handleAnalysisCompleted as EventListener);
 
     return () => {
-      window.removeEventListener('analysisCompleted', handleAnalysisComplete);
+      window.removeEventListener('analysisCompleted', handleAnalysisCompleted as EventListener);
     };
-  }, [pathname, router]);
+  }, [contactId, router]);
 
-  return null; // This component doesn't render anything
+  return null; // This component doesn't render anything itself
 }
 
