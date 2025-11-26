@@ -456,11 +456,15 @@ export async function analyzeSelectedContacts(
             };
 
             // Only add new fields if they have values (will fail gracefully if columns don't exist)
-            if (contactInfo) {
+            // CRITICAL: Use hasContactInfo check instead of contactInfo truthy check
+            // This ensures we save contactInfo even if it's an object (not null/undefined)
+            if (hasContactInfo && contactInfo) {
               updateData.contactInfo = contactInfo;
+              console.log(`[Analyze Selected] ✅ Adding contactInfo to update data for contact ${contact.id}`);
             }
-            if (replyTimeAnalysis) {
+            if (hasBestContactTimes && replyTimeAnalysis) {
               updateData.bestContactTimes = replyTimeAnalysis;
+              console.log(`[Analyze Selected] ✅ Adding bestContactTimes to update data for contact ${contact.id}`);
             }
 
             await prisma.contact.update({

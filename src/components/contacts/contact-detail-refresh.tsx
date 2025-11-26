@@ -2,6 +2,7 @@
 
 import { useEffect } from 'react';
 import { useRouter, usePathname } from 'next/navigation';
+import { toast } from 'sonner';
 
 /**
  * Client component that listens for analysis completion events
@@ -19,11 +20,22 @@ export function ContactDetailRefresh() {
       return;
     }
 
-    const handleAnalysisComplete = () => {
+    const handleAnalysisComplete = (event: Event) => {
+      const customEvent = event as CustomEvent;
+      const { jobId, analyzedContacts, failedContacts } = customEvent.detail || {};
+      
       // Refresh the page data by calling router.refresh()
       // This will re-fetch server components without losing client state
-      console.log('[Contact Detail Refresh] Analysis completed, refreshing page data...');
-      router.refresh();
+      console.log('[Contact Detail Refresh] Analysis completed, refreshing page data...', { jobId, analyzedContacts, failedContacts });
+      
+      // Add a small delay to ensure database updates have propagated
+      setTimeout(() => {
+        router.refresh();
+        toast.info('Contact details updated', {
+          description: 'The contact information has been refreshed with the latest analysis results.',
+          duration: 3000,
+        });
+      }, 1000); // 1 second delay to ensure DB updates are committed
     };
 
     // Listen for custom event when analysis completes
