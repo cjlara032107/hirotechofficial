@@ -150,57 +150,41 @@ export async function startBackgroundAnalysis(
     });
     console.log(`[Background Analysis] ✅ Job status updated to IN_PROGRESS - execution will start immediately`);
 
-    // Start the analysis process asynchronously (don't await)
-    // For Vercel serverless, we need to ensure the promise chain starts before response
-    // Use immediate execution with proper error handling
-    const backgroundPromise = (async () => {
+    // CRITICAL: Start execution immediately and ensure it actually runs
+    // For Vercel serverless, we must ensure the promise is actively executing before returning
+    console.log(`[Background Analysis ${analysisJob.id}] 🚀 Starting background execution immediately...`);
+    console.log(`[Background Analysis ${analysisJob.id}] Contact IDs to process:`, contactIds);
+    console.log(`[Background Analysis ${analysisJob.id}] Total contacts: ${contactIds.length}`);
+    
+    // CRITICAL: Start the background promise and ensure it begins executing
+    // We'll call executeBackgroundAnalysis directly but in a non-blocking way
+    // This ensures the execution actually starts before Vercel terminates the function
+    const backgroundPromise = executeBackgroundAnalysis(analysisJob.id, contactIds, organizationId).catch(async (error) => {
+      console.error(`[Background Analysis ${analysisJob.id}] ❌ CRITICAL ERROR:`, error);
+      console.error(`[Background Analysis ${analysisJob.id}] Error stack:`, error instanceof Error ? error.stack : 'No stack trace');
+      
+      // Mark job as failed in database
       try {
-        console.log(`[Background Analysis ${analysisJob.id}] 🚀 Starting background execution immediately...`);
-        console.log(`[Background Analysis ${analysisJob.id}] Contact IDs to process:`, contactIds);
-        console.log(`[Background Analysis ${analysisJob.id}] Total contacts: ${contactIds.length}`);
-        
-        // CRITICAL: Ensure we have a connection before starting
-        await connectPrisma();
-        
-        // CRITICAL: Verify job is still active before starting
-        const jobCheck = await prisma.analysisJob.findUnique({
+        await connectPrisma(); // Ensure connection before update
+        await prisma.analysisJob.update({
           where: { id: analysisJob.id },
-          select: { status: true },
+          data: {
+            status: 'FAILED',
+            errors: [
+              {
+                error: error instanceof Error ? error.message : String(error),
+                stack: error instanceof Error ? error.stack : undefined,
+                timestamp: new Date().toISOString(),
+              },
+            ],
+            completedAt: new Date(),
+          },
         });
-        if (jobCheck?.status === 'CANCELLED') {
-          console.log(`[Background Analysis ${analysisJob.id}] Job was cancelled before execution started`);
-          return;
-        }
-        
-        await executeBackgroundAnalysis(analysisJob.id, contactIds, organizationId);
-        console.log(`[Background Analysis ${analysisJob.id}] ✅ Background execution completed`);
-      } catch (error) {
-        console.error(`[Background Analysis ${analysisJob.id}] ❌ CRITICAL ERROR:`, error);
-        console.error(`[Background Analysis ${analysisJob.id}] Error stack:`, error instanceof Error ? error.stack : 'No stack trace');
-        
-        // Mark job as failed in database
-        try {
-          await connectPrisma(); // Ensure connection before update
-          await prisma.analysisJob.update({
-            where: { id: analysisJob.id },
-            data: {
-              status: 'FAILED',
-              errors: [
-                {
-                  error: error instanceof Error ? error.message : String(error),
-                  stack: error instanceof Error ? error.stack : undefined,
-                  timestamp: new Date().toISOString(),
-                },
-              ],
-              completedAt: new Date(),
-            },
-          });
-          console.log(`[Background Analysis ${analysisJob.id}] ✅ Job marked as FAILED in database`);
-        } catch (dbError) {
-          console.error(`[Background Analysis ${analysisJob.id}] ❌ CRITICAL: Failed to update job status:`, dbError);
-        }
+        console.log(`[Background Analysis ${analysisJob.id}] ✅ Job marked as FAILED in database`);
+      } catch (dbError) {
+        console.error(`[Background Analysis ${analysisJob.id}] ❌ CRITICAL: Failed to update job status:`, dbError);
       }
-    })(); // Immediately invoked async function
+    });
     
     // CRITICAL: In Vercel, we need to keep the promise alive
     // Store it globally to prevent garbage collection
@@ -212,17 +196,28 @@ export async function startBackgroundAnalysis(
       });
     }
 
-    // CRITICAL: Ensure promise starts executing by giving it a microtask
+    // CRITICAL: Ensure promise starts executing by waiting for the first microtask
     // This guarantees the promise chain begins before we return the response
-    // Using setImmediate ensures the promise gets scheduled in the event loop
     await new Promise<void>((resolve) => {
-      if (typeof setImmediate !== 'undefined') {
-        setImmediate(() => resolve());
+      // Use process.nextTick if available (Node.js), otherwise setImmediate/setTimeout
+      if (typeof process !== 'undefined' && process.nextTick) {
+        process.nextTick(() => {
+          console.log(`[Background Analysis ${analysisJob.id}] ✅ Promise chain confirmed active (nextTick)`);
+          resolve();
+        });
+      } else if (typeof setImmediate !== 'undefined') {
+        setImmediate(() => {
+          console.log(`[Background Analysis ${analysisJob.id}] ✅ Promise chain confirmed active (setImmediate)`);
+          resolve();
+        });
       } else {
-        // Fallback for environments without setImmediate
-        setTimeout(() => resolve(), 0);
+        setTimeout(() => {
+          console.log(`[Background Analysis ${analysisJob.id}] ✅ Promise chain confirmed active (setTimeout)`);
+          resolve();
+        }, 0);
       }
     });
+    
     console.log(`[Background Analysis] ✅ Background promise execution started - returning response`);
 
     return {
