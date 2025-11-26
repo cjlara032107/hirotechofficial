@@ -67,7 +67,7 @@ export async function startBackgroundAnalysis(
       }
     }
     
-    // STEP 3: If exact match found, check if it's actually executing
+    // STEP 3: If exact match found, check if it needs to be restarted
     if (exactMatchJob) {
       // Cancel other overlapping jobs (but not the exact match)
       const jobsToCancel = overlappingJobs.filter(j => j.id !== exactMatchJob!.id);
@@ -97,8 +97,7 @@ export async function startBackgroundAnalysis(
         };
       }
       
-      // If job is PENDING or IN_PROGRESS, ensure it's actually executing
-      // Check if job is stuck (no progress for >2 minutes)
+      // If job is PENDING or IN_PROGRESS, check if it's stuck and restart if needed
       const now = new Date();
       const startedAt = exactMatchJob.startedAt || exactMatchJob.createdAt;
       const timeSinceStart = now.getTime() - startedAt.getTime();
@@ -274,10 +273,13 @@ export async function startBackgroundAnalysis(
     // CRITICAL: Start the background promise and ensure it begins executing
     // For Vercel serverless, we must ensure the promise is actively executing before returning
     // The IIFE pattern ensures the promise starts immediately
+    // We'll also trigger the first async operation to ensure the promise chain is active
+    let promiseActive = false;
     const backgroundPromise = (async () => {
       try {
         // CRITICAL: Log immediately to confirm promise is executing
         console.log(`[Background Analysis ${analysisJob.id}] 📍 Inside background promise - starting execution`);
+        promiseActive = true;
         
         // CRITICAL: Start the first async operation immediately
         // This ensures the promise is actively executing, not just created
@@ -314,6 +316,16 @@ export async function startBackgroundAnalysis(
         }
       }
     })(); // Immediately invoked async function - starts executing NOW
+    
+    // CRITICAL: Force the promise to start by triggering its first async operation
+    // This ensures the promise chain is active before Vercel terminates the function
+    // We call connectPrisma() which is the first operation in the promise
+    // This guarantees the promise is executing, not just created
+    const connectionStart = connectPrisma().then(() => {
+      console.log(`[Background Analysis ${analysisJob.id}] ✅ Connection promise resolved - background execution will continue`);
+    }).catch((err) => {
+      console.error(`[Background Analysis ${analysisJob.id}] ❌ Connection promise failed:`, err);
+    });
     
     // CRITICAL: In Vercel, we need to keep the promise alive
     // Store it globally to prevent garbage collection

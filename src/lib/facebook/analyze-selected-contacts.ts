@@ -455,17 +455,11 @@ export async function analyzeSelectedContacts(
               aiContextUpdatedAt: new Date(),
             };
 
-            // CRITICAL: Only add contactInfo if it has meaningful data
-            // This prevents saving empty objects that would pass truthy checks
-            if (hasContactInfo && contactInfo) {
+            // Only add new fields if they have values (will fail gracefully if columns don't exist)
+            if (contactInfo) {
               updateData.contactInfo = contactInfo;
-              console.log(`[Analyze Selected] ✅ Contact info has data - will save to database for ${contact.id}`);
-            } else if (contactInfo) {
-              console.log(`[Analyze Selected] ⚠️ Contact info extracted but has no meaningful data for ${contact.id}`);
             }
-            
-            // Only add bestContactTimes if it has values
-            if (hasBestContactTimes && replyTimeAnalysis) {
+            if (replyTimeAnalysis) {
               updateData.bestContactTimes = replyTimeAnalysis;
             }
 

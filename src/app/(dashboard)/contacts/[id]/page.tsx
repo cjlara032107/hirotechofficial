@@ -876,7 +876,7 @@ export default async function ContactDetailPage({ params, searchParams }: Contac
 
   return (
     <div className="space-y-6">
-      <ContactDetailRefresh contactId={id} />
+      <ContactDetailRefresh />
       <Button variant="ghost" asChild className="mb-4">
         <Link href={getBackUrl()}>
           <ArrowLeft className="h-4 w-4 mr-2" />
