@@ -295,29 +295,38 @@ export function ConnectedPagesList({ onRefresh, onSyncComplete }: ConnectedPages
 
       const data = await response.json();
       
-      // Update with real job ID
+      // Instant sync completes immediately, so mark as completed
       setActiveSyncJobs(prev => ({
         ...prev,
         [page.id]: {
           id: data.jobId,
-          status: 'IN_PROGRESS',
+          status: 'COMPLETED',
           syncedContacts: data.contactsStored || 0,
           failedContacts: 0,
           totalContacts: data.contactsStored || 0,
           tokenExpired: false,
           startedAt: new Date().toISOString(),
-          completedAt: null,
+          completedAt: new Date().toISOString(),
         },
       }));
 
-      toast.success(`Instant sync completed for ${page.pageName}!`, {
-        description: `${data.contactsStored} contacts stored in ${data.message.split('in ')[1] || 'under 1 minute'}. AI analysis queued in background.`,
-        duration: 5000,
+      toast.success(`⚡ Instant sync completed for ${page.pageName}!`, {
+        description: `${data.contactsStored} contacts stored${data.message.includes('in') ? ' ' + data.message.split('in ')[1] : ' in under 1 minute'}. ${data.aiAnalysisQueued ? 'AI analysis queued in background.' : ''}`,
+        duration: 6000,
       });
 
       // Refresh contact count immediately
       await fetchContactCount(page.id);
       onSyncComplete?.();
+      
+      // Remove from active jobs after a short delay (contacts are already visible)
+      setTimeout(() => {
+        setActiveSyncJobs(prev => {
+          const updated = { ...prev };
+          delete updated[page.id];
+          return updated;
+        });
+      }, 3000);
     } catch (error) {
       // Remove optimistic update on error
       setActiveSyncJobs(prev => {
