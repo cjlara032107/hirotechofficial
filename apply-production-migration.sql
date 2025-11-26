@@ -18,3 +18,4 @@ WHERE table_name = 'Contact'
 AND column_name IN ('contactInfo', 'bestContactTimes');
 
 
+

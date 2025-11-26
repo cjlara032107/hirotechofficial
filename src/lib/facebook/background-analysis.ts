@@ -67,7 +67,7 @@ export async function startBackgroundAnalysis(
       }
     }
     
-    // STEP 3: If exact match found, check its status and handle accordingly
+    // STEP 3: If exact match found, cancel other overlapping jobs and return
     if (exactMatchJob) {
       // Cancel other overlapping jobs (but not the exact match)
       const jobsToCancel = overlappingJobs.filter(j => j.id !== exactMatchJob!.id);
@@ -86,120 +86,6 @@ export async function startBackgroundAnalysis(
         console.log(`[Background Analysis] 🗑️ Cancelled ${cancelled.count} overlapping job(s) to prevent conflicts`);
       }
       
-      // If job is COMPLETED, just return it
-      if (exactMatchJob.status === 'COMPLETED') {
-        console.log(`[Background Analysis] ✅ Found existing COMPLETED job - returning existing job ID`);
-        return {
-          success: true,
-          jobId: exactMatchJob.id,
-          message: 'Analysis already completed',
-          cancelledJobs: cancelledJobs.length > 0 ? cancelledJobs : undefined,
-        };
-      }
-      
-      // If job is PENDING or IN_PROGRESS, check if it's stuck and restart if needed
-      const now = new Date();
-      const startedAt = exactMatchJob.startedAt || exactMatchJob.createdAt;
-      const timeSinceStart = now.getTime() - startedAt.getTime();
-      const STUCK_THRESHOLD_MS = 2 * 60 * 1000; // 2 minutes
-      const isStuck = exactMatchJob.status === 'IN_PROGRESS' && 
-                      timeSinceStart > STUCK_THRESHOLD_MS && 
-                      exactMatchJob.analyzedContacts === 0 && 
-                      exactMatchJob.failedContacts === 0;
-      
-      if (isStuck || exactMatchJob.status === 'PENDING') {
-        // Job is stuck or pending - restart it
-        console.log(`[Background Analysis] ⚠️ Found ${exactMatchJob.status} job that needs execution - restarting`);
-        console.log(`[Background Analysis] Job ID: ${exactMatchJob.id}`);
-        
-        // Update job status to IN_PROGRESS and restart execution
-        await prisma.analysisJob.update({
-          where: { id: exactMatchJob.id },
-          data: { 
-            status: 'IN_PROGRESS', 
-            startedAt: new Date(),
-            analyzedContacts: 0,
-            failedContacts: 0,
-            errors: undefined,
-          },
-        });
-        
-        // Start background execution for the existing job
-        const restartPromise = (async () => {
-          try {
-            console.log(`[Background Analysis ${exactMatchJob.id}] 📍 Restarting background execution`);
-            await connectPrisma();
-            console.log(`[Background Analysis ${exactMatchJob.id}] ✅ Database connection established`);
-            
-            // Verify job is still active
-            const jobCheck = await prisma.analysisJob.findUnique({
-              where: { id: exactMatchJob.id },
-              select: { status: true },
-            });
-            
-            if (jobCheck?.status === 'CANCELLED') {
-              console.log(`[Background Analysis ${exactMatchJob.id}] ⚠️ Job was cancelled, aborting`);
-              return;
-            }
-            
-            await executeBackgroundAnalysis(exactMatchJob.id, contactIds, organizationId);
-            console.log(`[Background Analysis ${exactMatchJob.id}] ✅ Background execution completed`);
-          } catch (error) {
-            console.error(`[Background Analysis ${exactMatchJob.id}] ❌ CRITICAL ERROR:`, error);
-            try {
-              await connectPrisma();
-              await prisma.analysisJob.update({
-                where: { id: exactMatchJob.id },
-                data: {
-                  status: 'FAILED',
-                  errors: [
-                    {
-                      error: error instanceof Error ? error.message : String(error),
-                      stack: error instanceof Error ? error.stack : undefined,
-                      timestamp: new Date().toISOString(),
-                    },
-                  ],
-                  completedAt: new Date(),
-                },
-              });
-            } catch (dbError) {
-              console.error(`[Background Analysis ${exactMatchJob.id}] ❌ Failed to update job status:`, dbError);
-            }
-          }
-        })();
-        
-        // Keep promise alive
-        if (typeof globalThis !== 'undefined') {
-          (globalThis as any).__backgroundAnalysisPromises = (globalThis as any).__backgroundAnalysisPromises || new Set();
-          (globalThis as any).__backgroundAnalysisPromises.add(restartPromise);
-          restartPromise.finally(() => {
-            (globalThis as any).__backgroundAnalysisPromises?.delete(restartPromise);
-          });
-        }
-        
-        // Wait a tick to ensure promise starts
-        await new Promise<void>((resolve) => {
-          if (typeof process !== 'undefined' && process.nextTick) {
-            process.nextTick(() => resolve());
-          } else if (typeof setImmediate !== 'undefined') {
-            setImmediate(() => resolve());
-          } else {
-            setTimeout(() => resolve(), 0);
-          }
-        });
-        
-        return {
-          success: true,
-          jobId: exactMatchJob.id,
-          message: 'Analysis restarted',
-          cancelledJobs: cancelledJobs.length > 0 ? cancelledJobs : undefined,
-        };
-      }
-      
-      // Job is IN_PROGRESS and appears to be running
-      console.log(`[Background Analysis] ✅ Found existing IN_PROGRESS job that appears to be running`);
-      console.log(`[Background Analysis] Job ID: ${exactMatchJob.id}`);
-      console.log(`[Background Analysis] Progress: ${exactMatchJob.analyzedContacts}/${exactMatchJob.totalContacts} analyzed`);
       return {
         success: true,
         jobId: exactMatchJob.id,
@@ -273,7 +159,6 @@ export async function startBackgroundAnalysis(
     // CRITICAL: Start the background promise and ensure it begins executing
     // For Vercel serverless, we must ensure the promise is actively executing before returning
     // The IIFE pattern ensures the promise starts immediately
-    // We'll also trigger the first async operation to ensure the promise chain is active
     const backgroundPromise = (async () => {
       try {
         // CRITICAL: Log immediately to confirm promise is executing
@@ -324,16 +209,6 @@ export async function startBackgroundAnalysis(
         (globalThis as any).__backgroundAnalysisPromises?.delete(backgroundPromise);
       });
     }
-
-    // CRITICAL: Force the promise to start by triggering its first async operation
-    // This ensures the promise chain is active before Vercel terminates the function
-    // We call connectPrisma() which is the first operation in the promise
-    // This guarantees the promise is executing, not just created
-    const connectionStart = connectPrisma().then(() => {
-      console.log(`[Background Analysis ${analysisJob.id}] ✅ Connection promise resolved - background execution will continue`);
-    }).catch((err) => {
-      console.error(`[Background Analysis ${analysisJob.id}] ❌ Connection promise failed:`, err);
-    });
 
     // CRITICAL: Ensure promise starts executing by waiting for the first microtask
     // This guarantees the promise chain begins before we return the response
