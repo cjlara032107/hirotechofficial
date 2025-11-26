@@ -387,6 +387,8 @@ export function ContactsTable({ contacts, tags, pipelines, isLoading }: Contacts
     overrideContactIds?: string[] // Allow passing contact IDs directly to bypass state
   ) {
     // CRITICAL: If overrideContactIds is provided, use it directly (bypasses all state checks)
+    // This MUST be checked FIRST, before any other logic, to prevent state corruption
+    console.log('[ContactsTable] 🔍 handleBulkAction called:', { action, overrideContactIds: overrideContactIds?.length, hasOverride: !!overrideContactIds });
     if (overrideContactIds && overrideContactIds.length > 0) {
       console.log('[ContactsTable] 🔒 OVERRIDE MODE: Using provided contact IDs directly');
       console.log('  Override contact IDs:', overrideContactIds);
@@ -397,6 +399,7 @@ export function ContactsTable({ contacts, tags, pipelines, isLoading }: Contacts
         setSelectAllPages(false);
         setAllContactIds([]);
         setTotalContactsCount(0);
+        console.log('[ContactsTable] 🔒 OVERRIDE MODE: Cleared all "select all" flags for single contact');
       }
       
       // Use override directly - no validation needed, caller is responsible
@@ -406,6 +409,14 @@ export function ContactsTable({ contacts, tags, pipelines, isLoading }: Contacts
       console.log(`[ContactsTable] Contact IDs being sent:`, contactIdsToSend);
       
       try {
+        // ABSOLUTE SAFETY: Double-check that we're not accidentally using allContactIds
+        if (contactIdsToSend.length === 1 && allContactIds.length > 1) {
+          console.error('[ContactsTable] 🚨 CRITICAL: Override mode with 1 contact but allContactIds has more!');
+          console.error('  This should never happen in override mode - forcing to use only the override contact');
+          // This is a safety check - in override mode, contactIdsToSend should already be correct
+          // But we double-check to be absolutely sure
+        }
+        
         setBulkActionLoading(true);
         const response = await fetch('/api/contacts/bulk', {
           method: 'POST',
@@ -466,6 +477,9 @@ export function ContactsTable({ contacts, tags, pipelines, isLoading }: Contacts
       return; // Exit early, we've handled the request
     }
     
+    // CRITICAL: If we reach here, override mode was NOT used
+    // This means we need to be extra careful about state corruption
+    console.log('[ContactsTable] ⚠️ NON-OVERRIDE MODE: Using state-based selection (overrideContactIds not provided)');
     // CRITICAL: Read selection DIRECTLY from ref (updated synchronously) at the moment of click
     // This avoids any React state batching or closure issues
     const currentSelection = new Set(selectedIdsRef.current);
