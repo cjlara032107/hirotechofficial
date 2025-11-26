@@ -157,34 +157,48 @@ export async function startBackgroundAnalysis(
     console.log(`[Background Analysis ${analysisJob.id}] Total contacts: ${contactIds.length}`);
     
     // CRITICAL: Start the background promise and ensure it begins executing
-    // We'll call executeBackgroundAnalysis directly but in a non-blocking way
-    // This ensures the execution actually starts before Vercel terminates the function
-    const backgroundPromise = executeBackgroundAnalysis(analysisJob.id, contactIds, organizationId).catch(async (error) => {
-      console.error(`[Background Analysis ${analysisJob.id}] ❌ CRITICAL ERROR:`, error);
-      console.error(`[Background Analysis ${analysisJob.id}] Error stack:`, error instanceof Error ? error.stack : 'No stack trace');
-      
-      // Mark job as failed in database
+    // For Vercel serverless, we must ensure the promise is actively executing before returning
+    // The IIFE pattern ensures the promise starts immediately
+    const backgroundPromise = (async () => {
       try {
-        await connectPrisma(); // Ensure connection before update
-        await prisma.analysisJob.update({
-          where: { id: analysisJob.id },
-          data: {
-            status: 'FAILED',
-            errors: [
-              {
-                error: error instanceof Error ? error.message : String(error),
-                stack: error instanceof Error ? error.stack : undefined,
-                timestamp: new Date().toISOString(),
-              },
-            ],
-            completedAt: new Date(),
-          },
-        });
-        console.log(`[Background Analysis ${analysisJob.id}] ✅ Job marked as FAILED in database`);
-      } catch (dbError) {
-        console.error(`[Background Analysis ${analysisJob.id}] ❌ CRITICAL: Failed to update job status:`, dbError);
+        // CRITICAL: Log immediately to confirm promise is executing
+        console.log(`[Background Analysis ${analysisJob.id}] 📍 Inside background promise - starting execution`);
+        
+        // CRITICAL: Start the first async operation immediately
+        // This ensures the promise is actively executing, not just created
+        await connectPrisma();
+        console.log(`[Background Analysis ${analysisJob.id}] ✅ Database connection established`);
+        
+        // Now call the actual analysis function
+        await executeBackgroundAnalysis(analysisJob.id, contactIds, organizationId);
+        console.log(`[Background Analysis ${analysisJob.id}] ✅ Background execution completed`);
+      } catch (error) {
+        console.error(`[Background Analysis ${analysisJob.id}] ❌ CRITICAL ERROR:`, error);
+        console.error(`[Background Analysis ${analysisJob.id}] Error stack:`, error instanceof Error ? error.stack : 'No stack trace');
+        
+        // Mark job as failed in database
+        try {
+          await connectPrisma(); // Ensure connection before update
+          await prisma.analysisJob.update({
+            where: { id: analysisJob.id },
+            data: {
+              status: 'FAILED',
+              errors: [
+                {
+                  error: error instanceof Error ? error.message : String(error),
+                  stack: error instanceof Error ? error.stack : undefined,
+                  timestamp: new Date().toISOString(),
+                },
+              ],
+              completedAt: new Date(),
+            },
+          });
+          console.log(`[Background Analysis ${analysisJob.id}] ✅ Job marked as FAILED in database`);
+        } catch (dbError) {
+          console.error(`[Background Analysis ${analysisJob.id}] ❌ CRITICAL: Failed to update job status:`, dbError);
+        }
       }
-    });
+    })(); // Immediately invoked async function - starts executing NOW
     
     // CRITICAL: In Vercel, we need to keep the promise alive
     // Store it globally to prevent garbage collection
@@ -198,8 +212,10 @@ export async function startBackgroundAnalysis(
 
     // CRITICAL: Ensure promise starts executing by waiting for the first microtask
     // This guarantees the promise chain begins before we return the response
+    // The IIFE above already started the promise, but we wait a tick to ensure it's executing
     await new Promise<void>((resolve) => {
       // Use process.nextTick if available (Node.js), otherwise setImmediate/setTimeout
+      // This ensures the promise chain has started executing before we return
       if (typeof process !== 'undefined' && process.nextTick) {
         process.nextTick(() => {
           console.log(`[Background Analysis ${analysisJob.id}] ✅ Promise chain confirmed active (nextTick)`);
