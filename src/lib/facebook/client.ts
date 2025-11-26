@@ -364,7 +364,7 @@ export class FacebookClient {
     let pageCount = 0;
 
     try {
-      // Fetch first page
+      // Fetch first page with timeout
       const response = await axios.get(
         `${FB_GRAPH_URL}/${pageId}/conversations`,
         {
@@ -373,6 +373,7 @@ export class FacebookClient {
             fields: 'id,participants,updated_time,message_count',
             limit,
           },
+          timeout: 30000, // 30 second timeout for first request
         }
       );
 
@@ -721,7 +722,7 @@ export class FacebookClient {
     let pageCount = 0;
 
     try {
-      // Fetch first page
+      // Fetch first page with timeout
       const response = await axios.get(
         `${FB_GRAPH_URL}/${igAccountId}/conversations`,
         {
@@ -730,6 +731,7 @@ export class FacebookClient {
             fields: 'id,participants,updated_time,message_count',
             limit,
           },
+          timeout: 30000, // 30 second timeout for first request
         }
       );
 

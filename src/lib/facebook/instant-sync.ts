@@ -62,18 +62,31 @@ class ConcurrencyLimiter {
  * and queues AI analysis as a background job
  */
 /**
+ * Check if a sync job has been cancelled
+ */
+async function isJobCancelled(jobId: string): Promise<boolean> {
+  const job = await prisma.syncJob.findUnique({
+    where: { id: jobId },
+    select: { status: true },
+  });
+  return job?.status === 'CANCELLED';
+}
+
+/**
  * Executes the actual instant sync operation
  */
 async function executeInstantSync(jobId: string, facebookPageId: string, userId: string): Promise<void> {
   const startTime = Date.now();
   
   try {
-    // Update job status to in progress
+    // Update job status to in progress with initial progress
     await prisma.syncJob.update({
       where: { id: jobId },
       data: {
         status: 'IN_PROGRESS',
         startedAt: new Date(),
+        syncedContacts: 0,
+        totalContacts: 0, // Will be updated as we discover contacts
       },
     });
 
@@ -314,13 +327,30 @@ async function executeInstantSync(jobId: string, facebookPageId: string, userId:
       let conversationCount = 0;
       const PROCESS_BATCH_SIZE = 50; // Process every 50 conversations
       const MAX_STREAM_TIME = 10 * 60 * 1000; // 10 minutes max for streaming
-      const PROGRESS_UPDATE_INTERVAL = 30; // Update progress every 30 conversations even if not processing batch
+      const PROGRESS_UPDATE_INTERVAL = 10; // Update progress every 10 conversations (reduced from 30)
       const streamStartTime = Date.now();
       let lastProgressUpdate = Date.now();
+      
+      // Initial progress update to show we're actively fetching
+      await prisma.syncJob.update({
+        where: { id: jobId },
+        data: {
+          syncedContacts: 0,
+          totalContacts: 0,
+        },
+      }).catch(err => console.error(`[Instant Sync ${jobId}] Failed to update initial progress:`, err));
+      
+      console.log(`[Instant Sync ${jobId}] Starting to stream conversations...`);
       
       // OPTIMIZATION: Process conversations as they're fetched (streaming)
       // Process contacts in batches during streaming for immediate storage
       for await (const convo of client.fetchMessengerConversationsStream(page.pageId)) {
+        // Check for cancellation
+        if (await isJobCancelled(jobId)) {
+          console.log(`[Instant Sync ${jobId}] Sync cancelled by user`);
+          return;
+        }
+        
         // Check for timeout
         if (Date.now() - streamStartTime > MAX_STREAM_TIME) {
           console.warn(`[Instant Sync ${jobId}] ⚠️ Stream timeout reached, processing collected participants...`);
@@ -328,6 +358,18 @@ async function executeInstantSync(jobId: string, facebookPageId: string, userId:
         }
         
         conversationCount++;
+        
+        // Update progress immediately on first conversation to show activity
+        if (conversationCount === 1) {
+          prisma.syncJob.update({
+            where: { id: jobId },
+            data: {
+              syncedContacts: 0,
+              totalContacts: 0,
+            },
+          }).catch(err => console.error(`[Instant Sync ${jobId}] Failed to update first conversation progress:`, err));
+          console.log(`[Instant Sync ${jobId}] ✅ Started streaming conversations...`);
+        }
         
         if (!convo.participants?.data) continue;
         
@@ -347,6 +389,14 @@ async function executeInstantSync(jobId: string, facebookPageId: string, userId:
         // OPTIMIZATION: Process contacts in batches during streaming (every 50 conversations)
         // This allows contacts to appear immediately instead of waiting for all conversations
         if (conversationCount % PROCESS_BATCH_SIZE === 0 && participantMap.size > 0) {
+          // Check for cancellation before processing batch
+          if (await isJobCancelled(jobId)) {
+            console.log(`[Instant Sync ${jobId}] Sync cancelled by user, processing collected participants before exit...`);
+            const batchToProcess = Array.from(participantMap.entries());
+            await processContactBatch(batchToProcess, 'Messenger');
+            return;
+          }
+          
           const batchToProcess = Array.from(participantMap.entries());
           const remainingCount = participantMap.size; // Store before clearing
           participantMap.clear(); // Clear processed participants
@@ -363,17 +413,20 @@ async function executeInstantSync(jobId: string, facebookPageId: string, userId:
           }).catch(err => console.error(`[Instant Sync ${jobId}] Failed to update progress:`, err));
           
           lastProgressUpdate = Date.now();
-        } else if (conversationCount % PROGRESS_UPDATE_INTERVAL === 0 || Date.now() - lastProgressUpdate > 5000) {
+        } else if (conversationCount % PROGRESS_UPDATE_INTERVAL === 0 || Date.now() - lastProgressUpdate > 3000) {
           // Periodic progress update to show activity even when not processing batches
-          // Update every 30 conversations or every 5 seconds, whichever comes first
+          // Update every 10 conversations or every 3 seconds, whichever comes first
+          // This ensures progress is visible even during the initial streaming phase
+          const estimatedTotal = contactsStored + participantMap.size;
           prisma.syncJob.update({
             where: { id: jobId },
             data: {
               syncedContacts: contactsStored,
-              totalContacts: contactsStored + participantMap.size, // Current estimate
+              totalContacts: estimatedTotal > 0 ? estimatedTotal : participantMap.size, // Show discovered contacts even if not stored yet
             },
           }).catch(err => console.error(`[Instant Sync ${jobId}] Failed to update periodic progress:`, err));
           
+          console.log(`[Instant Sync ${jobId}] Progress: ${contactsStored} stored, ${participantMap.size} discovered, ${conversationCount} conversations processed`);
           lastProgressUpdate = Date.now();
         }
       }
@@ -431,6 +484,12 @@ async function executeInstantSync(jobId: string, facebookPageId: string, userId:
         
         // OPTIMIZATION: Process conversations as they're fetched (streaming)
         for await (const convo of client.fetchInstagramConversationsStream(page.instagramAccountId)) {
+          // Check for cancellation
+          if (await isJobCancelled(jobId)) {
+            console.log(`[Instant Sync ${jobId}] Sync cancelled by user during Instagram sync`);
+            return;
+          }
+          
           // Check for timeout
           if (Date.now() - igStreamStartTime > MAX_IG_STREAM_TIME) {
             console.warn(`[Instant Sync ${jobId}] ⚠️ Instagram stream timeout reached, processing collected participants...`);
@@ -472,17 +531,19 @@ async function executeInstantSync(jobId: string, facebookPageId: string, userId:
             }).catch(err => console.error(`[Instant Sync ${jobId}] Failed to update progress:`, err));
             
             lastIgProgressUpdate = Date.now();
-          } else if (igConversationCount % IG_PROGRESS_UPDATE_INTERVAL === 0 || Date.now() - lastIgProgressUpdate > 5000) {
+          } else if (igConversationCount % IG_PROGRESS_UPDATE_INTERVAL === 0 || Date.now() - lastIgProgressUpdate > 3000) {
             // Periodic progress update to show activity even when not processing batches
-            // Update every 30 conversations or every 5 seconds, whichever comes first
+            // Update every 10 conversations or every 3 seconds, whichever comes first
+            const estimatedTotal = contactsStored + igParticipantMap.size;
             prisma.syncJob.update({
               where: { id: jobId },
               data: {
                 syncedContacts: contactsStored,
-                totalContacts: contactsStored + igParticipantMap.size, // Current estimate
+                totalContacts: estimatedTotal > 0 ? estimatedTotal : igParticipantMap.size, // Show discovered contacts even if not stored yet
               },
             }).catch(err => console.error(`[Instant Sync ${jobId}] Failed to update periodic Instagram progress:`, err));
             
+            console.log(`[Instant Sync ${jobId}] Instagram Progress: ${contactsStored} stored, ${igParticipantMap.size} discovered, ${igConversationCount} conversations processed`);
             lastIgProgressUpdate = Date.now();
           }
         }
