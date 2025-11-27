@@ -12,7 +12,7 @@ async function sendMessageDirect(data: {
   messageTag?: string | null;
   pageAccessToken: string;
   recipientId: string | null;
-}): Promise<{ success: boolean; error?: string }> {
+}): Promise<{ success: boolean; error?: string; message?: string; code?: number; type?: string }> {
   const {
     campaignId,
     contactId,
@@ -209,6 +209,10 @@ async function sendMessagesInBackground(
     console.log(`🚀 Background process started for ${totalMessages} messages`);
 
     try {
+      // Track consecutive rate limit batches
+      let consecutiveRateLimitBatches = 0;
+      const MAX_CONSECUTIVE_RATE_LIMIT_BATCHES = 5; // Pause after 5 consecutive rate-limited batches
+      
       // Split messages into batches
       for (let i = 0; i < messages.length; i += BATCH_SIZE) {
         const batchNumber = Math.floor(i / BATCH_SIZE) + 1;
@@ -241,6 +245,10 @@ async function sendMessagesInBackground(
 
           const results = await Promise.race([batchPromise, timeoutPromise]);
 
+          // Track rate limit errors in this batch
+          let rateLimitCount = 0;
+          let rateLimitCodes: number[] = [];
+
           // Count successes and failures accurately
           results.forEach((result, index) => {
             processedCount++;
@@ -250,7 +258,21 @@ async function sendMessagesInBackground(
                 successCount++;
               } else {
                 failCount++;
-                console.error(`❌ Message ${i + index + 1}/${totalMessages} failed:`, result.value.error || 'Unknown error');
+                const errorCode = result.value.code;
+                const errorType = result.value.error;
+                const errorMessage = result.value.message;
+                
+                // Check if this is a rate limit error (Facebook error codes: 613, 4, 17)
+                if (errorCode === 613 || errorCode === 4 || errorCode === 17 || 
+                    errorType === 'RATE_LIMIT' || 
+                    (errorMessage && errorMessage.includes('rate limit'))) {
+                  rateLimitCount++;
+                  if (errorCode && !rateLimitCodes.includes(errorCode)) {
+                    rateLimitCodes.push(errorCode);
+                  }
+                }
+                
+                console.error(`❌ Message ${i + index + 1}/${totalMessages} failed:`, result.value.error || 'Unknown error', errorCode ? `(Code: ${errorCode})` : '');
               }
             } else {
               // Promise was rejected
@@ -259,18 +281,51 @@ async function sendMessagesInBackground(
             }
           });
 
+          // Log rate limit warnings
+          if (rateLimitCount > 0) {
+            consecutiveRateLimitBatches++;
+            console.warn(`⚠️ Rate limit detected in batch ${batchNumber}: ${rateLimitCount}/${batch.length} messages hit rate limit (Codes: ${rateLimitCodes.join(', ')})`);
+            console.warn(`⚠️ Facebook daily limit (~1000 messages/page) may have been reached. Campaign will continue processing with increased delays.`);
+            console.warn(`⚠️ Consecutive rate-limited batches: ${consecutiveRateLimitBatches}/${MAX_CONSECUTIVE_RATE_LIMIT_BATCHES}`);
+            
+            // If too many consecutive rate-limited batches, add a very long delay but continue
+            if (consecutiveRateLimitBatches >= MAX_CONSECUTIVE_RATE_LIMIT_BATCHES) {
+              console.warn(`🛑 Too many consecutive rate-limited batches (${consecutiveRateLimitBatches}). Adding extended delay (5 minutes) before continuing...`);
+              console.warn(`💡 Campaign will continue processing, but expect slower progress due to rate limiting.`);
+              // Add a 5-minute delay to let rate limits reset
+              await new Promise(resolve => setTimeout(resolve, 5 * 60 * 1000));
+              consecutiveRateLimitBatches = 0; // Reset counter after long delay
+            }
+          } else {
+            // Reset counter if this batch didn't hit rate limits
+            consecutiveRateLimitBatches = 0;
+          }
+
           console.log(`✅ Batch ${batchNumber}/${totalBatches} completed: ${successCount} sent, ${failCount} failed, ${processedCount}/${totalMessages} processed`);
+
+          // If rate limit detected, add longer delay before next batch
+          let delayBetweenBatches = 100; // Default 100ms
+          if (rateLimitCount > 0) {
+            // Exponential backoff: 1 second per rate-limited message, max 30 seconds
+            delayBetweenBatches = Math.min(1000 * rateLimitCount, 30000);
+            console.log(`⏳ Adding ${delayBetweenBatches}ms delay before next batch due to rate limiting...`);
+          }
+          
+          // Small delay between batches to avoid overwhelming the API
+          if (i + BATCH_SIZE < messages.length) {
+            await new Promise(resolve => setTimeout(resolve, delayBetweenBatches));
+          }
         } catch (batchError) {
           console.error(`❌ Batch ${batchNumber}/${totalBatches} error:`, batchError);
           // Mark all messages in this batch as failed
           failCount += batch.length;
           processedCount += batch.length;
           console.error(`⚠️ Marked ${batch.length} messages as failed due to batch error`);
-        }
-
-        // Small delay between batches to avoid overwhelming the API (100ms)
-        if (i + BATCH_SIZE < messages.length) {
-          await new Promise(resolve => setTimeout(resolve, 100));
+          
+          // Add delay even on error to avoid overwhelming the API
+          if (i + BATCH_SIZE < messages.length) {
+            await new Promise(resolve => setTimeout(resolve, 1000));
+          }
         }
       }
 

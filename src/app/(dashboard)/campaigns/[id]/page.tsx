@@ -26,7 +26,8 @@ import {
   MessageSquare,
   Users,
   Ban,
-  RotateCw
+  RotateCw,
+  RefreshCw
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { formatDistance } from 'date-fns';
@@ -69,8 +70,10 @@ export default function CampaignDetailPage() {
   const [sending, setSending] = useState(false);
   const [cancelling, setCancelling] = useState(false);
   const [resending, setResending] = useState(false);
+  const [rerunningFailed, setRerunningFailed] = useState(false);
   const [showCancelDialog, setShowCancelDialog] = useState(false);
   const [showResendDialog, setShowResendDialog] = useState(false);
+  const [showRerunFailedDialog, setShowRerunFailedDialog] = useState(false);
   const [isGeneratingMessages, setIsGeneratingMessages] = useState(false);
   
   // Use ref to avoid stale closure in interval
@@ -277,6 +280,41 @@ export default function CampaignDetailPage() {
     }
   };
 
+  const handleRerunFailedContacts = async () => {
+    setRerunningFailed(true);
+    setShowRerunFailedDialog(false);
+    
+    try {
+      const response = await fetch(`/api/campaigns/${params.id}/resend-failed`, {
+        method: 'POST',
+      });
+
+      // Check if response is JSON
+      const contentType = response.headers.get('content-type');
+      if (!contentType?.includes('application/json')) {
+        throw new Error('Server returned non-JSON response');
+      }
+
+      const data = await response.json();
+
+      if (response.ok) {
+        toast.success(
+          `✅ Rerun complete! ${data.successCount} messages sent successfully. ${data.stillFailedCount} messages still failed.`,
+          { duration: 5000 }
+        );
+        fetchCampaign();
+      } else {
+        toast.error(data.error || 'Failed to rerun failed contacts');
+      }
+    } catch (error) {
+      console.error('Error rerunning failed contacts:', error);
+      const err = error as Error;
+      toast.error(err.message || 'An error occurred while rerunning failed contacts');
+    } finally {
+      setRerunningFailed(false);
+    }
+  };
+
   if (loading) {
     return (
       <div className="flex items-center justify-center min-h-[400px]">
@@ -396,6 +434,17 @@ export default function CampaignDetailPage() {
             >
               <RotateCw className="h-4 w-4 mr-2" />
               {resending ? 'Resending...' : 'Resend Campaign'}
+            </Button>
+          )}
+
+          {campaign.status === 'COMPLETED' && campaign.failedCount > 0 && (
+            <Button 
+              onClick={() => setShowRerunFailedDialog(true)} 
+              disabled={rerunningFailed}
+              variant="default"
+            >
+              <RefreshCw className="h-4 w-4 mr-2" />
+              {rerunningFailed ? 'Rerunning...' : `Rerun Failed (${campaign.failedCount})`}
             </Button>
           )}
         </div>
@@ -658,6 +707,28 @@ export default function CampaignDetailPage() {
               disabled={resending}
             >
               {resending ? 'Resending...' : 'Yes, Resend Campaign'}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* Rerun Failed Contacts Dialog */}
+      <AlertDialog open={showRerunFailedDialog} onOpenChange={setShowRerunFailedDialog}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Rerun Failed Contacts?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This will attempt to resend messages to {campaign.failedCount} contact{campaign.failedCount !== 1 ? 's' : ''} that previously failed. 
+              Only failed messages will be retried. Successful messages will not be affected.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={rerunningFailed}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={handleRerunFailedContacts}
+              disabled={rerunningFailed}
+            >
+              {rerunningFailed ? 'Rerunning...' : 'Yes, Rerun Failed Contacts'}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

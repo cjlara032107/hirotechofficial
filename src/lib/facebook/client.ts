@@ -113,18 +113,30 @@ export class FacebookClient {
           };
         }
 
+        // Check for rate limit errors (codes: 613, 4, 17)
+        const isRateLimit = fbError.code === 613 || fbError.code === 4 || fbError.code === 17;
+        
         // Log detailed error information for debugging
-        console.error(`[Facebook API] Error sending message:`, {
-          code: fbError.code,
-          type: fbError.type,
-          message: fbError.message,
-          subcode: fbError.error_subcode,
-          recipientId: options.recipientId,
-        });
+        if (isRateLimit) {
+          console.warn(`[Facebook API] Rate limit detected:`, {
+            code: fbError.code,
+            type: fbError.type,
+            message: fbError.message,
+            recipientId: options.recipientId,
+          });
+        } else {
+          console.error(`[Facebook API] Error sending message:`, {
+            code: fbError.code,
+            type: fbError.type,
+            message: fbError.message,
+            subcode: fbError.error_subcode,
+            recipientId: options.recipientId,
+          });
+        }
 
         return {
           success: false,
-          error: 'FACEBOOK_API_ERROR',
+          error: isRateLimit ? 'RATE_LIMIT' : 'FACEBOOK_API_ERROR',
           message: `Facebook API Error (${fbError.code}): ${fbError.message}`,
           code: fbError.code,
           type: fbError.type,
@@ -154,10 +166,23 @@ export class FacebookClient {
     } catch (error: any) {
       if (error.response?.data?.error) {
         const fbError = error.response.data.error;
+        // Check for rate limit errors (codes: 613, 4, 17)
+        const isRateLimit = fbError.code === 613 || fbError.code === 4 || fbError.code === 17;
+        
+        if (isRateLimit) {
+          console.warn(`[Facebook API] Rate limit detected for Instagram message:`, {
+            code: fbError.code,
+            message: fbError.message,
+            recipientId: recipientIGID,
+          });
+        }
+        
         return {
           success: false,
-          error: 'FACEBOOK_API_ERROR',
+          error: isRateLimit ? 'RATE_LIMIT' : 'FACEBOOK_API_ERROR',
           message: `Facebook API Error (${fbError.code}): ${fbError.message}`,
+          code: fbError.code,
+          type: fbError.type,
         };
       }
       throw error;
