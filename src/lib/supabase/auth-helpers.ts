@@ -1,5 +1,5 @@
 import { createClient } from './server';
-import { prisma } from '@/lib/db';
+import { prisma, connectPrisma } from '@/lib/db';
 
 /**
  * Get the current authenticated user with their organization and profile
@@ -15,6 +15,9 @@ export async function getAuthUser() {
   if (!user) {
     return null;
   }
+
+  // Ensure database connection before query (critical for serverless)
+  await connectPrisma();
 
   // Get user profile from database
   let profile = await prisma.user.findUnique({
@@ -42,6 +45,8 @@ export async function getAuthUser() {
       // Find available slug
       let slug = baseSlug;
       let counter = 1;
+      // Ensure connection before transaction
+      await connectPrisma();
       while (await prisma.organization.findUnique({ where: { slug } })) {
         slug = `${baseSlug}-${counter}`;
         counter++;

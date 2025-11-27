@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { getAuthUser } from '@/lib/supabase/auth-helpers';
-import { prisma } from '@/lib/db';
+import { prisma, connectPrisma } from '@/lib/db';
 
 /**
  * Get current user session with full profile data
@@ -17,6 +17,8 @@ export async function GET() {
     // Fetch additional team context if user has an active team
     let teamContext = null;
     if (user.organizationId) {
+      // Ensure connection before query
+      await connectPrisma();
       const dbUser = await prisma.user.findUnique({
         where: { id: user.id },
         select: { activeTeamId: true },
