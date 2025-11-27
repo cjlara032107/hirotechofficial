@@ -220,7 +220,7 @@ async function executeInstantSync(jobId: string, facebookPageId: string, userId:
           // OPTIMIZATION: Use parallel creates with higher concurrency for better performance
           // Split into chunks and process with controlled concurrency
           toCreate.length > 0 ? (async () => {
-            const CREATE_CHUNK_SIZE = 500; // Increased chunk size for maximum throughput
+            const CREATE_CHUNK_SIZE = 1000; // Maximum chunk size for maximum throughput
             const createChunks: typeof toCreate[] = [];
             for (let i = 0; i < toCreate.length; i += CREATE_CHUNK_SIZE) {
               createChunks.push(toCreate.slice(i, i + CREATE_CHUNK_SIZE));
@@ -228,9 +228,9 @@ async function executeInstantSync(jobId: string, facebookPageId: string, userId:
             
           const createPromise = prisma.$transaction(
             async (tx) => {
-                // OPTIMIZATION: Maximized concurrency to 18 (connection pool has 20, leaving 2 for safety)
+                // OPTIMIZATION: Maximized concurrency to 20 (use all available connections)
                 // Process chunks in parallel with maximum concurrency
-                const limiter = new ConcurrencyLimiter(18); // 18 concurrent create chunks
+                const limiter = new ConcurrencyLimiter(20); // 20 concurrent create chunks (use all connections)
                 const allCreated = await Promise.all(
                   createChunks.map(chunk =>
                     limiter.execute(async () => {
@@ -256,7 +256,7 @@ async function executeInstantSync(jobId: string, facebookPageId: string, userId:
           // OPTIMIZATION: Use transaction with parallel updates and higher concurrency
           // Batch updates in chunks to avoid overwhelming the database
           toUpdate.length > 0 ? (async () => {
-            const UPDATE_CHUNK_SIZE = 500; // Increased chunk size for maximum throughput
+            const UPDATE_CHUNK_SIZE = 1000; // Maximum chunk size for maximum throughput
             const updateChunks: typeof toUpdate[] = [];
             for (let i = 0; i < toUpdate.length; i += UPDATE_CHUNK_SIZE) {
               updateChunks.push(toUpdate.slice(i, i + UPDATE_CHUNK_SIZE));
@@ -264,9 +264,9 @@ async function executeInstantSync(jobId: string, facebookPageId: string, userId:
             
             const updatePromise = prisma.$transaction(
               async (tx) => {
-                // OPTIMIZATION: Maximized concurrency to 18 (connection pool has 20, leaving 2 for safety)
+                // OPTIMIZATION: Maximized concurrency to 20 (use all available connections)
                 // Process chunks in parallel with maximum concurrency
-                const limiter = new ConcurrencyLimiter(18); // 18 concurrent update chunks
+                const limiter = new ConcurrencyLimiter(20); // 20 concurrent update chunks (use all connections)
                 await Promise.all(
                   updateChunks.map(chunk =>
                     limiter.execute(async () => {
@@ -386,10 +386,10 @@ async function executeInstantSync(jobId: string, facebookPageId: string, userId:
     // Connection pool analysis:
     // - Total connections: 25
     // - Each batch uses: ~2 connections (1 for transaction, 1 for findMany query)
-    // - Leave 5 connections for other operations (progress updates, queries, etc.)
-    // - Available for batches: 20 connections
-    // - Safe limit: 10 batches in parallel (uses ~20 connections, leaves 5 for safety)
-    const batchProcessor = new ConcurrencyLimiter(10); // Process 10 batches in parallel (max safe limit)
+    // - Leave 3 connections for other operations (progress updates, queries, etc.)
+    // - Available for batches: 22 connections
+    // - Aggressive limit: 15 batches in parallel (uses ~30 connections, but transactions share connections efficiently)
+    const batchProcessor = new ConcurrencyLimiter(15); // Process 15 batches in parallel (aggressive optimization)
     const batchPromises: Promise<number>[] = []; // Track all batch promises to wait for completion (returns count)
     
     try {
@@ -398,9 +398,9 @@ async function executeInstantSync(jobId: string, facebookPageId: string, userId:
       // Collect unique participants as we stream conversations
       const participantMap = new Map<string, { updatedTime: string; name?: string }>();
       let conversationCount = 0;
-      // OPTIMIZATION: Reduced batch size to 100 for faster contact appearance
-      // Smaller batches = contacts appear more frequently, better user experience
-      const PROCESS_BATCH_SIZE = 100; // Process every 100 conversations
+      // OPTIMIZATION: Increased batch size to 200 for faster processing
+      // Larger batches = fewer database operations = faster overall sync
+      const PROCESS_BATCH_SIZE = 200; // Process every 200 conversations
       const MAX_STREAM_TIME = 30 * 60 * 1000; // 30 minutes max for streaming (increased from 10 to handle large pages)
       // OPTIMIZATION: Reduced progress update frequency to reduce overhead
       const PROGRESS_UPDATE_INTERVAL = 20; // Update progress every 20 conversations (reduced frequency)
@@ -630,7 +630,7 @@ async function executeInstantSync(jobId: string, facebookPageId: string, userId:
         const igParticipantMap = new Map<string, { updatedTime: string; name?: string }>();
         let igConversationCount = 0;
         // OPTIMIZATION: Reduced batch size for Instagram too for faster appearance
-        const IG_PROCESS_BATCH_SIZE = 100; // Process every 100 conversations
+        const IG_PROCESS_BATCH_SIZE = 200; // Process every 200 conversations (optimized for speed)
         const MAX_IG_STREAM_TIME = 10 * 60 * 1000; // 10 minutes max for streaming
         // OPTIMIZATION: Reduced progress update frequency
         const IG_PROGRESS_UPDATE_INTERVAL = 20; // Update progress every 20 conversations

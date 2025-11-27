@@ -323,9 +323,9 @@ export class FacebookClient {
 
           // Add small delay to avoid rate limiting
           if (hasMore) {
-            // OPTIMIZATION: Reduced delay from 100ms to 20ms for maximum speed
+            // OPTIMIZATION: Reduced delay to 10ms for maximum speed
             // Facebook API can handle this rate safely, and it significantly speeds up large syncs
-            await new Promise(resolve => setTimeout(resolve, 20));
+            await new Promise(resolve => setTimeout(resolve, 10));
           }
         } catch (paginationError: any) {
           console.error(`[Facebook API] Error fetching page ${pageCount} of Messenger conversations:`, paginationError);
@@ -416,9 +416,9 @@ export class FacebookClient {
 
           // Add small delay to avoid rate limiting
           if (hasMore) {
-            // OPTIMIZATION: Reduced delay from 100ms to 20ms for maximum speed
+            // OPTIMIZATION: Reduced delay to 10ms for maximum speed
             // Facebook API can handle this rate safely, and it significantly speeds up large syncs
-            await new Promise(resolve => setTimeout(resolve, 20));
+            await new Promise(resolve => setTimeout(resolve, 10));
           }
         } catch (paginationError: any) {
           console.error('Error fetching next page of Messenger conversations:', paginationError);
@@ -484,7 +484,7 @@ export class FacebookClient {
 
           // Small delay to avoid rate limiting
           if (hasMore) {
-            await new Promise(resolve => setTimeout(resolve, 20)); // 20ms delay (optimized)
+            await new Promise(resolve => setTimeout(resolve, 10)); // 10ms delay (optimized for speed)
           }
         } catch (pageError: any) {
           console.error(`[Facebook Client] Error fetching message page ${pageCount + 1} for conversation ${conversationId}:`, pageError);
@@ -699,9 +699,9 @@ export class FacebookClient {
 
           // Add small delay to avoid rate limiting
           if (hasMore) {
-            // OPTIMIZATION: Reduced delay from 100ms to 20ms for maximum speed
+            // OPTIMIZATION: Reduced delay to 10ms for maximum speed
             // Facebook API can handle this rate safely, and it significantly speeds up large syncs
-            await new Promise(resolve => setTimeout(resolve, 20));
+            await new Promise(resolve => setTimeout(resolve, 10));
           }
         } catch (paginationError: any) {
           console.error('Error fetching next page of Instagram conversations:', paginationError);
@@ -784,9 +784,9 @@ export class FacebookClient {
 
           // Add small delay to avoid rate limiting
           if (hasMore) {
-            // OPTIMIZATION: Reduced delay from 100ms to 20ms for maximum speed
+            // OPTIMIZATION: Reduced delay to 10ms for maximum speed
             // Facebook API can handle this rate safely, and it significantly speeds up large syncs
-            await new Promise(resolve => setTimeout(resolve, 20));
+            await new Promise(resolve => setTimeout(resolve, 10));
           }
         } catch (paginationError: any) {
           console.error('Error fetching next page of Instagram conversations:', paginationError);
