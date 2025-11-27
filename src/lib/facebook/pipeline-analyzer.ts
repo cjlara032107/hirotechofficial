@@ -526,7 +526,7 @@ async function executePipelineAnalysis(jobId: string, facebookPageId: string): P
         page.pageId,
         neededParticipantIds
       );
-      console.log(`[Pipeline Analysis ${jobId}] ✅ Successfully fetched ${messengerConvos.length} Messenger conversations (stopped early when all participants found)`);
+      console.log(`[Pipeline Analysis ${jobId}] ✅ Fetched ${messengerConvos.length} Messenger conversations`);
     } catch (error) {
       const errorMsg = error instanceof Error ? error.message : 'Unknown error';
       console.error(`[Pipeline Analysis ${jobId}] ⚠️ Error fetching Messenger conversations: ${errorMsg}`);
