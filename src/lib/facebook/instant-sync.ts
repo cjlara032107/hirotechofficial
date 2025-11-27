@@ -381,6 +381,7 @@ async function executeInstantSync(jobId: string, facebookPageId: string, userId:
     // - Available for batches: 20 connections
     // - Safe limit: 10 batches in parallel (uses ~20 connections, leaves 5 for safety)
     const batchProcessor = new ConcurrencyLimiter(10); // Process 10 batches in parallel (max safe limit)
+    const batchPromises: Promise<void>[] = []; // Track all batch promises to wait for completion
     
     try {
       console.log(`[Instant Sync ${jobId}] Streaming Messenger conversations...`);
@@ -459,12 +460,19 @@ async function executeInstantSync(jobId: string, facebookPageId: string, userId:
           console.log(`[Instant Sync ${jobId}] ✅ Started streaming conversations...`);
         }
         
-        if (!convo.participants?.data) continue;
+        if (!convo.participants?.data) {
+          console.log(`[Instant Sync ${jobId}] Conversation ${convo.id} has no participants data`);
+          continue;
+        }
         
         // Extract participants from this conversation immediately
+        let participantsInConvo = 0;
         for (const participant of convo.participants.data) {
-          if (participant.id === page.pageId) continue;
-          
+          if (participant.id === page.pageId) {
+            // Skip page itself (this is normal)
+            continue;
+          }
+          participantsInConvo++;
           const existing = participantMap.get(participant.id);
           if (!existing || new Date(convo.updated_time) > new Date(existing.updatedTime)) {
             participantMap.set(participant.id, {
@@ -472,6 +480,11 @@ async function executeInstantSync(jobId: string, facebookPageId: string, userId:
               name: participant.name,
             });
           }
+        }
+        
+        // Log if conversation has no external participants (for debugging)
+        if (participantsInConvo === 0 && convo.participants.data.length > 0) {
+          console.log(`[Instant Sync ${jobId}] Conversation ${convo.id} only has page itself as participant (${convo.participants.data.length} total)`);
         }
         
         // OPTIMIZATION: Process contacts in batches during streaming (every 100 conversations)
@@ -489,8 +502,8 @@ async function executeInstantSync(jobId: string, facebookPageId: string, userId:
           const remainingCount = participantMap.size; // Store before clearing
           participantMap.clear(); // Clear processed participants
           
-          // OPTIMIZATION: Queue batch for parallel processing (don't wait)
-          batchProcessor.execute(async () => {
+          // OPTIMIZATION: Queue batch for parallel processing (track promise)
+          const batchPromise = batchProcessor.execute(async () => {
             await processContactBatch(batchToProcess, 'Messenger');
             
             // OPTIMIZATION: Truly non-blocking progress update (fire and forget)
@@ -505,6 +518,7 @@ async function executeInstantSync(jobId: string, facebookPageId: string, userId:
           }).catch(err => {
             console.error(`[Instant Sync ${jobId}] Batch processing error:`, err);
           });
+          batchPromises.push(batchPromise);
           
           lastProgressUpdate = Date.now();
         } else if (conversationCount % PROGRESS_UPDATE_INTERVAL === 0 || Date.now() - lastProgressUpdate > 5000) {
@@ -531,9 +545,13 @@ async function executeInstantSync(jobId: string, facebookPageId: string, userId:
       
       console.log(`[Instant Sync ${jobId}] Fetched ${conversationCount} Messenger conversations`);
 
-      // OPTIMIZATION: Wait for all queued batches to complete before processing remaining
-      // This ensures all parallel batches finish before final batch
-      await new Promise(resolve => setTimeout(resolve, 200));
+      // CRITICAL FIX: Wait for all queued batches to complete before processing remaining
+      // This ensures all parallel batches finish and contactsStored is accurate
+      if (batchPromises.length > 0) {
+        console.log(`[Instant Sync ${jobId}] Waiting for ${batchPromises.length} parallel batches to complete...`);
+        await Promise.all(batchPromises);
+        console.log(`[Instant Sync ${jobId}] All parallel batches completed. Contacts stored so far: ${contactsStored}`);
+      }
 
       // Process any remaining participants
       if (participantMap.size > 0) {
@@ -630,8 +648,8 @@ async function executeInstantSync(jobId: string, facebookPageId: string, userId:
             const remainingCount = igParticipantMap.size; // Store before clearing
             igParticipantMap.clear(); // Clear processed participants
             
-            // OPTIMIZATION: Queue batch for parallel processing (don't wait)
-            batchProcessor.execute(async () => {
+            // OPTIMIZATION: Queue batch for parallel processing (track promise)
+            const batchPromise = batchProcessor.execute(async () => {
               await processContactBatch(batchToProcess, 'Instagram');
               
               // OPTIMIZATION: Truly non-blocking progress update (fire and forget)
@@ -646,6 +664,7 @@ async function executeInstantSync(jobId: string, facebookPageId: string, userId:
             }).catch(err => {
               console.error(`[Instant Sync ${jobId}] Instagram batch processing error:`, err);
             });
+            batchPromises.push(batchPromise);
             
             lastIgProgressUpdate = Date.now();
           } else if (igConversationCount % IG_PROGRESS_UPDATE_INTERVAL === 0 || Date.now() - lastIgProgressUpdate > 5000) {
@@ -667,9 +686,13 @@ async function executeInstantSync(jobId: string, facebookPageId: string, userId:
         
         console.log(`[Instant Sync ${jobId}] Fetched ${igConversationCount} Instagram conversations`);
 
-        // OPTIMIZATION: Wait for all queued batches to complete before processing remaining
-        // This ensures all parallel batches finish before final batch
-        await new Promise(resolve => setTimeout(resolve, 200));
+        // CRITICAL FIX: Wait for all queued batches to complete before processing remaining
+        // This ensures all parallel batches finish and contactsStored is accurate
+        if (batchPromises.length > 0) {
+          console.log(`[Instant Sync ${jobId}] Waiting for ${batchPromises.length} parallel Instagram batches to complete...`);
+          await Promise.all(batchPromises);
+          console.log(`[Instant Sync ${jobId}] All parallel Instagram batches completed. Contacts stored so far: ${contactsStored}`);
+        }
 
         // Process any remaining Instagram participants
         if (igParticipantMap.size > 0) {
