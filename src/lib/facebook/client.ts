@@ -243,11 +243,24 @@ export class FacebookClient {
       hasMore = !!nextUrl;
 
       // Fetch subsequent pages until we find all participants
+      // OPTIMIZED: Continue even if some pages timeout - return partial results
+      let consecutiveTimeouts = 0;
+      const MAX_CONSECUTIVE_TIMEOUTS = 3; // Stop after 3 consecutive timeouts
+      
       while (hasMore && nextUrl && foundParticipants.size < neededParticipantIds.size) {
         try {
-          const nextResponse = await axios.get(nextUrl, {
-            timeout: 30000,
-          });
+          // Add timeout per page with retry
+          const nextResponse = await Promise.race([
+            axios.get(nextUrl, {
+              timeout: 30000, // 30 second timeout per page
+            }),
+            new Promise((_, reject) => 
+              setTimeout(() => reject(new Error(`Page ${pageCount + 1} request timed out after 30 seconds`)), 30000)
+            )
+          ]) as any;
+          
+          // Reset timeout counter on success
+          consecutiveTimeouts = 0;
           
           if (nextResponse.data.data && nextResponse.data.data.length > 0) {
             allConversations.push(...nextResponse.data.data);
@@ -255,6 +268,7 @@ export class FacebookClient {
             
             // Check if we found all needed participants
             for (const convo of nextResponse.data.data) {
+              if (!convo.participants?.data) continue;
               for (const participant of convo.participants.data) {
                 if (neededParticipantIds.has(participant.id)) {
                   foundParticipants.add(participant.id);
@@ -275,7 +289,26 @@ export class FacebookClient {
 
           // No delay - Facebook API can handle rapid pagination, and we have error handling for rate limits
         } catch (paginationError: any) {
-          console.error('Error fetching next page of Messenger conversations:', paginationError);
+          const errorMsg = paginationError.message || 'Unknown error';
+          const isTimeout = errorMsg.includes('timeout') || errorMsg.includes('timed out');
+          
+          if (isTimeout) {
+            consecutiveTimeouts++;
+            console.warn(`[Facebook API] Page ${pageCount + 1} timed out (${consecutiveTimeouts}/${MAX_CONSECUTIVE_TIMEOUTS} consecutive timeouts)`);
+            
+            // If too many consecutive timeouts, stop and return what we have
+            if (consecutiveTimeouts >= MAX_CONSECUTIVE_TIMEOUTS) {
+              console.warn(`[Facebook API] Too many consecutive timeouts (${consecutiveTimeouts}), stopping pagination. Found ${foundParticipants.size}/${neededParticipantIds.size} participants so far.`);
+              break;
+            }
+            
+            // Retry the same page once
+            console.log(`[Facebook API] Retrying page ${pageCount + 1}...`);
+            await new Promise(resolve => setTimeout(resolve, 2000)); // Wait 2 seconds before retry
+            continue; // Retry same page
+          }
+          
+          console.error(`[Facebook API] Error fetching page ${pageCount + 1} of Messenger conversations:`, errorMsg);
           
           // If we get rate limited, throw the error
           const fbError = paginationError.response?.data?.error;
@@ -284,8 +317,11 @@ export class FacebookClient {
           }
           
           // For other pagination errors, log but continue with what we have
-          console.warn(`Failed to fetch page, continuing with ${allConversations.length} conversations already fetched`);
-          break;
+          console.warn(`[Facebook API] Failed to fetch page ${pageCount + 1}, continuing with ${allConversations.length} conversations already fetched`);
+          consecutiveTimeouts++;
+          if (consecutiveTimeouts >= MAX_CONSECUTIVE_TIMEOUTS) {
+            break;
+          }
         }
       }
 
@@ -676,11 +712,24 @@ export class FacebookClient {
       hasMore = !!nextUrl;
 
       // Fetch subsequent pages until we find all participants
+      // OPTIMIZED: Continue even if some pages timeout - return partial results
+      let consecutiveTimeouts = 0;
+      const MAX_CONSECUTIVE_TIMEOUTS = 3; // Stop after 3 consecutive timeouts
+      
       while (hasMore && nextUrl && foundParticipants.size < neededParticipantIds.size) {
         try {
-          const nextResponse = await axios.get(nextUrl, {
-            timeout: 30000,
-          });
+          // Add timeout per page with retry
+          const nextResponse = await Promise.race([
+            axios.get(nextUrl, {
+              timeout: 30000, // 30 second timeout per page
+            }),
+            new Promise((_, reject) => 
+              setTimeout(() => reject(new Error(`Page ${pageCount + 1} request timed out after 30 seconds`)), 30000)
+            )
+          ]) as any;
+          
+          // Reset timeout counter on success
+          consecutiveTimeouts = 0;
           
           if (nextResponse.data.data && nextResponse.data.data.length > 0) {
             allConversations.push(...nextResponse.data.data);
@@ -688,6 +737,7 @@ export class FacebookClient {
             
             // Check if we found all needed participants
             for (const convo of nextResponse.data.data) {
+              if (!convo.participants?.data) continue;
               for (const participant of convo.participants.data) {
                 if (neededParticipantIds.has(participant.id)) {
                   foundParticipants.add(participant.id);
@@ -708,8 +758,30 @@ export class FacebookClient {
 
           // No delay - Facebook API can handle rapid pagination, and we have error handling for rate limits
         } catch (paginationError: any) {
-          console.error('Error fetching next page of Instagram conversations:', paginationError);
-          break;
+          const errorMsg = paginationError.message || 'Unknown error';
+          const isTimeout = errorMsg.includes('timeout') || errorMsg.includes('timed out');
+          
+          if (isTimeout) {
+            consecutiveTimeouts++;
+            console.warn(`[Facebook API] Instagram page ${pageCount + 1} timed out (${consecutiveTimeouts}/${MAX_CONSECUTIVE_TIMEOUTS} consecutive timeouts)`);
+            
+            // If too many consecutive timeouts, stop and return what we have
+            if (consecutiveTimeouts >= MAX_CONSECUTIVE_TIMEOUTS) {
+              console.warn(`[Facebook API] Too many consecutive timeouts (${consecutiveTimeouts}), stopping pagination. Found ${foundParticipants.size}/${neededParticipantIds.size} IG participants so far.`);
+              break;
+            }
+            
+            // Retry the same page once
+            console.log(`[Facebook API] Retrying Instagram page ${pageCount + 1}...`);
+            await new Promise(resolve => setTimeout(resolve, 2000)); // Wait 2 seconds before retry
+            continue; // Retry same page
+          }
+          
+          console.error(`[Facebook API] Error fetching page ${pageCount + 1} of Instagram conversations:`, errorMsg);
+          consecutiveTimeouts++;
+          if (consecutiveTimeouts >= MAX_CONSECUTIVE_TIMEOUTS) {
+            break;
+          }
         }
       }
 
