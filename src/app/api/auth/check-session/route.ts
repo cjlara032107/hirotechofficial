@@ -31,7 +31,7 @@ export async function GET() {
           () => prisma.teamMember.findFirst({
             where: {
               userId: user.id,
-              teamId: dbUser.activeTeamId,
+              teamId: dbUser.activeTeamId!, // Non-null assertion since we checked above
               status: 'ACTIVE',
             },
             include: {
