@@ -106,6 +106,9 @@ async function sendMessageDirect(data: {
 
       return { success: true };
     } else {
+      const errorDetails = 'error' in result ? result.error : 'Failed to send message';
+      const errorMessage = 'message' in result ? result.message : errorDetails;
+      
       await prisma.message.create({
         data: {
           content,
@@ -116,7 +119,7 @@ async function sendMessageDirect(data: {
           campaignId,
           isFromBusiness: true,
           failedAt: new Date(),
-          errorMessage: !result.success ? ('error' in result ? result.error : 'Failed to send message') : undefined,
+          errorMessage: errorMessage,
         },
       });
 
@@ -130,7 +133,20 @@ async function sendMessageDirect(data: {
       console.error(`Failed to update failedCount for campaign ${campaignId}:`, error);
     }
 
-    return { success: false, error: 'error' in result ? result.error : 'Unknown error' };
+    const errorDetails = 'error' in result ? result.error : 'Unknown error';
+    const errorMessage = 'message' in result ? result.message : errorDetails;
+    
+    // Log detailed error for debugging
+    console.error(`[Campaign Send] Message failed:`, {
+      contactId,
+      recipientId,
+      platform,
+      error: errorDetails,
+      message: errorMessage,
+      code: 'code' in result ? result.code : undefined,
+    });
+    
+    return { success: false, error: errorDetails, message: errorMessage };
     }
   } catch (error: any) {
     await prisma.message.create({

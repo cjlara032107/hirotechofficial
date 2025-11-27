@@ -113,10 +113,21 @@ export class FacebookClient {
           };
         }
 
+        // Log detailed error information for debugging
+        console.error(`[Facebook API] Error sending message:`, {
+          code: fbError.code,
+          type: fbError.type,
+          message: fbError.message,
+          subcode: fbError.error_subcode,
+          recipientId: options.recipientId,
+        });
+
         return {
           success: false,
           error: 'FACEBOOK_API_ERROR',
-          message: fbError.message,
+          message: `Facebook API Error (${fbError.code}): ${fbError.message}`,
+          code: fbError.code,
+          type: fbError.type,
         };
       }
 

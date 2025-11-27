@@ -5,7 +5,7 @@
 
 import { prisma } from './db';
 
-const CONNECTION_TIMEOUT_MS = 500; // 500ms - very short timeout to fail fast
+const CONNECTION_TIMEOUT_MS = 2000; // 2 seconds - short timeout to fail fast but allow for connection acquisition
 
 /**
  * Check if database connection is available quickly
