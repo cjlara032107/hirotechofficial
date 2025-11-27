@@ -333,7 +333,13 @@ export class FacebookClient {
           let retryCount = 0;
           let retrySuccess = false;
           
-          while (retryCount < MAX_RETRIES && !retrySuccess) {
+          // Only retry if we have a valid nextUrl
+          if (!nextUrl) {
+            console.warn(`[Facebook API] No nextUrl available for retry, breaking pagination`);
+            break;
+          }
+          
+          while (retryCount < MAX_RETRIES && !retrySuccess && nextUrl) {
             retryCount++;
             console.warn(`[Facebook API] Retrying page ${pageCount} (attempt ${retryCount}/${MAX_RETRIES})...`);
             
@@ -746,7 +752,13 @@ export class FacebookClient {
           let retryCount = 0;
           let retrySuccess = false;
           
-          while (retryCount < MAX_RETRIES && !retrySuccess) {
+          // Only retry if we have a valid nextUrl
+          if (!nextUrl) {
+            console.warn(`[Facebook API] No nextUrl available for Instagram retry, breaking pagination`);
+            break;
+          }
+          
+          while (retryCount < MAX_RETRIES && !retrySuccess && nextUrl) {
             retryCount++;
             console.warn(`[Facebook API] Retrying Instagram page ${pageCount} (attempt ${retryCount}/${MAX_RETRIES})...`);
             
