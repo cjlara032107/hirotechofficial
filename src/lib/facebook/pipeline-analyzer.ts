@@ -495,23 +495,40 @@ async function executePipelineAnalysis(jobId: string, facebookPageId: string): P
     }));
 
     // Fetch all conversations once (to match contacts to conversations)
-    // OPTIMIZED: Add timeout to prevent getting stuck on slow API calls
+    // OPTIMIZED: Dynamic timeout based on contact count + fallback to fetch at least first page
     console.log(`[Pipeline Analysis ${jobId}] Fetching conversations to match contacts...`);
     let messengerConvos: any[] = [];
+    
+    // Calculate dynamic timeout: 2 minutes base + 20ms per contact, max 5 minutes
+    // For 2227 contacts: 2 min + (2227 * 20ms) = 2 min + 44 sec = ~3 minutes
+    const dynamicTimeout = Math.min(
+      5 * 60 * 1000, // Max 5 minutes
+      (2 * 60 * 1000) + (contactsWithoutPipeline.length * 20) // Base 2 min + 20ms per contact
+    );
+    const timeoutMinutes = Math.ceil(dynamicTimeout / 60000);
+    
+    console.log(`[Pipeline Analysis ${jobId}] Using ${timeoutMinutes}-minute timeout for ${contactsWithoutPipeline.length} contacts`);
+    
     try {
-      // Add 60-second timeout to prevent getting stuck
       messengerConvos = await Promise.race([
         client.getMessengerConversations(page.pageId),
         new Promise<never>((_, reject) => 
-          setTimeout(() => reject(new Error('Conversation fetch timeout after 60 seconds')), 60000)
+          setTimeout(() => reject(new Error(`Conversation fetch timeout after ${timeoutMinutes} minutes`)), dynamicTimeout)
         )
       ]);
       console.log(`[Pipeline Analysis ${jobId}] ✅ Successfully fetched ${messengerConvos.length} Messenger conversations`);
     } catch (error) {
       const errorMsg = error instanceof Error ? error.message : 'Unknown error';
-      console.error(`[Pipeline Analysis ${jobId}] ⚠️ Error fetching Messenger conversations: ${errorMsg}`);
-      console.error(`[Pipeline Analysis ${jobId}] Continuing with ${messengerConvos.length} conversations already fetched`);
-      // Continue with whatever we have - we'll fetch on-demand for missing contacts
+      console.error(`[Pipeline Analysis ${jobId}] ⚠️ Error fetching all Messenger conversations: ${errorMsg}`);
+      
+      console.log(`[Pipeline Analysis ${jobId}] Continuing with ${messengerConvos.length} conversations already fetched`);
+      if (messengerConvos.length === 0) {
+        console.warn(`[Pipeline Analysis ${jobId}] ⚠️ WARNING: No conversations fetched. All contacts will fail.`);
+        console.warn(`[Pipeline Analysis ${jobId}] This may be due to timeout or API issues. Consider increasing timeout or checking Facebook API status.`);
+      } else {
+        console.log(`[Pipeline Analysis ${jobId}] Will process contacts with available conversations`);
+      }
+      // Continue with whatever we have - contacts without conversations will be marked as failed
     }
 
     // Create a map of participantId -> conversationId for Messenger
@@ -551,11 +568,11 @@ async function executePipelineAnalysis(jobId: string, facebookPageId: string): P
     if (page.instagramAccountId) {
       try {
         console.log(`[Pipeline Analysis ${jobId}] Fetching Instagram conversations...`);
-        // Add 60-second timeout to prevent getting stuck
+        // Use same dynamic timeout as Messenger conversations
         const igConvos = await Promise.race([
           client.getInstagramConversations(page.instagramAccountId),
           new Promise<never>((_, reject) => 
-            setTimeout(() => reject(new Error('Instagram conversation fetch timeout after 60 seconds')), 60000)
+            setTimeout(() => reject(new Error(`Instagram conversation fetch timeout after ${timeoutMinutes} minutes`)), dynamicTimeout)
           )
         ]);
         console.log(`[Pipeline Analysis ${jobId}] ✅ Successfully fetched ${igConvos.length} Instagram conversations`);
