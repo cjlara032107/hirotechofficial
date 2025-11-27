@@ -17,15 +17,19 @@ function sleep(ms: number): Promise<void> {
 }
 
 // Get API key from database first, then fall back to environment variables
-async function getApiKey(): Promise<string | null> {
+async function getApiKey(requestContext?: { operation?: string; contactId?: string; campaignId?: string }): Promise<string | null> {
   // Try database first (preferred method - can be managed through UI)
-  const dbKey = await apiKeyManager.getNextKey();
+  const dbKey = await apiKeyManager.getNextKey(requestContext);
   if (dbKey) {
     return dbKey;
   }
   
   // Fall back to environment variables if no database keys available
-  return process.env.NVIDIA_API_KEY || process.env.GOOGLE_AI_API_KEY || null;
+  const envKey = process.env.NVIDIA_API_KEY || process.env.GOOGLE_AI_API_KEY || null;
+  if (envKey) {
+    console.warn('[NVIDIA] ⚠️ Using environment variable API key (database keys not available)');
+  }
+  return envKey;
 }
 
 // Helper function to create OpenAI client configured for NVIDIA API
@@ -45,15 +49,31 @@ export async function analyzeConversation(
     text: string;
     timestamp?: Date;
   }>,
-  retries = 2
+  retries = 2,
+  context?: { contactId?: string; conversationId?: string }
 ): Promise<string | null> {
-  const apiKey = await getApiKey();
+  const startTime = Date.now();
+  const apiKey = await getApiKey({ 
+    operation: 'analyzeConversation',
+    contactId: context?.contactId 
+  });
   if (!apiKey) {
     console.error('[NVIDIA] No API key available. Add one through Settings → API Keys or set NVIDIA_API_KEY environment variable.');
     return null;
   }
 
-  return analyzeConversationWithKey(apiKey, messages, retries, 0);
+  const result = await analyzeConversationWithKey(apiKey, messages, retries, 0);
+  
+  // Record success with duration
+  if (result) {
+    const duration = Date.now() - startTime;
+    await apiKeyManager.recordSuccess(apiKey, { 
+      operation: 'analyzeConversation',
+      duration 
+    });
+  }
+  
+  return result;
 }
 
 async function analyzeConversationWithKey(
@@ -127,8 +147,7 @@ Summary:`;
       return null;
     }
     
-    // Record success in database if key came from there
-    await apiKeyManager.recordSuccess(apiKey);
+    // Success will be recorded by caller with duration
     
     console.log(`[NVIDIA] ✅ Generated summary (${summary.length} chars)`);
     
@@ -455,21 +474,37 @@ export async function analyzeConversationWithStageRecommendation(
     leadScoreMin?: number;
     leadScoreMax?: number;
   }>,
-  retries = 2
+  retries = 2,
+  context?: { contactId?: string }
 ): Promise<AIContactAnalysis | null> {
-  const apiKey = await getApiKey();
+  const startTime = Date.now();
+  const apiKey = await getApiKey({ 
+    operation: 'analyzeConversationWithStageRecommendation',
+    contactId: context?.contactId 
+  });
   if (!apiKey) {
     console.error('[NVIDIA] No API key available. Add one through Settings → API Keys or set NVIDIA_API_KEY environment variable.');
     return null;
   }
 
-  return analyzeConversationWithStageAndKey(
+  const result = await analyzeConversationWithStageAndKey(
     apiKey,
     messages,
     pipelineStages,
     retries,
     0
   );
+  
+  // Record success with duration
+  if (result) {
+    const duration = Date.now() - startTime;
+    await apiKeyManager.recordSuccess(apiKey, { 
+      operation: 'analyzeConversationWithStageRecommendation',
+      duration 
+    });
+  }
+  
+  return result;
 }
 
 async function analyzeConversationWithStageAndKey(
@@ -607,8 +642,7 @@ Respond ONLY with valid JSON (no markdown, no explanation):
     
     const analysis = JSON.parse(jsonMatch[0]) as AIContactAnalysis;
     
-    // Record success in database if key came from there
-    await apiKeyManager.recordSuccess(apiKey);
+    // Success will be recorded by caller with duration
     
     console.log(`[NVIDIA] ✅ Stage recommendation: ${analysis.recommendedStage} (confidence: ${analysis.confidence}%, score: ${analysis.leadScore})`);
     
@@ -645,7 +679,7 @@ Respond ONLY with valid JSON (no markdown, no explanation):
       console.error('[NVIDIA] Rate limit persists for stage recommendation after multiple attempts');
       
       // Mark key as rate-limited in database if it came from there
-      await apiKeyManager.markRateLimited(apiKey);
+      await apiKeyManager.markRateLimited(apiKey, { operation: 'analyzeConversationWithStageRecommendation' });
       
       // Try again if we have retries left (will get a different key from rotation)
       if (retries > 0) {

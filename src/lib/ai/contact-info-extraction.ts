@@ -47,10 +47,15 @@ interface ContactInfo {
  */
 export async function extractContactInfo(
   messages: Array<{ from: string; text: string; timestamp?: Date }>,
-  retries = 2
+  retries = 2,
+  context?: { contactId?: string }
 ): Promise<ContactInfo | null> {
+  const startTime = Date.now();
   try {
-    const apiKey = await apiKeyManager.getNextKey();
+    const apiKey = await apiKeyManager.getNextKey({ 
+      operation: 'extractContactInfo',
+      contactId: context?.contactId 
+    });
     if (!apiKey) {
       console.warn('[Contact Info Extraction] No API key available');
       return null;

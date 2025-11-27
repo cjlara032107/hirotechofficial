@@ -11,12 +11,25 @@ class ApiKeyManager {
   private activeKeyIds: string[] = [];
   private lastRefresh: number = 0;
   private readonly CACHE_TTL = 60000; // Cache for 60 seconds
+  private usageStats: Map<string, { count: number; lastUsed: number }> = new Map();
+  private requestCounter: number = 0;
+
+  /**
+   * Generate a unique request ID for tracking
+   */
+  private generateRequestId(): string {
+    this.requestCounter++;
+    return `req-${Date.now()}-${this.requestCounter}`;
+  }
 
   /**
    * Get the next available API key in round-robin fashion
    * Automatically skips rate-limited and disabled keys
    */
-  async getNextKey(): Promise<string | null> {
+  async getNextKey(requestContext?: { operation?: string; contactId?: string; campaignId?: string }): Promise<string | null> {
+    const requestId = this.generateRequestId();
+    const startTime = Date.now();
+    
     try {
       // Refresh cache if stale
       const now = Date.now();
@@ -25,12 +38,13 @@ class ApiKeyManager {
       }
 
       if (this.activeKeyIds.length === 0) {
-        console.warn('[ApiKeyManager] No active keys available');
+        console.warn(`[ApiKeyManager] [${requestId}] ⚠️ No active keys available`);
         return null;
       }
 
       // Round-robin selection
       const keyId = this.activeKeyIds[this.currentIndex];
+      const keyIndex = this.currentIndex;
       this.currentIndex = (this.currentIndex + 1) % this.activeKeyIds.length;
 
       // Get and decrypt the key
@@ -40,12 +54,13 @@ class ApiKeyManager {
 
       if (!apiKeyRecord || apiKeyRecord.status !== ApiKeyStatus.ACTIVE) {
         // Key was disabled or rate-limited since cache refresh, refresh and retry
+        console.warn(`[ApiKeyManager] [${requestId}] Key ${keyId} is no longer active, refreshing cache...`);
         await this.refreshActiveKeys();
         if (this.activeKeyIds.length === 0) {
           return null;
         }
         // Try again with fresh cache
-        return this.getNextKey();
+        return this.getNextKey(requestContext);
       }
 
       // Update last used timestamp
@@ -54,17 +69,40 @@ class ApiKeyManager {
         data: { lastUsedAt: new Date() },
       }).catch((err: unknown) => {
         // Non-critical, just log
-        console.warn('[ApiKeyManager] Failed to update lastUsedAt:', err);
+        console.warn(`[ApiKeyManager] [${requestId}] Failed to update lastUsedAt:`, err);
       });
 
       // Decrypt and return the key
       const decryptedKey = decryptKey(apiKeyRecord.encryptedKey);
       
-      console.log(`[ApiKeyManager] Using key ${keyId} (${apiKeyRecord.name || 'unnamed'})`);
+      // Track usage statistics
+      const stats = this.usageStats.get(keyId) || { count: 0, lastUsed: 0 };
+      stats.count++;
+      stats.lastUsed = Date.now();
+      this.usageStats.set(keyId, stats);
+
+      // Enhanced logging with context
+      const contextInfo = requestContext?.operation 
+        ? ` | Operation: ${requestContext.operation}${requestContext.contactId ? ` | Contact: ${requestContext.contactId.substring(0, 8)}...` : ''}${requestContext.campaignId ? ` | Campaign: ${requestContext.campaignId.substring(0, 8)}...` : ''}`
+        : '';
+      
+      console.log(
+        `[ApiKeyManager] [${requestId}] ✅ Using key #${keyIndex + 1}/${this.activeKeyIds.length} ` +
+        `(${keyId.substring(0, 8)}... | ${apiKeyRecord.name || 'unnamed'})` +
+        ` | Total uses: ${stats.count}${contextInfo}`
+      );
+      
+      // Log parallel usage indicator
+      const activeRequests = Array.from(this.usageStats.values()).filter(
+        s => Date.now() - s.lastUsed < 5000 // Active in last 5 seconds
+      ).length;
+      if (activeRequests > 1) {
+        console.log(`[ApiKeyManager] [${requestId}] 🔄 Parallel processing: ${activeRequests} concurrent requests detected`);
+      }
       
       return decryptedKey;
     } catch (error) {
-      console.error('[ApiKeyManager] Error getting next key:', error);
+      console.error(`[ApiKeyManager] [${requestId}] ❌ Error getting next key:`, error);
       return null;
     }
   }
@@ -80,22 +118,38 @@ class ApiKeyManager {
         },
         select: {
           id: true,
+          name: true,
+          lastUsedAt: true,
+          totalRequests: true,
         },
         orderBy: {
           createdAt: 'asc',
         },
       });
 
+      const previousCount = this.activeKeyIds.length;
       this.activeKeyIds = activeKeys.map((k: { id: string }) => k.id);
       this.lastRefresh = Date.now();
       
       if (this.activeKeyIds.length > 0) {
         // Reset index to avoid out-of-bounds
         this.currentIndex = this.currentIndex % this.activeKeyIds.length;
-        console.log(`[ApiKeyManager] Refreshed active keys cache: ${this.activeKeyIds.length} keys available`);
+        
+        // Log detailed refresh information
+        const keyNames = activeKeys.map((k: { id: string; name: string | null; lastUsedAt: Date | null; totalRequests: number }) => 
+          `${k.name || 'unnamed'} (${k.totalRequests} reqs)`
+        ).join(', ');
+        
+        console.log(
+          `[ApiKeyManager] 🔄 Refreshed active keys cache: ${this.activeKeyIds.length} keys available ` +
+          `(${previousCount} → ${this.activeKeyIds.length})`
+        );
+        console.log(`[ApiKeyManager] 📋 Active keys: ${keyNames}`);
+      } else {
+        console.warn('[ApiKeyManager] ⚠️ No active keys found in database');
       }
     } catch (error) {
-      console.error('[ApiKeyManager] Error refreshing active keys:', error);
+      console.error('[ApiKeyManager] ❌ Error refreshing active keys:', error);
       this.activeKeyIds = [];
     }
   }
@@ -104,15 +158,21 @@ class ApiKeyManager {
    * Mark a key as rate-limited
    * Sets status to RATE_LIMITED and records the timestamp
    */
-  async markRateLimited(keyIdOrDecryptedKey: string): Promise<void> {
+  async markRateLimited(keyIdOrDecryptedKey: string, requestContext?: { operation?: string }): Promise<void> {
+    const requestId = this.generateRequestId();
     try {
       // Find key by ID or by matching decrypted key
       const apiKey = await this.findKeyByIdOrValue(keyIdOrDecryptedKey);
 
       if (!apiKey) {
-        console.warn('[ApiKeyManager] Key not found for rate limit marking');
+        console.warn(`[ApiKeyManager] [${requestId}] ⚠️ Key not found for rate limit marking`);
         return;
       }
+
+      const keyRecord = await prisma.apiKey.findUnique({
+        where: { id: apiKey.id },
+        select: { name: true, totalRequests: true },
+      });
 
       await prisma.apiKey.update({
         where: { id: apiKey.id },
@@ -128,22 +188,33 @@ class ApiKeyManager {
       // Invalidate cache to exclude this key
       await this.refreshActiveKeys();
       
-      console.log(`[ApiKeyManager] Marked key ${apiKey.id} as rate-limited`);
+      const contextInfo = requestContext?.operation ? ` | Operation: ${requestContext.operation}` : '';
+      console.warn(
+        `[ApiKeyManager] [${requestId}] 🚫 Marked key ${apiKey.id.substring(0, 8)}... ` +
+        `(${keyRecord?.name || 'unnamed'}) as RATE_LIMITED | ` +
+        `Total requests: ${(keyRecord?.totalRequests || 0) + 1}${contextInfo}`
+      );
+      console.warn(`[ApiKeyManager] [${requestId}] ⏰ Key will be excluded from rotation for 24 hours`);
     } catch (error) {
-      console.error('[ApiKeyManager] Error marking key as rate-limited:', error);
+      console.error(`[ApiKeyManager] [${requestId}] ❌ Error marking key as rate-limited:`, error);
     }
   }
 
   /**
    * Record a successful API call
    */
-  async recordSuccess(keyIdOrDecryptedKey: string): Promise<void> {
+  async recordSuccess(keyIdOrDecryptedKey: string, requestContext?: { operation?: string; duration?: number }): Promise<void> {
     try {
       const apiKey = await this.findKeyByIdOrValue(keyIdOrDecryptedKey);
 
       if (!apiKey) {
         return;
       }
+
+      const keyRecord = await prisma.apiKey.findUnique({
+        where: { id: apiKey.id },
+        select: { name: true, totalRequests: true },
+      });
 
       await prisma.apiKey.update({
         where: { id: apiKey.id },
@@ -154,9 +225,20 @@ class ApiKeyManager {
           totalRequests: { increment: 1 },
         },
       });
+
+      // Log success with context (only in verbose mode or for important operations)
+      if (requestContext?.operation && (requestContext.operation.includes('analyze') || requestContext.operation.includes('generate'))) {
+        const durationInfo = requestContext.duration ? ` | Duration: ${requestContext.duration}ms` : '';
+        console.log(
+          `[ApiKeyManager] ✅ Success: ${apiKey.id.substring(0, 8)}... ` +
+          `(${keyRecord?.name || 'unnamed'}) | ` +
+          `Operation: ${requestContext.operation} | ` +
+          `Total requests: ${(keyRecord?.totalRequests || 0) + 1}${durationInfo}`
+        );
+      }
     } catch (error) {
       // Non-critical, just log
-      console.warn('[ApiKeyManager] Error recording success:', error);
+      console.warn('[ApiKeyManager] ⚠️ Error recording success:', error);
     }
   }
 

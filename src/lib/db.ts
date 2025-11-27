@@ -7,11 +7,17 @@ const prismaClientSingleton = () => {
   // Add connection pool parameters if using Supabase pooler
   if (databaseUrl.includes('pooler.supabase.com') && !databaseUrl.includes('connection_limit')) {
     const separator = databaseUrl.includes('?') ? '&' : '?';
-    // Increased limits for better reliability and to prevent pool exhaustion
-    // connection_limit: 20 (increased from 10) - allows more concurrent connections
-    // pool_timeout: 60 (increased from 30) - gives more time to get a connection
-    // connect_timeout: 20 (increased from 15) - more time for initial connection
-    databaseUrl = `${databaseUrl}${separator}connection_limit=20&pool_timeout=60&connect_timeout=20`;
+    // Optimized limits for parallel processing with 20 API keys
+    // connection_limit: 25 (increased from 20) - allows more concurrent connections for parallel AI operations
+    // pool_timeout: 90 (increased from 60) - gives more time to get a connection under high load
+    // connect_timeout: 30 (increased from 20) - more time for initial connection
+    // statement_cache_size: 0 - disable statement caching to reduce memory usage
+    databaseUrl = `${databaseUrl}${separator}connection_limit=25&pool_timeout=90&connect_timeout=30&statement_cache_size=0`;
+    
+    console.log('[Prisma] 🔧 Enhanced connection pool settings for parallel processing:');
+    console.log(`[Prisma]   - connection_limit: 25`);
+    console.log(`[Prisma]   - pool_timeout: 90s`);
+    console.log(`[Prisma]   - connect_timeout: 30s`);
   }
   
   return new PrismaClient({
@@ -59,7 +65,10 @@ async function ensurePrismaConnected() {
   connectionPromise = prismaClient.$connect()
     .then(() => {
       connectionState = 'connected';
-      console.log('[Prisma] ✅ Connected to database');
+      const poolInfo = process.env.DATABASE_URL?.includes('connection_limit') 
+        ? ' (pool configured)' 
+        : ' (using default pool)';
+      console.log(`[Prisma] ✅ Connected to database${poolInfo}`);
     })
     .catch((error) => {
       console.error('[Prisma] ❌ Connection error:', error);
@@ -88,19 +97,29 @@ export async function connectPrisma(maxRetries = 3, retryDelay = 1000) {
       lastError = error;
       const errorObj = error as { code?: string; message?: string };
       
-      // Check if it's a connection error (P1001)
+      // Check if it's a connection error (P1001) or pool exhaustion (P2024)
       const isConnectionError = errorObj?.code === 'P1001' || 
+        errorObj?.code === 'P2024' ||
         errorObj?.message?.includes("Can't reach database") ||
-        errorObj?.message?.includes('connection');
+        errorObj?.message?.includes('connection') ||
+        errorObj?.message?.includes('pool') ||
+        errorObj?.message?.includes('timeout');
       
       // If it's not a connection error or we've exhausted retries, throw immediately
       if (!isConnectionError || attempt === maxRetries) {
-        console.error(`[Prisma] ❌ Failed to connect (attempt ${attempt}/${maxRetries}):`, error);
+        if (errorObj?.code === 'P2024' || errorObj?.message?.includes('pool')) {
+          console.error(
+            `[Prisma] ❌ Connection pool exhausted (attempt ${attempt}/${maxRetries}): ` +
+            `All connections are in use. Consider increasing connection_limit or reducing concurrent operations.`
+          );
+        } else {
+          console.error(`[Prisma] ❌ Failed to connect (attempt ${attempt}/${maxRetries}):`, error);
+        }
         // Reset state to allow retry on next call
-    connectionState = 'idle';
-    connectionPromise = undefined;
-    throw error;
-  }
+        connectionState = 'idle';
+        connectionPromise = undefined;
+        throw error;
+      }
       
       // Connection error - retry with exponential backoff
       const delay = retryDelay * Math.pow(2, attempt - 1);

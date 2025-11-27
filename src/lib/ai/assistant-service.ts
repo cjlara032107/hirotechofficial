@@ -6,15 +6,19 @@ const MODEL = 'openai/gpt-oss-20b';
 const BASE_URL = 'https://integrate.api.nvidia.com/v1';
 
 // Get API key from database first, then fall back to environment variables
-async function getApiKey(): Promise<string | null> {
+async function getApiKey(requestContext?: { operation?: string; userId?: string }): Promise<string | null> {
   // Try database first (preferred method - can be managed through UI)
-  const dbKey = await apiKeyManager.getNextKey();
+  const dbKey = await apiKeyManager.getNextKey(requestContext);
   if (dbKey) {
     return dbKey;
   }
   
   // Fall back to environment variables if no database keys available
-  return process.env.NVIDIA_API_KEY || process.env.GOOGLE_AI_API_KEY || null;
+  const envKey = process.env.NVIDIA_API_KEY || process.env.GOOGLE_AI_API_KEY || null;
+  if (envKey) {
+    console.warn('[Assistant] ⚠️ Using environment variable API key (database keys not available)');
+  }
+  return envKey;
 }
 
 function createNvidiaClient(apiKey: string): OpenAI {
@@ -395,7 +399,8 @@ export async function processAssistantMessage(
   userId: string,
   chatHistory: Array<{ role: 'user' | 'assistant'; content: string }> = []
 ): Promise<{ response: string; sources?: string[] }> {
-  const apiKey = await getApiKey();
+  const startTime = Date.now();
+  const apiKey = await getApiKey({ operation: 'processAssistantMessage', userId });
   if (!apiKey) {
     throw new Error('No NVIDIA API key available. Please configure an API key in Settings → API Keys or set NVIDIA_API_KEY environment variable.');
   }
@@ -464,6 +469,15 @@ Important guidelines:
     if (context.pipelines.length > 0) sources.push('pipelines');
     if (context.campaigns.recent.length > 0) sources.push('campaigns');
     if (context.conversations.recent.length > 0) sources.push('conversations');
+
+    // Record success with duration
+    const duration = Date.now() - startTime;
+    await apiKeyManager.recordSuccess(apiKey, { 
+      operation: 'processAssistantMessage',
+      duration 
+    }).catch(() => {
+      // Non-critical if recording fails
+    });
 
     return {
       response,
