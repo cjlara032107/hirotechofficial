@@ -179,7 +179,13 @@ export function FacebookPageSettingsForm({
               <div className="flex items-center justify-between text-sm">
                 <span className="text-muted-foreground">Processed Contacts</span>
                 <span className="font-semibold text-blue-600 dark:text-blue-400">
-                  {syncJob.syncedContacts.toLocaleString()} / {syncJob.totalContacts > 0 ? syncJob.totalContacts.toLocaleString() : '?'}
+                  {syncJob.totalContacts > 0 && syncJob.syncedContacts === syncJob.totalContacts
+                    ? syncJob.syncedContacts.toLocaleString()
+                    : syncJob.totalContacts > 0
+                      ? `${syncJob.syncedContacts.toLocaleString()} / ${syncJob.totalContacts.toLocaleString()}`
+                      : syncJob.syncedContacts > 0
+                        ? syncJob.syncedContacts.toLocaleString()
+                        : '?'}
                 </span>
               </div>
               {syncJob.totalContacts > 0 && (
