@@ -321,12 +321,7 @@ export class FacebookClient {
           hasMore = !!nextUrl && nextResponse.data.data?.length > 0;
           pageCount++;
 
-          // Add small delay to avoid rate limiting
-          if (hasMore) {
-            // OPTIMIZATION: Reduced delay to 10ms for maximum speed
-            // Facebook API can handle this rate safely, and it significantly speeds up large syncs
-            await new Promise(resolve => setTimeout(resolve, 10));
-          }
+          // No delay - Facebook API can handle rapid pagination, and we have error handling for rate limits
         } catch (paginationError: any) {
           console.error(`[Facebook API] Error fetching page ${pageCount} of Messenger conversations:`, paginationError);
           
@@ -414,12 +409,7 @@ export class FacebookClient {
           hasMore = !!nextUrl && nextConversations.length > 0;
           pageCount++;
 
-          // Add small delay to avoid rate limiting
-          if (hasMore) {
-            // OPTIMIZATION: Reduced delay to 10ms for maximum speed
-            // Facebook API can handle this rate safely, and it significantly speeds up large syncs
-            await new Promise(resolve => setTimeout(resolve, 10));
-          }
+          // No delay - Facebook API can handle rapid pagination, and we have error handling for rate limits
         } catch (paginationError: any) {
           console.error('Error fetching next page of Messenger conversations:', paginationError);
 
@@ -482,10 +472,7 @@ export class FacebookClient {
           hasMore = !!nextUrl && response.data.data?.length > 0;
           pageCount++;
 
-          // Small delay to avoid rate limiting
-          if (hasMore) {
-            await new Promise(resolve => setTimeout(resolve, 10)); // 10ms delay (optimized for speed)
-          }
+          // No delay - Facebook API can handle rapid pagination, and we have error handling for rate limits
         } catch (pageError: any) {
           console.error(`[Facebook Client] Error fetching message page ${pageCount + 1} for conversation ${conversationId}:`, pageError);
           
@@ -697,12 +684,7 @@ export class FacebookClient {
           nextUrl = nextResponse.data.paging?.next || null;
           hasMore = !!nextUrl && nextResponse.data.data?.length > 0;
 
-          // Add small delay to avoid rate limiting
-          if (hasMore) {
-            // OPTIMIZATION: Reduced delay to 10ms for maximum speed
-            // Facebook API can handle this rate safely, and it significantly speeds up large syncs
-            await new Promise(resolve => setTimeout(resolve, 10));
-          }
+          // No delay - Facebook API can handle rapid pagination, and we have error handling for rate limits
         } catch (paginationError: any) {
           console.error('Error fetching next page of Instagram conversations:', paginationError);
           
@@ -782,12 +764,7 @@ export class FacebookClient {
           hasMore = !!nextUrl && nextConversations.length > 0;
           pageCount++;
 
-          // Add small delay to avoid rate limiting
-          if (hasMore) {
-            // OPTIMIZATION: Reduced delay to 10ms for maximum speed
-            // Facebook API can handle this rate safely, and it significantly speeds up large syncs
-            await new Promise(resolve => setTimeout(resolve, 10));
-          }
+          // No delay - Facebook API can handle rapid pagination, and we have error handling for rate limits
         } catch (paginationError: any) {
           console.error('Error fetching next page of Instagram conversations:', paginationError);
 
