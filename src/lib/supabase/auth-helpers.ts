@@ -1,5 +1,6 @@
 import { createClient } from './server';
 import { prisma, connectPrisma } from '@/lib/db';
+import { safePrismaOperation } from '@/lib/prisma-error-handler';
 
 /**
  * Get the current authenticated user with their organization and profile
@@ -16,16 +17,16 @@ export async function getAuthUser() {
     return null;
   }
 
-  // Ensure database connection before query (critical for serverless)
-  await connectPrisma();
-
-  // Get user profile from database
-  let profile = await prisma.user.findUnique({
-    where: { id: user.id },
-    include: {
-      organization: true,
-    },
-  });
+  // Get user profile from database (with automatic retry and error handling)
+  let profile = await safePrismaOperation(
+    () => prisma.user.findUnique({
+      where: { id: user.id },
+      include: {
+        organization: true,
+      },
+    }),
+    { operationName: 'find user profile' }
+  );
 
   // Auto-create profile if it doesn't exist
   if (!profile) {
@@ -45,15 +46,17 @@ export async function getAuthUser() {
       // Find available slug
       let slug = baseSlug;
       let counter = 1;
-      // Ensure connection before transaction
-      await connectPrisma();
-      while (await prisma.organization.findUnique({ where: { slug } })) {
+      while (await safePrismaOperation(
+        () => prisma.organization.findUnique({ where: { slug } }),
+        { operationName: 'check organization slug' }
+      )) {
         slug = `${baseSlug}-${counter}`;
         counter++;
       }
 
       // Create organization and user profile
-      profile = await prisma.$transaction(async (tx) => {
+      profile = await safePrismaOperation(
+        () => prisma.$transaction(async (tx) => {
         const organization = await tx.organization.create({
           data: {
             name: organizationName,
@@ -74,7 +77,9 @@ export async function getAuthUser() {
             organization: true,
           },
         });
-      });
+        }),
+        { operationName: 'create user profile and organization' }
+      );
 
       console.log('[Auth] ✅ Profile created successfully:', user.id);
     } catch (error) {

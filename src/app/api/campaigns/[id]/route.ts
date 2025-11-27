@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { auth } from '@/auth';
 import { prisma } from '@/lib/db';
+import { safePrismaOperation, handlePrismaError } from '@/lib/prisma-error-handler';
 
 export async function GET(
   request: NextRequest,
@@ -14,24 +15,27 @@ export async function GET(
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
-    const campaign = await prisma.campaign.findUnique({
-      where: { 
-        id,
-        organizationId: session.user.organizationId,
-      },
-      include: {
-        template: true,
-        facebookPage: {
-          select: {
-            pageName: true,
-            pageId: true,
+    const campaign = await safePrismaOperation(
+      () => prisma.campaign.findUnique({
+        where: { 
+          id,
+          organizationId: session.user.organizationId,
+        },
+        include: {
+          template: true,
+          facebookPage: {
+            select: {
+              pageName: true,
+              pageId: true,
+            },
+          },
+          _count: {
+            select: { messages: true },
           },
         },
-        _count: {
-          select: { messages: true },
-        },
-      },
-    });
+      }),
+      { operationName: 'find campaign' }
+    );
 
     if (!campaign) {
       return NextResponse.json({ error: 'Campaign not found' }, { status: 404 });
@@ -39,15 +43,18 @@ export async function GET(
 
     // Recalculate metrics from actual message counts for accuracy
     // This ensures metrics are always accurate even if webhooks haven't updated yet
-    const messageCounts = await prisma.message.groupBy({
-      by: ['status'],
-      where: {
-        campaignId: id,
-      },
-      _count: {
-        status: true,
-      },
-    });
+    const messageCounts = await safePrismaOperation(
+      () => prisma.message.groupBy({
+        by: ['status'],
+        where: {
+          campaignId: id,
+        },
+        _count: {
+          status: true,
+        },
+      }),
+      { operationName: 'group messages by status' }
+    );
 
     // Calculate accurate counts
     // Sent = all messages that were attempted (SENT, DELIVERED, READ, FAILED)
@@ -98,11 +105,11 @@ export async function GET(
       failedCount: actualFailedCount,
     });
   } catch (error) {
-    const err = error as Error;
-    console.error('Get campaign error:', err);
+    console.error('Get campaign error:', error);
+    const { message, status } = handlePrismaError(error, 'Failed to fetch campaign');
     return NextResponse.json(
-      { error: err.message || 'Failed to fetch campaign' },
-      { status: 500 }
+      { error: message },
+      { status }
     );
   }
 }
@@ -120,20 +127,23 @@ export async function DELETE(
     }
 
     // Delete the campaign (messages will be cascade deleted)
-    await prisma.campaign.delete({
-      where: { 
-        id,
-        organizationId: session.user.organizationId,
-      },
-    });
+    await safePrismaOperation(
+      () => prisma.campaign.delete({
+        where: { 
+          id,
+          organizationId: session.user.organizationId,
+        },
+      }),
+      { operationName: 'delete campaign' }
+    );
 
     return NextResponse.json({ success: true });
   } catch (error) {
-    const err = error as Error;
-    console.error('Delete campaign error:', err);
+    console.error('Delete campaign error:', error);
+    const { message, status } = handlePrismaError(error, 'Failed to delete campaign');
     return NextResponse.json(
-      { error: err.message || 'Failed to delete campaign' },
-      { status: 500 }
+      { error: message },
+      { status }
     );
   }
 }

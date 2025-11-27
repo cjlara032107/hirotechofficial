@@ -185,14 +185,22 @@ async function sendMessagesInBackground(
   console.log(`🚀 Starting fast parallel sending for ${messages.length} messages (Campaign: ${campaignId})`);
 
   // Process messages asynchronously without blocking the API response
+  // Use Promise.resolve().then() to ensure this runs asynchronously
   Promise.resolve().then(async () => {
     const BATCH_SIZE = 50; // Send 50 messages in parallel at a time to avoid overwhelming the API
     let successCount = 0;
     let failCount = 0;
+    let processedCount = 0;
+    const totalMessages = messages.length;
+
+    console.log(`🚀 Background process started for ${totalMessages} messages`);
 
     try {
       // Split messages into batches
       for (let i = 0; i < messages.length; i += BATCH_SIZE) {
+        const batchNumber = Math.floor(i / BATCH_SIZE) + 1;
+        const totalBatches = Math.ceil(messages.length / BATCH_SIZE);
+        
         // Check if campaign has been paused or cancelled before each batch
         const currentCampaign = await prisma.campaign.findUnique({
           where: { id: campaignId },
@@ -200,36 +208,52 @@ async function sendMessagesInBackground(
         });
 
         if (currentCampaign?.status === 'PAUSED' || currentCampaign?.status === 'CANCELLED') {
-          console.log(`⏸️  Campaign ${campaignId} has been ${currentCampaign.status.toLowerCase()}. Stopping sending.`);
+          console.log(`⏸️  Campaign ${campaignId} has been ${currentCampaign.status.toLowerCase()}. Stopping sending at batch ${batchNumber}/${totalBatches}.`);
           break;
         }
 
         const batch = messages.slice(i, i + BATCH_SIZE);
-        console.log(`📤 Sending batch ${Math.floor(i / BATCH_SIZE) + 1}/${Math.ceil(messages.length / BATCH_SIZE)} (${batch.length} messages)...`);
+        console.log(`📤 Sending batch ${batchNumber}/${totalBatches} (messages ${i + 1}-${Math.min(i + BATCH_SIZE, messages.length)} of ${totalMessages})...`);
 
-        // Send all messages in the batch in parallel
-        const results = await Promise.allSettled(
-          batch.map(message => sendMessageDirect(message))
-        );
+        try {
+          // Send all messages in the batch in parallel with timeout protection
+          const batchPromise = Promise.allSettled(
+            batch.map(message => sendMessageDirect(message))
+          );
+          
+          // Add timeout for each batch (60 seconds per batch)
+          const timeoutPromise = new Promise<never>((_, reject) => {
+            setTimeout(() => reject(new Error(`Batch ${batchNumber} timed out after 60 seconds`)), 60000);
+          });
 
-        // Count successes and failures accurately
-        results.forEach((result, index) => {
-          if (result.status === 'fulfilled') {
-            // Only count as failure if result.value.success is explicitly false
-            if (result.value.success === true) {
-              successCount++;
+          const results = await Promise.race([batchPromise, timeoutPromise]);
+
+          // Count successes and failures accurately
+          results.forEach((result, index) => {
+            processedCount++;
+            if (result.status === 'fulfilled') {
+              // Only count as failure if result.value.success is explicitly false
+              if (result.value.success === true) {
+                successCount++;
+              } else {
+                failCount++;
+                console.error(`❌ Message ${i + index + 1}/${totalMessages} failed:`, result.value.error || 'Unknown error');
+              }
             } else {
+              // Promise was rejected
               failCount++;
-              console.error(`❌ Message ${i + index + 1} failed:`, result.value.error || 'Unknown error');
+              console.error(`❌ Message ${i + index + 1}/${totalMessages} rejected:`, result.reason);
             }
-          } else {
-            // Promise was rejected
-            failCount++;
-            console.error(`❌ Message ${i + index + 1} rejected:`, result.reason);
-          }
-        });
+          });
 
-        console.log(`✅ Batch completed: ${successCount} total sent, ${failCount} total failed`);
+          console.log(`✅ Batch ${batchNumber}/${totalBatches} completed: ${successCount} sent, ${failCount} failed, ${processedCount}/${totalMessages} processed`);
+        } catch (batchError) {
+          console.error(`❌ Batch ${batchNumber}/${totalBatches} error:`, batchError);
+          // Mark all messages in this batch as failed
+          failCount += batch.length;
+          processedCount += batch.length;
+          console.error(`⚠️ Marked ${batch.length} messages as failed due to batch error`);
+        }
 
         // Small delay between batches to avoid overwhelming the API (100ms)
         if (i + BATCH_SIZE < messages.length) {
@@ -237,35 +261,44 @@ async function sendMessagesInBackground(
         }
       }
 
-      console.log(`🎉 Campaign sending completed: ${successCount} sent, ${failCount} failed`);
+      console.log(`🎉 All batches processed: ${processedCount}/${totalMessages} messages processed (${successCount} sent, ${failCount} failed)`);
+      console.log(`🎉 Campaign sending completed: ${successCount} sent, ${failCount} failed, ${processedCount}/${totalMessages} total processed`);
 
       // Mark campaign as completed with better error handling
-      try {
-        const finalCampaign = await prisma.campaign.findUnique({
-          where: { id: campaignId },
-          select: { status: true, sentCount: true, totalRecipients: true, failedCount: true },
-        });
+      // Always mark as completed if we've processed all messages or if background process finished
+      let retryCount = 0;
+      const maxRetries = 3;
+      
+      while (retryCount < maxRetries) {
+        try {
+          const finalCampaign = await prisma.campaign.findUnique({
+            where: { id: campaignId },
+            select: { status: true, sentCount: true, totalRecipients: true, failedCount: true },
+          });
 
-        console.log(`📊 Final campaign state:`, {
-          campaignId,
-          status: finalCampaign?.status,
-          sent: finalCampaign?.sentCount,
-          failed: finalCampaign?.failedCount,
-          total: finalCampaign?.totalRecipients,
-          processedInBackground: successCount + failCount,
-        });
+          console.log(`📊 Final campaign state (attempt ${retryCount + 1}):`, {
+            campaignId,
+            status: finalCampaign?.status,
+            sent: finalCampaign?.sentCount,
+            failed: finalCampaign?.failedCount,
+            total: finalCampaign?.totalRecipients,
+            processedInBackground: processedCount,
+            expectedTotal: totalMessages,
+          });
 
-        if (!finalCampaign) {
-          console.error(`❌ CRITICAL: Campaign ${campaignId} not found during completion update`);
-          return;
-        }
+          if (!finalCampaign) {
+            console.error(`❌ CRITICAL: Campaign ${campaignId} not found during completion update`);
+            if (retryCount < maxRetries - 1) {
+              await new Promise(resolve => setTimeout(resolve, 1000 * (retryCount + 1)));
+              retryCount++;
+              continue;
+            }
+            return;
+          }
 
-        // Verify all messages have been processed
-        const totalProcessed = (finalCampaign.sentCount || 0) + (finalCampaign.failedCount || 0);
-        const allProcessed = totalProcessed >= (finalCampaign.totalRecipients || 0);
-        
-        if (finalCampaign.status === 'SENDING') {
-          if (allProcessed || finalCampaign.totalRecipients === 0) {
+          // Always mark as COMPLETED if background process finished, regardless of counts
+          // This prevents campaigns from getting stuck
+          if (finalCampaign.status === 'SENDING') {
             const updateResult = await prisma.campaign.update({
               where: { id: campaignId },
               data: { 
@@ -277,11 +310,15 @@ async function sendMessagesInBackground(
               sentCount: updateResult.sentCount,
               failedCount: updateResult.failedCount,
               totalRecipients: updateResult.totalRecipients,
-              totalProcessed,
+              processedInBackground: processedCount,
+              expectedTotal: totalMessages,
             });
+            break; // Success, exit retry loop
+          } else if (finalCampaign.status === 'COMPLETED' || finalCampaign.status === 'CANCELLED') {
+            console.log(`ℹ️ Campaign ${campaignId} already in ${finalCampaign.status} status, no update needed`);
+            break; // Already completed, exit retry loop
           } else {
-            console.warn(`⚠️ Campaign ${campaignId} not fully processed: ${totalProcessed}/${finalCampaign.totalRecipients}. Marking as completed anyway since background process finished.`);
-            // Mark as completed anyway since background process is done
+            console.warn(`⚠️ Campaign ${campaignId} status is ${finalCampaign.status}, attempting to mark as COMPLETED anyway`);
             const updateResult = await prisma.campaign.update({
               where: { id: campaignId },
               data: { 
@@ -289,32 +326,23 @@ async function sendMessagesInBackground(
                 completedAt: new Date(),
               },
             });
-            console.log(`✅ Campaign ${campaignId} marked as COMPLETED (background finished)`, {
+            console.log(`✅ Campaign ${campaignId} marked as COMPLETED (forced)`, {
               sentCount: updateResult.sentCount,
               failedCount: updateResult.failedCount,
               totalRecipients: updateResult.totalRecipients,
             });
+            break; // Success, exit retry loop
           }
-        } else {
-          console.warn(`⚠️ Campaign ${campaignId} status is ${finalCampaign.status}, skipping completion update`);
-        }
-      } catch (error) {
-        console.error(`❌ CRITICAL: Failed to update campaign ${campaignId} status:`, error);
-        // Retry once after a delay
-        console.log(`🔄 Retrying status update for campaign ${campaignId} after 1 second...`);
-        await new Promise(resolve => setTimeout(resolve, 1000));
-        try {
-          await prisma.campaign.update({
-            where: { id: campaignId },
-            data: { 
-              status: 'COMPLETED',
-              completedAt: new Date(),
-            },
-          });
-          console.log(`✅ Campaign ${campaignId} marked as COMPLETED (retry successful)`);
-        } catch (retryError) {
-          console.error(`❌ FINAL ERROR: Cannot update campaign ${campaignId} status:`, retryError);
-          console.error(`⚠️ Campaign ${campaignId} may be stuck in SENDING status. Manual intervention required.`);
+        } catch (updateError) {
+          retryCount++;
+          if (retryCount >= maxRetries) {
+            console.error(`❌ FINAL ERROR: Cannot update campaign ${campaignId} status after ${maxRetries} attempts:`, updateError);
+            console.error(`⚠️ Campaign ${campaignId} may be stuck in SENDING status. Manual intervention required.`);
+          } else {
+            console.error(`❌ Failed to update campaign ${campaignId} status (attempt ${retryCount}/${maxRetries}):`, updateError);
+            console.log(`🔄 Retrying status update for campaign ${campaignId} after ${retryCount} second(s)...`);
+            await new Promise(resolve => setTimeout(resolve, 1000 * retryCount));
+          }
         }
       }
     } catch (error) {
@@ -628,6 +656,28 @@ export async function startCampaign(campaignId: string) {
   });
 
   console.log(`📋 Prepared ${messages.length} messages for fast parallel sending`);
+  console.log(`📊 Message preparation details:`, {
+    campaignId: campaign.id,
+    totalContacts: targetContacts.length,
+    messagesPrepared: messages.length,
+    platform: campaign.platform,
+    hasValidRecipients: messages.filter(m => m.recipientId).length,
+    missingRecipients: messages.filter(m => !m.recipientId).length,
+  });
+  
+  // Validate that we have messages to send
+  if (messages.length === 0) {
+    console.error(`❌ No messages prepared for campaign ${campaign.id}`);
+    await prisma.campaign.update({
+      where: { id: campaign.id },
+      data: {
+        status: 'COMPLETED',
+        totalRecipients: 0,
+        completedAt: new Date(),
+      },
+    });
+    throw new Error('No messages prepared for sending. Check that contacts have valid PSIDs/SIDs.');
+  }
   
   // Send messages in background without rate limiting
   sendMessagesInBackground(messages);

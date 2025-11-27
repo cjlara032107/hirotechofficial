@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { getAuthUser } from '@/lib/supabase/auth-helpers';
-import { prisma, connectPrisma } from '@/lib/db';
+import { prisma } from '@/lib/db';
+import { safePrismaOperation, handlePrismaError } from '@/lib/prisma-error-handler';
 
 /**
  * Get current user session with full profile data
@@ -17,29 +18,33 @@ export async function GET() {
     // Fetch additional team context if user has an active team
     let teamContext = null;
     if (user.organizationId) {
-      // Ensure connection before query
-      await connectPrisma();
-      const dbUser = await prisma.user.findUnique({
-        where: { id: user.id },
-        select: { activeTeamId: true },
-      });
+      const dbUser = await safePrismaOperation(
+        () => prisma.user.findUnique({
+          where: { id: user.id },
+          select: { activeTeamId: true },
+        }),
+        { operationName: 'find user for team context' }
+      );
 
       if (dbUser?.activeTeamId) {
-        const teamMember = await prisma.teamMember.findFirst({
-          where: {
-            userId: user.id,
-            teamId: dbUser.activeTeamId,
-            status: 'ACTIVE',
-          },
-          include: {
-            team: {
-              select: {
-                id: true,
-                name: true,
+        const teamMember = await safePrismaOperation(
+          () => prisma.teamMember.findFirst({
+            where: {
+              userId: user.id,
+              teamId: dbUser.activeTeamId,
+              status: 'ACTIVE',
+            },
+            include: {
+              team: {
+                select: {
+                  id: true,
+                  name: true,
+                },
               },
             },
-          },
-        });
+          }),
+          { operationName: 'find team member' }
+        );
 
         if (teamMember) {
           teamContext = {
@@ -66,7 +71,11 @@ export async function GET() {
     });
   } catch (error) {
     console.error('Check session error:', error);
-    return NextResponse.json({ user: null }, { status: 500 });
+    const { message, status } = handlePrismaError(error, 'Failed to check session');
+    return NextResponse.json({ 
+      user: null,
+      error: message 
+    }, { status });
   }
 }
 

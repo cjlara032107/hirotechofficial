@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/db';
-import { withRetry } from '@/lib/db-retry';
+import { safePrismaOperation, handlePrismaError } from '@/lib/prisma-error-handler';
 import { startCampaign, getTargetContacts } from '@/lib/campaigns/send';
 import { GoogleAIService } from '@/lib/ai/google-ai-service';
 import { FacebookClient } from '@/lib/facebook/client';
@@ -33,23 +33,26 @@ export async function GET(request: NextRequest) {
 
     // Find all campaigns that are scheduled and due to be sent (with retry for pool exhaustion)
     // Query: status = SCHEDULED AND scheduledAt <= currentTime
-    const dueCampaigns = await withRetry(() => prisma.campaign.findMany({
-      where: {
-        status: 'SCHEDULED',
-        scheduledAt: {
-          lte: currentTime, // Less than or equal to current time
-          not: null, // Ensure scheduledAt is not null
+    const dueCampaigns = await safePrismaOperation(
+      () => prisma.campaign.findMany({
+        where: {
+          status: 'SCHEDULED',
+          scheduledAt: {
+            lte: currentTime, // Less than or equal to current time
+            not: null, // Ensure scheduledAt is not null
+          },
         },
-      },
-      include: {
-        facebookPage: true,
-        template: true,
-      },
-      orderBy: {
-        scheduledAt: 'asc', // Process oldest scheduled campaigns first
-      },
-      take: 10, // Process up to 10 campaigns per run to avoid timeout
-    }));
+        include: {
+          facebookPage: true,
+          template: true,
+        },
+        orderBy: {
+          scheduledAt: 'asc', // Process oldest scheduled campaigns first
+        },
+        take: 10, // Process up to 10 campaigns per run to avoid timeout
+      }),
+      { operationName: 'find scheduled campaigns' }
+    );
 
     if (dueCampaigns.length === 0) {
       console.log('[Cron Send Scheduled] No campaigns due');
@@ -189,12 +192,13 @@ export async function GET(request: NextRequest) {
 
   } catch (error) {
     console.error('[Cron Send Scheduled] Fatal error:', error);
+    const { message, status } = handlePrismaError(error, 'Failed to process scheduled campaigns');
     return NextResponse.json(
       {
-        error: error instanceof Error ? error.message : 'Dispatch failed',
+        error: message,
         success: false,
       },
-      { status: 500 }
+      { status }
     );
   }
 }
