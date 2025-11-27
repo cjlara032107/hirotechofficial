@@ -870,13 +870,9 @@ export function ConnectedPagesList({ onRefresh, onSyncComplete }: ConnectedPages
                         <div className="flex items-center justify-between text-sm">
                           <span className="text-muted-foreground">Processed Contacts</span>
                           <span className="font-bold text-blue-600 dark:text-blue-400 text-base">
-                            {syncJob.totalContacts > 0 && syncJob.syncedContacts === syncJob.totalContacts
+                            {syncJob.syncedContacts > 0 
                               ? syncJob.syncedContacts.toLocaleString()
-                              : syncJob.totalContacts > 0
-                                ? `${syncJob.syncedContacts.toLocaleString()} / ${syncJob.totalContacts.toLocaleString()}`
-                                : syncJob.syncedContacts > 0
-                                  ? syncJob.syncedContacts.toLocaleString()
-                                  : 'Calculating...'}
+                              : '0'}
                           </span>
                         </div>
                         {syncJob.totalContacts > 0 ? (
