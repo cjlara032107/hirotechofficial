@@ -7,15 +7,20 @@ const prismaClientSingleton = () => {
   // Add connection pool parameters if using Supabase pooler
   if (databaseUrl.includes('pooler.supabase.com') && !databaseUrl.includes('connection_limit')) {
     const separator = databaseUrl.includes('?') ? '&' : '?';
-    // Optimized limits for parallel processing with 20 API keys
-    // connection_limit: 25 (increased from 20) - allows more concurrent connections for parallel AI operations
-    // pool_timeout: 90 (increased from 60) - gives more time to get a connection under high load
-    // connect_timeout: 30 (increased from 20) - more time for initial connection
-    // statement_cache_size: 0 - disable statement caching to reduce memory usage
-    databaseUrl = `${databaseUrl}${separator}connection_limit=25&pool_timeout=90&connect_timeout=30&statement_cache_size=0`;
     
-    console.log('[Prisma] 🔧 Enhanced connection pool settings for parallel processing:');
-    console.log(`[Prisma]   - connection_limit: 25`);
+    // CRITICAL: For Vercel/serverless, use connection_limit=1
+    // The pooler handles actual pooling across all serverless functions
+    // Using 25 would exhaust the pool quickly (each function instance tries to hold 25 connections)
+    const isVercel = process.env.VERCEL === '1' || process.env.NEXT_PUBLIC_VERCEL_ENV;
+    const connectionLimit = isVercel ? 1 : 10; // 1 for serverless, 10 for traditional servers
+    
+    // pool_timeout: 90 - gives more time to get a connection under high load
+    // connect_timeout: 30 - more time for initial connection
+    // statement_cache_size: 0 - disable statement caching to reduce memory usage
+    databaseUrl = `${databaseUrl}${separator}connection_limit=${connectionLimit}&pool_timeout=90&connect_timeout=30&statement_cache_size=0`;
+    
+    console.log(`[Prisma] 🔧 Connection pool settings (${isVercel ? 'Vercel/serverless' : 'traditional server'}):`);
+    console.log(`[Prisma]   - connection_limit: ${connectionLimit} ${isVercel ? '(serverless - pooler handles pooling)' : ''}`);
     console.log(`[Prisma]   - pool_timeout: 90s`);
     console.log(`[Prisma]   - connect_timeout: 30s`);
   }
