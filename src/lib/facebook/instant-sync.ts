@@ -226,8 +226,8 @@ async function executeInstantSync(jobId: string, facebookPageId: string, userId:
               createChunks.push(toCreate.slice(i, i + CREATE_CHUNK_SIZE));
             }
             
-            const createPromise = prisma.$transaction(
-              async (tx) => {
+          const createPromise = prisma.$transaction(
+            async (tx) => {
                 // OPTIMIZATION: Maximized concurrency to 18 (connection pool has 20, leaving 2 for safety)
                 // Process chunks in parallel with maximum concurrency
                 const limiter = new ConcurrencyLimiter(18); // 18 concurrent create chunks
@@ -241,15 +241,15 @@ async function executeInstantSync(jobId: string, facebookPageId: string, userId:
                   )
                 );
                 return allCreated.flat();
-              },
-              { timeout: BATCH_OPERATION_TIMEOUT }
-            );
-            
-            const timeoutPromise = new Promise<never>((_, reject) => {
-              setTimeout(() => reject(new Error('Batch create operation timed out')), BATCH_OPERATION_TIMEOUT);
-            });
-            
-            const created = await Promise.race([createPromise, timeoutPromise]);
+            },
+            { timeout: BATCH_OPERATION_TIMEOUT }
+          );
+          
+          const timeoutPromise = new Promise<never>((_, reject) => {
+            setTimeout(() => reject(new Error('Batch create operation timed out')), BATCH_OPERATION_TIMEOUT);
+          });
+          
+          const created = await Promise.race([createPromise, timeoutPromise]);
             return created.map(c => c.id);
           })() : Promise.resolve([]),
 
@@ -273,30 +273,30 @@ async function executeInstantSync(jobId: string, facebookPageId: string, userId:
                       return Promise.all(
                         chunk.map(update =>
                           tx.contact.update({
-                            where: { id: update.id },
-                            data: {
-                              firstName: update.firstName,
-                              lastName: update.lastName,
-                              lastInteraction: update.lastInteraction,
-                              ...(update.hasMessenger !== undefined && { hasMessenger: update.hasMessenger }),
-                              ...(update.hasInstagram !== undefined && { hasInstagram: update.hasInstagram }),
-                              ...(update.instagramSID && { instagramSID: update.instagramSID }),
-                            },
-                          })
-                        )
+                where: { id: update.id },
+                data: {
+                  firstName: update.firstName,
+                  lastName: update.lastName,
+                  lastInteraction: update.lastInteraction,
+                  ...(update.hasMessenger !== undefined && { hasMessenger: update.hasMessenger }),
+                  ...(update.hasInstagram !== undefined && { hasInstagram: update.hasInstagram }),
+                  ...(update.instagramSID && { instagramSID: update.instagramSID }),
+                },
+              })
+            )
                       );
                     })
                   )
                 );
               },
               { timeout: BATCH_OPERATION_TIMEOUT }
-            );
-            
-            const timeoutPromise = new Promise<never>((_, reject) => {
-              setTimeout(() => reject(new Error('Batch update operation timed out')), BATCH_OPERATION_TIMEOUT);
-            });
-            
-            await Promise.race([updatePromise, timeoutPromise]);
+          );
+          
+          const timeoutPromise = new Promise<never>((_, reject) => {
+            setTimeout(() => reject(new Error('Batch update operation timed out')), BATCH_OPERATION_TIMEOUT);
+          });
+          
+          await Promise.race([updatePromise, timeoutPromise]);
             return toUpdate.map(u => u.id);
           })() : Promise.resolve([]),
         ]);
@@ -515,15 +515,15 @@ async function executeInstantSync(jobId: string, facebookPageId: string, userId:
           const batchPromise = batchProcessor.execute(async () => {
             const batchCount = await processContactBatch(batchToProcess, 'Messenger');
             console.log(`[Instant Sync ${jobId}] Batch processed: ${batchCount} contacts stored (${batchToProcess.length} participants)`);
-            
+          
             // OPTIMIZATION: Truly non-blocking progress update (fire and forget)
-            // Update progress (non-blocking) - use remainingCount before clearing
-            prisma.syncJob.update({
-              where: { id: jobId },
-              data: {
-                syncedContacts: contactsStored,
-                totalContacts: contactsStored + remainingCount, // Use count before clearing
-              },
+          // Update progress (non-blocking) - use remainingCount before clearing
+          prisma.syncJob.update({
+            where: { id: jobId },
+            data: {
+              syncedContacts: contactsStored,
+              totalContacts: contactsStored + remainingCount, // Use count before clearing
+            },
             }).catch(() => {}); // Silently fail - progress updates are not critical
             
             return batchCount; // Return count for verification
@@ -577,7 +577,13 @@ async function executeInstantSync(jobId: string, facebookPageId: string, userId:
       // Process any remaining participants
       if (participantMap.size > 0) {
         const remaining = Array.from(participantMap.entries());
-        await processContactBatch(remaining, 'Messenger');
+        const finalBatchCount = await processContactBatch(remaining, 'Messenger');
+        console.log(`[Instant Sync ${jobId}] Final Messenger batch processed: ${finalBatchCount} contacts stored`);
+        
+        // Update contactsStored with final batch count (in case it wasn't updated in processContactBatch)
+        if (finalBatchCount > 0) {
+          contactsStored += finalBatchCount;
+        }
         
         // OPTIMIZATION: Non-blocking final progress update
         // Update progress after final batch (fire and forget)
@@ -673,15 +679,15 @@ async function executeInstantSync(jobId: string, facebookPageId: string, userId:
             const batchPromise = batchProcessor.execute(async () => {
               const batchCount = await processContactBatch(batchToProcess, 'Instagram');
               console.log(`[Instant Sync ${jobId}] Instagram batch processed: ${batchCount} contacts stored (${batchToProcess.length} participants)`);
-              
+            
               // OPTIMIZATION: Truly non-blocking progress update (fire and forget)
-              // Update progress (non-blocking) - use remainingCount before clearing
-              prisma.syncJob.update({
-                where: { id: jobId },
-                data: {
-                  syncedContacts: contactsStored,
-                  totalContacts: contactsStored + remainingCount, // Use count before clearing
-                },
+            // Update progress (non-blocking) - use remainingCount before clearing
+            prisma.syncJob.update({
+              where: { id: jobId },
+              data: {
+                syncedContacts: contactsStored,
+                totalContacts: contactsStored + remainingCount, // Use count before clearing
+              },
               }).catch(() => {}); // Silently fail - progress updates are not critical
               
               return batchCount; // Return count for verification
@@ -730,7 +736,13 @@ async function executeInstantSync(jobId: string, facebookPageId: string, userId:
         // Process any remaining Instagram participants
         if (igParticipantMap.size > 0) {
           const remaining = Array.from(igParticipantMap.entries());
-          await processContactBatch(remaining, 'Instagram');
+          const finalIgBatchCount = await processContactBatch(remaining, 'Instagram');
+          console.log(`[Instant Sync ${jobId}] Final Instagram batch processed: ${finalIgBatchCount} contacts stored`);
+          
+          // Update contactsStored with final batch count (in case it wasn't updated in processContactBatch)
+          if (finalIgBatchCount > 0) {
+            contactsStored += finalIgBatchCount;
+          }
           
           // OPTIMIZATION: Non-blocking final progress update
           // Update progress after final batch (fire and forget)
@@ -789,12 +801,17 @@ async function executeInstantSync(jobId: string, facebookPageId: string, userId:
     }
 
     // Mark sync as completed
+    // CRITICAL: Ensure contactsStored is accurate before final update
+    // Use contactIds.length as a fallback if contactsStored seems wrong
+    const finalContactCount = contactsStored > 0 ? contactsStored : contactIds.length;
+    console.log(`[Instant Sync ${jobId}] Final sync summary: contactsStored=${contactsStored}, contactIds.length=${contactIds.length}, finalCount=${finalContactCount}, errors=${errors.length}`);
+    
     await prisma.syncJob.update({
       where: { id: jobId },
       data: {
         status: 'COMPLETED',
-        syncedContacts: contactsStored,
-        totalContacts: contactsStored,
+        syncedContacts: finalContactCount,
+        totalContacts: finalContactCount,
         failedContacts: errors.length,
         errors: errors.length > 0 ? errors : Prisma.JsonNull,
         completedAt: new Date(),
