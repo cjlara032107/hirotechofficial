@@ -117,11 +117,12 @@ async function executeInstantSync(jobId: string, facebookPageId: string, userId:
     const errors: Array<{ platform: string; id: string; error: string }> = [];
 
     // OPTIMIZATION: Process contacts in batches during streaming for immediate storage
+    // Returns the number of contacts stored (created + updated)
     const processContactBatch = async (
       participants: Array<[string, { updatedTime: string; name?: string }]>,
       platform: 'Messenger' | 'Instagram'
-    ) => {
-      if (participants.length === 0) return;
+    ): Promise<number> => {
+      if (participants.length === 0) return 0;
 
       const participantIds = participants.map(([id]) => id);
       
@@ -302,7 +303,9 @@ async function executeInstantSync(jobId: string, facebookPageId: string, userId:
 
         // Combine results
         contactIds.push(...createdResults, ...updateResults);
-        contactsStored += createdResults.length + updateResults.length;
+        const batchCount = createdResults.length + updateResults.length;
+        contactsStored += batchCount; // Update shared counter for progress tracking
+        return batchCount; // Return count for this batch
       } catch (error) {
         console.error(`[Instant Sync ${jobId}] Bulk operation failed, falling back to individual operations:`, error);
         // Fallback to individual operations
@@ -353,7 +356,7 @@ async function executeInstantSync(jobId: string, facebookPageId: string, userId:
                 }
 
                 contactIds.push(savedContact.id);
-                contactsStored++;
+                contactsStored++; // Update shared counter for progress tracking
               } catch (error) {
                 console.error(`[Instant Sync ${jobId}] Failed to store ${platform} contact ${participantId}:`, error);
                 errors.push({
@@ -365,7 +368,13 @@ async function executeInstantSync(jobId: string, facebookPageId: string, userId:
             })
           )
         );
+        
+        // Return the count of successfully stored contacts from fallback
+        return contactsStored; // This is approximate since it's a shared counter
       }
+      
+      // If no contacts to create or update, return 0
+      return 0;
     };
 
     // Phase 1: Fast contact storage (NO AI ANALYSIS)
@@ -381,7 +390,7 @@ async function executeInstantSync(jobId: string, facebookPageId: string, userId:
     // - Available for batches: 20 connections
     // - Safe limit: 10 batches in parallel (uses ~20 connections, leaves 5 for safety)
     const batchProcessor = new ConcurrencyLimiter(10); // Process 10 batches in parallel (max safe limit)
-    const batchPromises: Promise<void>[] = []; // Track all batch promises to wait for completion
+    const batchPromises: Promise<number>[] = []; // Track all batch promises to wait for completion (returns count)
     
     try {
       console.log(`[Instant Sync ${jobId}] Streaming Messenger conversations...`);
@@ -502,9 +511,10 @@ async function executeInstantSync(jobId: string, facebookPageId: string, userId:
           const remainingCount = participantMap.size; // Store before clearing
           participantMap.clear(); // Clear processed participants
           
-          // OPTIMIZATION: Queue batch for parallel processing (track promise)
+          // OPTIMIZATION: Queue batch for parallel processing (track promise and count)
           const batchPromise = batchProcessor.execute(async () => {
-            await processContactBatch(batchToProcess, 'Messenger');
+            const batchCount = await processContactBatch(batchToProcess, 'Messenger');
+            console.log(`[Instant Sync ${jobId}] Batch processed: ${batchCount} contacts stored (${batchToProcess.length} participants)`);
             
             // OPTIMIZATION: Truly non-blocking progress update (fire and forget)
             // Update progress (non-blocking) - use remainingCount before clearing
@@ -515,8 +525,11 @@ async function executeInstantSync(jobId: string, facebookPageId: string, userId:
                 totalContacts: contactsStored + remainingCount, // Use count before clearing
               },
             }).catch(() => {}); // Silently fail - progress updates are not critical
+            
+            return batchCount; // Return count for verification
           }).catch(err => {
             console.error(`[Instant Sync ${jobId}] Batch processing error:`, err);
+            return 0; // Return 0 on error
           });
           batchPromises.push(batchPromise);
           
@@ -549,8 +562,16 @@ async function executeInstantSync(jobId: string, facebookPageId: string, userId:
       // This ensures all parallel batches finish and contactsStored is accurate
       if (batchPromises.length > 0) {
         console.log(`[Instant Sync ${jobId}] Waiting for ${batchPromises.length} parallel batches to complete...`);
-        await Promise.all(batchPromises);
-        console.log(`[Instant Sync ${jobId}] All parallel batches completed. Contacts stored so far: ${contactsStored}`);
+        const batchResults = await Promise.all(batchPromises);
+        const totalFromBatches = batchResults.reduce((sum, count) => sum + count, 0);
+        console.log(`[Instant Sync ${jobId}] All parallel batches completed. Batch results: ${totalFromBatches} contacts, Shared counter: ${contactsStored}`);
+        
+        // Verify counter matches batch results (for debugging)
+        if (totalFromBatches !== contactsStored) {
+          console.warn(`[Instant Sync ${jobId}] ⚠️ Counter mismatch! Batch results: ${totalFromBatches}, Shared counter: ${contactsStored}`);
+          // Use the batch results as source of truth
+          contactsStored = totalFromBatches;
+        }
       }
 
       // Process any remaining participants
@@ -648,9 +669,10 @@ async function executeInstantSync(jobId: string, facebookPageId: string, userId:
             const remainingCount = igParticipantMap.size; // Store before clearing
             igParticipantMap.clear(); // Clear processed participants
             
-            // OPTIMIZATION: Queue batch for parallel processing (track promise)
+            // OPTIMIZATION: Queue batch for parallel processing (track promise and count)
             const batchPromise = batchProcessor.execute(async () => {
-              await processContactBatch(batchToProcess, 'Instagram');
+              const batchCount = await processContactBatch(batchToProcess, 'Instagram');
+              console.log(`[Instant Sync ${jobId}] Instagram batch processed: ${batchCount} contacts stored (${batchToProcess.length} participants)`);
               
               // OPTIMIZATION: Truly non-blocking progress update (fire and forget)
               // Update progress (non-blocking) - use remainingCount before clearing
@@ -661,8 +683,11 @@ async function executeInstantSync(jobId: string, facebookPageId: string, userId:
                   totalContacts: contactsStored + remainingCount, // Use count before clearing
                 },
               }).catch(() => {}); // Silently fail - progress updates are not critical
+              
+              return batchCount; // Return count for verification
             }).catch(err => {
               console.error(`[Instant Sync ${jobId}] Instagram batch processing error:`, err);
+              return 0; // Return 0 on error
             });
             batchPromises.push(batchPromise);
             
@@ -690,8 +715,16 @@ async function executeInstantSync(jobId: string, facebookPageId: string, userId:
         // This ensures all parallel batches finish and contactsStored is accurate
         if (batchPromises.length > 0) {
           console.log(`[Instant Sync ${jobId}] Waiting for ${batchPromises.length} parallel Instagram batches to complete...`);
-          await Promise.all(batchPromises);
-          console.log(`[Instant Sync ${jobId}] All parallel Instagram batches completed. Contacts stored so far: ${contactsStored}`);
+          const batchResults = await Promise.all(batchPromises);
+          const totalFromBatches = batchResults.reduce((sum, count) => sum + count, 0);
+          console.log(`[Instant Sync ${jobId}] All parallel Instagram batches completed. Batch results: ${totalFromBatches} contacts, Shared counter: ${contactsStored}`);
+          
+          // Verify counter matches batch results (for debugging)
+          if (totalFromBatches !== contactsStored) {
+            console.warn(`[Instant Sync ${jobId}] ⚠️ Counter mismatch! Batch results: ${totalFromBatches}, Shared counter: ${contactsStored}`);
+            // Use the batch results as source of truth
+            contactsStored = totalFromBatches;
+          }
         }
 
         // Process any remaining Instagram participants
