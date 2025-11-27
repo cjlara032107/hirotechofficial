@@ -14,6 +14,8 @@ const RETRYABLE_ERRORS = [
   'Connection closed',
   'ECONNREFUSED',
   'ETIMEDOUT',
+  'Engine is not yet connected', // Prisma engine not ready
+  'Response from the Engine was empty', // Prisma engine error
 ];
 
 /**
@@ -49,6 +51,11 @@ export function getPrismaErrorMessage(error: unknown): string {
   // Connection errors
   if (errorMessage.includes("Can't reach database") || errorCode === 'P1001') {
     return 'Unable to connect to the database. Please try again.';
+  }
+  
+  // Engine not connected errors
+  if (errorMessage.includes('Engine is not yet connected') || errorMessage.includes('Response from the Engine was empty')) {
+    return 'Database connection is initializing. Please try again in a moment.';
   }
   
   // Timeout errors
@@ -118,7 +125,9 @@ export async function safePrismaOperation<T>(
             } catch {
               // Ignore disconnect errors
             }
-            // Reconnect
+            // Wait a bit before reconnecting
+            await new Promise(resolve => setTimeout(resolve, 500));
+            // Reconnect with retry
             await connectPrisma();
           }
           throw error;

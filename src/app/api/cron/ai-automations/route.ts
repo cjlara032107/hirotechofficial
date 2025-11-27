@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { prisma, connectPrisma } from '@/lib/db';
-import { withRetry } from '@/lib/db-retry';
+import { prisma } from '@/lib/db';
+import { safePrismaOperation, handlePrismaError } from '@/lib/prisma-error-handler';
+import { acquireCronConnection } from '@/lib/cron-connection-queue';
 import { generateFollowUpMessage } from '@/lib/ai/google-ai-service';
 import { FacebookClient } from '@/lib/facebook/client';
 import { isContactEligibleForAutomation } from '@/lib/ai/conflict-prevention';
@@ -16,31 +17,35 @@ export async function GET(request: NextRequest) {
     }
 
     // Stagger cron job execution to prevent simultaneous pool access
-    // Random delay 0-5 seconds to spread out multiple cron jobs more aggressively
-    const staggerDelay = Math.random() * 5000;
+    // Increased delay 0-10 seconds to better spread out multiple cron jobs
+    const staggerDelay = Math.random() * 10000;
     await new Promise(resolve => setTimeout(resolve, staggerDelay));
 
-    // Ensure Prisma is connected before queries
-    await connectPrisma();
+    // Acquire connection lock to prevent simultaneous cron job access
+    const releaseConnection = await acquireCronConnection();
+    
+    try {
+      console.log('[AI Automations Cron] Starting execution...');
+      const startTime = Date.now();
 
-    console.log('[AI Automations Cron] Starting execution...');
-    const startTime = Date.now();
-
-    // Get all enabled automation rules (with retry for pool exhaustion)
-    const rules = await withRetry(() => prisma.aIAutomationRule.findMany({
-      where: {
-        enabled: true,
-      },
-      include: {
-        FacebookPage: true,
-        User: {
-          select: {
-            id: true,
-            organizationId: true,
+      // Get all enabled automation rules (with automatic retry and error handling)
+      const rules = await safePrismaOperation(
+      () => prisma.aIAutomationRule.findMany({
+        where: {
+          enabled: true,
+        },
+        include: {
+          FacebookPage: true,
+          User: {
+            select: {
+              id: true,
+              organizationId: true,
+            },
           },
         },
-      },
-    }));
+      }),
+      { operationName: 'find automation rules', maxRetries: 5 }
+    );
 
     if (rules.length === 0) {
       console.log('[AI Automations Cron] No enabled rules found');
@@ -84,15 +89,18 @@ export async function GET(request: NextRequest) {
         const todayStart = new Date(now);
         todayStart.setHours(0, 0, 0, 0);
 
-        const todayExecutions = await prisma.aIAutomationExecution.findMany({
-          where: {
-            ruleId: rule.id,
-            executedAt: {
-              gte: todayStart,
+        const todayExecutions = await safePrismaOperation(
+          () => prisma.aIAutomationExecution.findMany({
+            where: {
+              ruleId: rule.id,
+              executedAt: {
+                gte: todayStart,
+              },
+              status: 'sent',
             },
-            status: 'sent',
-          },
-        });
+          }),
+          { operationName: 'find today executions' }
+        );
 
         if (todayExecutions.length >= rule.maxMessagesPerDay) {
           console.log(`[AI Automations Cron] Rule "${rule.name}" reached daily limit (${rule.maxMessagesPerDay})`);
@@ -722,18 +730,23 @@ export async function GET(request: NextRequest) {
     const duration = Date.now() - startTime;
     console.log(`[AI Automations Cron] Execution complete in ${duration}ms: ${totalSent} sent, ${totalFailed} failed`);
 
-    return NextResponse.json({
-      success: true,
-      rulesProcessed: rules.length,
-      totalSent,
-      totalFailed,
-      duration,
-    });
+      return NextResponse.json({
+        success: true,
+        rulesProcessed: rules.length,
+        totalSent,
+        totalFailed,
+        duration,
+      });
+    } finally {
+      // Always release connection lock
+      releaseConnection();
+    }
   } catch (error) {
     console.error('[AI Automations Cron] Fatal error:', error);
+    const { message, status } = handlePrismaError(error, 'Failed to execute automation cron job');
     return NextResponse.json(
-      { error: 'Failed to execute automation cron job' },
-      { status: 500 }
+      { error: message },
+      { status }
     );
   }
 }

@@ -48,15 +48,25 @@ let connectionPromise: Promise<void> | undefined;
 let connectionState: 'idle' | 'connecting' | 'connected' = 'idle';
 
 async function ensurePrismaConnected() {
-  // If already connected, return immediately
+  // If already connected, verify it's still working
   if (connectionState === 'connected') {
-    return;
+    try {
+      // Quick health check to ensure engine is ready
+      await prismaClient.$queryRaw`SELECT 1`;
+      return;
+    } catch {
+      // Connection lost, reset and reconnect
+      connectionState = 'idle';
+      connectionPromise = undefined;
+    }
   }
 
   // If connection is in progress, wait for it
   if (connectionState === 'connecting' && connectionPromise) {
     try {
       await connectionPromise;
+      // Verify engine is ready after waiting
+      await prismaClient.$queryRaw`SELECT 1`;
       return;
     } catch (error) {
       // Connection failed, reset and retry
@@ -68,12 +78,22 @@ async function ensurePrismaConnected() {
   // Start new connection
   connectionState = 'connecting';
   connectionPromise = prismaClient.$connect()
-    .then(() => {
-      connectionState = 'connected';
-      const poolInfo = process.env.DATABASE_URL?.includes('connection_limit') 
-        ? ' (pool configured)' 
-        : ' (using default pool)';
-      console.log(`[Prisma] ✅ Connected to database${poolInfo}`);
+    .then(async () => {
+      // Verify engine is ready
+      try {
+        await prismaClient.$queryRaw`SELECT 1`;
+        connectionState = 'connected';
+        const poolInfo = process.env.DATABASE_URL?.includes('connection_limit') 
+          ? ' (pool configured)' 
+          : ' (using default pool)';
+        console.log(`[Prisma] ✅ Connected to database${poolInfo}`);
+      } catch (error) {
+        // Engine not ready yet, wait a bit and retry
+        await new Promise(resolve => setTimeout(resolve, 500));
+        await prismaClient.$queryRaw`SELECT 1`;
+        connectionState = 'connected';
+        console.log(`[Prisma] ✅ Connected to database (after engine ready)`);
+      }
     })
     .catch((error) => {
       console.error('[Prisma] ❌ Connection error:', error);

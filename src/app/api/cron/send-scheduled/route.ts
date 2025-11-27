@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/db';
 import { safePrismaOperation, handlePrismaError } from '@/lib/prisma-error-handler';
+import { acquireCronConnection } from '@/lib/cron-connection-queue';
 import { startCampaign, getTargetContacts } from '@/lib/campaigns/send';
 import { GoogleAIService } from '@/lib/ai/google-ai-service';
 import { FacebookClient } from '@/lib/facebook/client';
@@ -24,16 +25,20 @@ export async function GET(request: NextRequest) {
     }
 
     // Stagger cron job execution to prevent simultaneous pool access
-    // Random delay 0-5 seconds to spread out multiple cron jobs more aggressively
-    const staggerDelay = Math.random() * 5000;
+    // Random delay 0-10 seconds to spread out multiple cron jobs more aggressively
+    const staggerDelay = Math.random() * 10000;
     await new Promise(resolve => setTimeout(resolve, staggerDelay));
 
-    const currentTime = new Date();
-    console.log('[Cron Send Scheduled] Starting at', currentTime.toISOString());
+    // Acquire connection lock to prevent simultaneous cron job access
+    const releaseConnection = await acquireCronConnection();
+    
+    try {
+      const currentTime = new Date();
+      console.log('[Cron Send Scheduled] Starting at', currentTime.toISOString());
 
-    // Find all campaigns that are scheduled and due to be sent (with retry for pool exhaustion)
-    // Query: status = SCHEDULED AND scheduledAt <= currentTime
-    const dueCampaigns = await safePrismaOperation(
+      // Find all campaigns that are scheduled and due to be sent (with retry for pool exhaustion)
+      // Query: status = SCHEDULED AND scheduledAt <= currentTime
+      const dueCampaigns = await safePrismaOperation(
       () => prisma.campaign.findMany({
         where: {
           status: 'SCHEDULED',
@@ -90,13 +95,16 @@ export async function GET(request: NextRequest) {
         console.log(`[Cron Send Scheduled] Target contacts: ${targetContacts.length}`);
 
         if (targetContacts.length === 0) {
-          await prisma.campaign.update({
-            where: { id: campaign.id },
-            data: {
-              status: 'COMPLETED',
-              completedAt: new Date(),
-            },
-          });
+          await safePrismaOperation(
+            () => prisma.campaign.update({
+              where: { id: campaign.id },
+              data: {
+                status: 'COMPLETED',
+                completedAt: new Date(),
+              },
+            }),
+            { operationName: 'mark campaign completed (no recipients)' }
+          );
           console.log(`[Cron Send Scheduled] Campaign ${campaign.id} has no recipients, marked as completed`);
           failed++;
           results.push({
@@ -119,12 +127,15 @@ export async function GET(request: NextRequest) {
             console.log(`[Cron Send Scheduled] Generated ${Object.keys(aiMessagesMap).length} AI messages`);
             
             // Update campaign with AI messages map
-            await prisma.campaign.update({
-              where: { id: campaign.id },
-              data: {
-                aiMessagesMap: aiMessagesMap,
-              },
-            });
+            await safePrismaOperation(
+              () => prisma.campaign.update({
+                where: { id: campaign.id },
+                data: {
+                  aiMessagesMap: aiMessagesMap,
+                },
+              }),
+              { operationName: 'update campaign AI messages' }
+            );
           } catch (aiError) {
             console.error('[Cron Send Scheduled] AI generation error:', aiError);
             // Continue with standard template message
@@ -132,14 +143,17 @@ export async function GET(request: NextRequest) {
         }
 
         // STEP 4: Update campaign total recipients
-        await prisma.campaign.update({
-          where: { id: campaign.id },
-          data: {
-            totalRecipients: targetContacts.length,
-            lastFetchAt: ('autoFetchEnabled' in campaign && (campaign as any).autoFetchEnabled) ? new Date() : undefined,
-            fetchCount: ('autoFetchEnabled' in campaign && (campaign as any).autoFetchEnabled) ? { increment: 1 } : undefined,
-          },
-        });
+        await safePrismaOperation(
+          () => prisma.campaign.update({
+            where: { id: campaign.id },
+            data: {
+              totalRecipients: targetContacts.length,
+              lastFetchAt: ('autoFetchEnabled' in campaign && (campaign as any).autoFetchEnabled) ? new Date() : undefined,
+              fetchCount: ('autoFetchEnabled' in campaign && (campaign as any).autoFetchEnabled) ? { increment: 1 } : undefined,
+            },
+          }),
+          { operationName: 'update campaign recipients count' }
+        );
 
         // STEP 5: Start campaign (this will handle the actual sending)
         console.log(`[Cron Send Scheduled] Starting campaign ${campaign.id}...`);
@@ -160,13 +174,16 @@ export async function GET(request: NextRequest) {
         
         // Mark campaign as failed
         try {
-          await prisma.campaign.update({
-            where: { id: campaign.id },
-            data: {
-              status: 'CANCELLED',
-              completedAt: new Date(),
-            },
-          });
+          await safePrismaOperation(
+            () => prisma.campaign.update({
+              where: { id: campaign.id },
+              data: {
+                status: 'CANCELLED',
+                completedAt: new Date(),
+              },
+            }),
+            { operationName: 'mark campaign cancelled' }
+          );
         } catch (updateError) {
           console.error(`[Cron Send Scheduled] Failed to update campaign status:`, updateError);
         }
@@ -183,13 +200,16 @@ export async function GET(request: NextRequest) {
 
     console.log(`[Cron Send Scheduled] Complete: ${dispatched} dispatched, ${failed} failed`);
 
-    return NextResponse.json({
-      success: true,
-      dispatched,
-      failed,
-      results,
-    });
-
+      return NextResponse.json({
+        success: true,
+        dispatched,
+        failed,
+        results,
+      });
+    } finally {
+      // Always release connection lock
+      releaseConnection();
+    }
   } catch (error) {
     console.error('[Cron Send Scheduled] Fatal error:', error);
     const { message, status } = handlePrismaError(error, 'Failed to process scheduled campaigns');
