@@ -131,7 +131,7 @@ export async function GET(request: NextRequest) {
               () => prisma.campaign.update({
                 where: { id: campaign.id },
                 data: {
-                  aiMessagesMap: aiMessagesMap,
+                  aiMessagesMap: aiMessagesMap || undefined,
                 },
               }),
               { operationName: 'update campaign AI messages' }
