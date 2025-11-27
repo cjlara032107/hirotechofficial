@@ -239,8 +239,10 @@ export class FacebookClient {
 
       // Check if we found all needed participants
       if (foundParticipants.size >= neededParticipantIds.size) {
-        console.log(`[Facebook API] Found all ${foundParticipants.size} participants in first ${pageCount} page(s), stopping early`);
+        console.log(`[Facebook API] Found all ${foundParticipants.size}/${neededParticipantIds.size} participants in first ${pageCount} page(s), stopping early`);
         return allConversations;
+      } else {
+        console.log(`[Facebook API] Found ${foundParticipants.size}/${neededParticipantIds.size} participants in first page, continuing to fetch more...`);
       }
 
       // Check if there's a next page
@@ -276,8 +278,13 @@ export class FacebookClient {
             
             // Stop if we found all participants
             if (foundParticipants.size >= neededParticipantIds.size) {
-              console.log(`[Facebook API] Found all ${foundParticipants.size} participants after ${pageCount} pages, stopping early`);
+              console.log(`[Facebook API] Found all ${foundParticipants.size}/${neededParticipantIds.size} participants after ${pageCount} pages, stopping early`);
               break;
+            } else {
+              // Log progress every 10 pages
+              if (pageCount % 10 === 0) {
+                console.log(`[Facebook API] Progress: Found ${foundParticipants.size}/${neededParticipantIds.size} participants after ${pageCount} pages...`);
+              }
             }
           }
 
