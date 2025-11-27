@@ -20,3 +20,5 @@ AND column_name IN ('contactInfo', 'bestContactTimes');
 
 
 
+
+

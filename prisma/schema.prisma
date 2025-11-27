@@ -105,6 +105,16 @@ model Contact {
   lastInteraction       DateTime?
   contactInfo           Json?                  // Stores extracted contact information (age, phone, email, socials, etc.)
   bestContactTimes      Json?                  // Stores best contact times with multiple estimates and days of week
+  riskScore             Int?                   // Risk score (0-100), higher = more risky
+  riskLevel             String?                 // LOW, MEDIUM, HIGH, CRITICAL
+  approvalStatus        ApprovalStatus?         // PENDING, APPROVED, REJECTED, AUTO_APPROVED
+  riskReasons           String[]                // Array of risk reasons
+  approvedAt            DateTime?
+  approvedBy            String?
+  rejectedAt            DateTime?
+  rejectedBy            String?
+  feedback              String?                 @db.Text // User feedback on contact quality
+  feedbackAt            DateTime?
   createdAt             DateTime                @default(now())
   updatedAt             DateTime                @updatedAt
   AIAutomationExecution AIAutomationExecution[]
@@ -129,6 +139,10 @@ model Contact {
   @@index([organizationId, createdAt])
   @@index([organizationId, leadScore])
   @@index([organizationId, firstName])
+  @@index([approvalStatus])
+  @@index([riskScore])
+  @@index([organizationId, approvalStatus])
+  @@index([organizationId, riskScore])
 }
 
 model Tag {
@@ -811,6 +825,13 @@ enum LeadStatus {
   WON
   LOST
   UNRESPONSIVE
+}
+
+enum ApprovalStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  AUTO_APPROVED
 }
 
 enum StageType {

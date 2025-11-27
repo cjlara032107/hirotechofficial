@@ -17,6 +17,10 @@
     {
       "path": "/api/cron/api-keys",
       "schedule": "0 * * * *"
+    },
+    {
+      "path": "/api/cron/recover-stuck-syncs",
+      "schedule": "*/10 * * * *"
     }
   ]
 }

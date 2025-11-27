@@ -1,6 +1,7 @@
-import { prisma } from '@/lib/db';
-import { Prisma } from '@prisma/client';
+import { prisma, connectPrisma } from '@/lib/db';
+import { Prisma, ApprovalStatus } from '@prisma/client';
 import { FacebookClient, FacebookApiError } from './client';
+import { calculateRiskScore, detectSuspiciousPatterns, requiresApproval } from '@/lib/risk-scoring';
 
 interface FastSyncResult {
   success: boolean;
@@ -97,7 +98,7 @@ export async function startFastSync(facebookPageId: string): Promise<FastSyncRes
     // Start the sync process asynchronously (don't await)
     // For Vercel serverless, we need to ensure the promise chain starts before response
     // Use immediate execution with proper error handling
-    (async () => {
+    const backgroundPromise = (async () => {
       try {
         console.log(`[Fast Sync ${syncJob.id}] 🚀 Starting background execution immediately...`);
         await executeFastSync(syncJob.id, facebookPageId);
@@ -123,6 +124,19 @@ export async function startFastSync(facebookPageId: string): Promise<FastSyncRes
         }
       }
     })(); // Immediately invoked async function
+
+    // CRITICAL: In Vercel, we need to keep the promise alive
+    // Store it globally to prevent garbage collection
+    if (typeof globalThis !== 'undefined') {
+      // Store promise to keep it alive
+      (globalThis as any).__activeSyncPromises = (globalThis as any).__activeSyncPromises || new Set();
+      (globalThis as any).__activeSyncPromises.add(backgroundPromise);
+      
+      // Clean up when done
+      backgroundPromise.finally(() => {
+        (globalThis as any).__activeSyncPromises?.delete(backgroundPromise);
+      });
+    }
 
     return {
       success: true,
@@ -199,6 +213,9 @@ async function getExistingContactsMap(
  */
 async function executeFastSync(jobId: string, facebookPageId: string): Promise<void> {
   try {
+    // CRITICAL: Ensure database connection is established (required for Vercel serverless)
+    await connectPrisma();
+    
     // Update job status to in progress
     await prisma.syncJob.update({
       where: { id: jobId },
@@ -385,7 +402,26 @@ async function executeFastSync(jobId: string, facebookPageId: string): Promise<v
                   lastInteraction = new Date();
                 }
 
-                // Upsert contact (no AI analysis, no pipeline assignment)
+                // Calculate risk score (background, non-blocking)
+                const suspiciousPatterns = detectSuspiciousPatterns(firstName, lastName, []);
+                const conversationAge = lastInteraction ? Math.floor((Date.now() - lastInteraction.getTime()) / (1000 * 60 * 60 * 24)) : 0;
+                
+                const riskScore = calculateRiskScore({
+                  hasValidName: firstName.length > 1 && !firstName.match(/^User\s+\d+$/i),
+                  hasProfilePic: false, // Will be updated if available
+                  hasValidLocale: false, // Will be updated if available
+                  hasContactInfo: false, // Will be updated after AI analysis
+                  messageCount: 0, // Will be updated after message fetch
+                  conversationAge,
+                  lastInteractionAge: conversationAge,
+                  suspiciousPatterns,
+                });
+
+                // Determine approval status (auto-approve low risk, pending for high risk)
+                const needsApproval = requiresApproval(riskScore, 40); // Threshold: 40
+                const approvalStatus: ApprovalStatus = needsApproval ? ApprovalStatus.PENDING : ApprovalStatus.AUTO_APPROVED;
+
+                // Upsert contact with risk score and approval status
                 await prisma.contact.upsert({
                   where: {
                     messengerPSID_facebookPageId: {
@@ -401,12 +437,20 @@ async function executeFastSync(jobId: string, facebookPageId: string): Promise<v
                     organizationId: page.organizationId,
                     facebookPageId: page.id,
                     lastInteraction,
+                    riskScore: riskScore.score,
+                    riskLevel: riskScore.level,
+                    approvalStatus: approvalStatus as any,
+                    riskReasons: riskScore.reasons,
                   },
                   update: {
                     firstName,
                     lastName,
                     lastInteraction,
                     hasMessenger: true,
+                    riskScore: riskScore.score,
+                    riskLevel: riskScore.level,
+                    approvalStatus,
+                    riskReasons: riskScore.reasons,
                   },
                 });
 

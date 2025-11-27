@@ -415,6 +415,13 @@ export default function CampaignDetailPage() {
             </Button>
           )}
 
+          {campaign.status === 'PAUSED' && (
+            <Button onClick={handleStartCampaign} disabled={sending}>
+              <Send className="h-4 w-4 mr-2" />
+              {sending ? 'Resuming...' : 'Resume Campaign'}
+            </Button>
+          )}
+
           {campaign.status === 'SENDING' && (
             <Button 
               variant="destructive" 

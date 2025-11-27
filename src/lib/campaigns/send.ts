@@ -200,7 +200,9 @@ async function sendMessagesInBackground(
   // Process messages asynchronously without blocking the API response
   // Use Promise.resolve().then() to ensure this runs asynchronously
   Promise.resolve().then(async () => {
-    const BATCH_SIZE = 50; // Send 50 messages in parallel at a time to avoid overwhelming the API
+    const BATCH_SIZE = 10; // Reduced to 10 to prevent database connection pool exhaustion
+    // Each message does 3 DB operations (create message, update campaign, create activity)
+    // 10 messages = 30 concurrent DB operations max, which is safer with 5 connection pool limit
     let successCount = 0;
     let failCount = 0;
     let processedCount = 0;
@@ -304,28 +306,49 @@ async function sendMessagesInBackground(
           console.log(`✅ Batch ${batchNumber}/${totalBatches} completed: ${successCount} sent, ${failCount} failed, ${processedCount}/${totalMessages} processed`);
 
           // If rate limit detected, add longer delay before next batch
-          let delayBetweenBatches = 100; // Default 100ms
+          let delayBetweenBatches = 500; // Default 500ms to let DB connections free up
           if (rateLimitCount > 0) {
             // Exponential backoff: 1 second per rate-limited message, max 30 seconds
             delayBetweenBatches = Math.min(1000 * rateLimitCount, 30000);
             console.log(`⏳ Adding ${delayBetweenBatches}ms delay before next batch due to rate limiting...`);
           }
           
-          // Small delay between batches to avoid overwhelming the API
+          // Delay between batches to prevent database connection pool exhaustion
+          // This gives time for DB connections to be released back to the pool
           if (i + BATCH_SIZE < messages.length) {
             await new Promise(resolve => setTimeout(resolve, delayBetweenBatches));
           }
         } catch (batchError) {
           console.error(`❌ Batch ${batchNumber}/${totalBatches} error:`, batchError);
+          console.error(`📍 Batch error details:`, batchError instanceof Error ? {
+            message: batchError.message,
+            stack: batchError.stack,
+            name: batchError.name,
+          } : batchError);
+          
           // Mark all messages in this batch as failed
           failCount += batch.length;
           processedCount += batch.length;
           console.error(`⚠️ Marked ${batch.length} messages as failed due to batch error`);
           
-          // Add delay even on error to avoid overwhelming the API
-          if (i + BATCH_SIZE < messages.length) {
+          // Check if it's a database connection error
+          const isDbError = batchError instanceof Error && (
+            batchError.message.includes('connection pool') ||
+            batchError.message.includes('timeout') ||
+            batchError.message.includes('P2024') ||
+            batchError.message.includes('P1001')
+          );
+          
+          if (isDbError) {
+            console.warn(`⚠️ Database connection issue detected. Adding 2 second delay to let connections free up...`);
+            await new Promise(resolve => setTimeout(resolve, 2000));
+          } else {
+            // Add delay even on error to avoid overwhelming the API
             await new Promise(resolve => setTimeout(resolve, 1000));
           }
+          
+          // Continue processing - don't let one batch error stop the entire campaign
+          console.log(`🔄 Continuing to next batch despite error...`);
         }
       }
 
