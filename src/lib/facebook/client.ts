@@ -352,7 +352,7 @@ export class FacebookClient {
    * Stream Messenger conversations as they're fetched (yields conversations page by page)
    * This allows processing to start immediately instead of waiting for all conversations
    */
-  async *fetchMessengerConversationsStream(pageId: string, limit = 100) {
+  async *fetchMessengerConversationsStream(pageId: string, limit = 500) {
     let nextUrl: string | null = null;
     let hasMore = true;
     let pageCount = 0;
@@ -704,7 +704,7 @@ export class FacebookClient {
    * Stream Instagram conversations as they're fetched (yields conversations page by page)
    * This allows processing to start immediately instead of waiting for all conversations
    */
-  async *fetchInstagramConversationsStream(igAccountId: string, limit = 100) {
+  async *fetchInstagramConversationsStream(igAccountId: string, limit = 500) {
     let nextUrl: string | null = null;
     let hasMore = true;
     let pageCount = 0;
