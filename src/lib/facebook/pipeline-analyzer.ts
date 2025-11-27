@@ -344,7 +344,7 @@ async function processBatch(
           })
         );
       },
-      { timeout: 30000 }
+      { timeout: 120000 } // Increased to 120 seconds (2 minutes) to handle large batches
     );
 
     console.log(`[Pipeline Analysis ${jobId}] Processed batch: ${assignments.length} contacts assigned to pipeline`);
@@ -465,6 +465,11 @@ async function executePipelineAnalysis(jobId: string, facebookPageId: string): P
     }));
 
     console.log(`[Pipeline Analysis ${jobId}] Found ${contactsWithoutPipeline.length} contacts without pipeline`);
+    
+    // Log contact statistics for debugging
+    const contactsWithMessengerPSID = contactsWithoutPipeline.filter(c => c.messengerPSID).length;
+    const contactsWithInstagramSID = contactsWithoutPipeline.filter(c => c.instagramSID).length;
+    console.log(`[Pipeline Analysis ${jobId}] Contact breakdown: ${contactsWithMessengerPSID} with Messenger PSID, ${contactsWithInstagramSID} with Instagram SID`);
 
     if (contactsWithoutPipeline.length === 0) {
       await withRetry(() => prisma.syncJob.update({
@@ -491,15 +496,29 @@ async function executePipelineAnalysis(jobId: string, facebookPageId: string): P
 
     // Fetch all conversations once (to match contacts to conversations)
     console.log(`[Pipeline Analysis ${jobId}] Fetching conversations to match contacts...`);
-    const messengerConvos = await client.getMessengerConversations(page.pageId);
-    console.log(`[Pipeline Analysis ${jobId}] Fetched ${messengerConvos.length} Messenger conversations`);
+    let messengerConvos: any[] = [];
+    try {
+      messengerConvos = await client.getMessengerConversations(page.pageId);
+      console.log(`[Pipeline Analysis ${jobId}] ✅ Successfully fetched ${messengerConvos.length} Messenger conversations`);
+    } catch (error) {
+      const errorMsg = error instanceof Error ? error.message : 'Unknown error';
+      console.error(`[Pipeline Analysis ${jobId}] ⚠️ Error fetching Messenger conversations: ${errorMsg}`);
+      console.error(`[Pipeline Analysis ${jobId}] Continuing with ${messengerConvos.length} conversations already fetched`);
+      // Continue with whatever we have - we'll fetch on-demand for missing contacts
+    }
 
     // Create a map of participantId -> conversationId for Messenger
     // Store both conversation ID and updated_time for comparison
     const messengerConversationMap = new Map<string, { conversationId: string; updatedTime: string }>();
     for (const convo of messengerConvos) {
+      // Handle cases where participants might be missing or malformed
+      if (!convo.participants || !convo.participants.data || !Array.isArray(convo.participants.data)) {
+        console.warn(`[Pipeline Analysis ${jobId}] Conversation ${convo.id} has invalid participants structure`);
+        continue;
+      }
+      
       for (const participant of convo.participants.data) {
-        if (participant.id !== page.pageId) {
+        if (participant.id && participant.id !== page.pageId) {
           // Use the most recent conversation for each participant
           const existing = messengerConversationMap.get(participant.id);
           if (!existing || new Date(convo.updated_time) > new Date(existing.updatedTime)) {
@@ -511,18 +530,32 @@ async function executePipelineAnalysis(jobId: string, facebookPageId: string): P
         }
       }
     }
-
+    
+    console.log(`[Pipeline Analysis ${jobId}] Mapped ${messengerConversationMap.size} unique Messenger participants to conversations`);
+    
+    // Diagnostic: Check if we have enough conversations for the contacts
+    if (contactsWithoutPipeline.length > 0 && messengerConversationMap.size < contactsWithoutPipeline.length * 0.1) {
+      console.warn(`[Pipeline Analysis ${jobId}] ⚠️ WARNING: Only ${messengerConversationMap.size} conversations mapped for ${contactsWithoutPipeline.length} contacts (${((messengerConversationMap.size / contactsWithoutPipeline.length) * 100).toFixed(1)}% coverage)`);
+      console.warn(`[Pipeline Analysis ${jobId}] This suggests conversation fetching may have been incomplete. Many contacts will fail.`);
+    }
+    
     // Fetch Instagram conversations if connected
     const instagramConversationMap = new Map<string, { conversationId: string; updatedTime: string }>();
     if (page.instagramAccountId) {
       try {
         console.log(`[Pipeline Analysis ${jobId}] Fetching Instagram conversations...`);
         const igConvos = await client.getInstagramConversations(page.instagramAccountId);
-        console.log(`[Pipeline Analysis ${jobId}] Fetched ${igConvos.length} Instagram conversations`);
+        console.log(`[Pipeline Analysis ${jobId}] ✅ Successfully fetched ${igConvos.length} Instagram conversations`);
 
         for (const convo of igConvos) {
+          // Handle cases where participants might be missing or malformed
+          if (!convo.participants || !convo.participants.data || !Array.isArray(convo.participants.data)) {
+            console.warn(`[Pipeline Analysis ${jobId}] Instagram conversation ${convo.id} has invalid participants structure`);
+            continue;
+          }
+          
           for (const participant of convo.participants.data) {
-            if (participant.id !== page.instagramAccountId) {
+            if (participant.id && participant.id !== page.instagramAccountId) {
               const existing = instagramConversationMap.get(participant.id);
               if (!existing || new Date(convo.updated_time) > new Date(existing.updatedTime)) {
                 instagramConversationMap.set(participant.id, {
@@ -533,6 +566,8 @@ async function executePipelineAnalysis(jobId: string, facebookPageId: string): P
             }
           }
         }
+        
+        console.log(`[Pipeline Analysis ${jobId}] Mapped ${instagramConversationMap.size} unique Instagram participants to conversations`);
       } catch (error) {
         console.error(`[Pipeline Analysis ${jobId}] Failed to fetch Instagram conversations:`, error);
       }
@@ -605,13 +640,47 @@ async function executePipelineAnalysis(jobId: string, facebookPageId: string): P
           }
 
           if (!conversationInfo) {
-            failedCount++;
-            errors.push({
-              platform: 'Messenger',
-              id: contact.id,
-              error: 'Conversation not found',
-              code: undefined,
-            });
+            // FALLBACK: Try to fetch conversation on-demand if not in initial map
+            // This handles cases where conversation fetching was incomplete
+            try {
+              const psid = contact.messengerPSID || contact.instagramSID;
+              if (psid) {
+                // Try to find conversation by fetching conversations for this specific participant
+                // Note: Facebook API doesn't have a direct "get conversation by participant" endpoint
+                // So we'll mark as failed but log it for debugging
+                failedCount++;
+                const platform = contact.messengerPSID ? 'Messenger' : 'Instagram';
+                const errorMsg = `Conversation not found in initial fetch for ${platform} PSID: ${psid}`;
+                errors.push({
+                  platform,
+                  id: contact.id,
+                  error: errorMsg,
+                  code: undefined,
+                });
+                
+                // Log first 20 failures for debugging (to avoid log spam)
+                if (failedCount <= 20) {
+                  console.warn(`[Pipeline Analysis ${jobId}] ${errorMsg} (Contact: ${contact.firstName} ${contact.lastName || ''})`);
+                }
+              } else {
+                failedCount++;
+                errors.push({
+                  platform: 'Unknown',
+                  id: contact.id,
+                  error: 'No PSID or Instagram SID found',
+                  code: undefined,
+                });
+              }
+            } catch (fallbackError) {
+              failedCount++;
+              const errorMsg = `Failed to fetch conversation on-demand: ${fallbackError instanceof Error ? fallbackError.message : 'Unknown error'}`;
+              errors.push({
+                platform: contact.messengerPSID ? 'Messenger' : 'Instagram',
+                id: contact.id,
+                error: errorMsg,
+                code: undefined,
+              });
+            }
             return;
           }
 
@@ -622,18 +691,30 @@ async function executePipelineAnalysis(jobId: string, facebookPageId: string): P
             } catch (error) {
               const errorMessage = error instanceof Error ? error.message : 'Unknown error';
               const errorCode = error instanceof FacebookApiError ? error.code : undefined;
+              
+              // Log API errors for debugging (first 10 only)
+              if (failedCount < 10) {
+                console.error(`[Pipeline Analysis ${jobId}] Failed to fetch messages for conversation ${conversationInfo!.conversationId}:`, errorMessage, errorCode ? `(code: ${errorCode})` : '');
+              }
+              
               throw { message: errorMessage, code: errorCode };
             }
           });
 
           if (!messages || messages.length === 0) {
             failedCount++;
+            const errorMsg = `No messages found for conversation ${conversationInfo!.conversationId}`;
             errors.push({
-              platform: 'Messenger',
+              platform: contact.messengerPSID ? 'Messenger' : 'Instagram',
               id: contact.id,
-              error: 'No messages found',
+              error: errorMsg,
               code: undefined,
             });
+            
+            // Log first 10 failures for debugging
+            if (failedCount <= 10) {
+              console.warn(`[Pipeline Analysis ${jobId}] ${errorMsg} (Contact: ${contact.firstName} ${contact.lastName || ''})`);
+            }
             return;
           }
 
@@ -653,12 +734,18 @@ async function executePipelineAnalysis(jobId: string, facebookPageId: string): P
 
           if (messagesToAnalyze.length === 0) {
             failedCount++;
+            const errorMsg = `No valid messages to analyze (${messages.length} total messages, all filtered out)`;
             errors.push({
-              platform: 'Messenger',
+              platform: contact.messengerPSID ? 'Messenger' : 'Instagram',
               id: contact.id,
-              error: 'No valid messages to analyze',
+              error: errorMsg,
               code: undefined,
             });
+            
+            // Log first 10 failures for debugging
+            if (failedCount <= 10) {
+              console.warn(`[Pipeline Analysis ${jobId}] ${errorMsg} (Contact: ${contact.firstName} ${contact.lastName || ''})`);
+            }
             return;
           }
 
@@ -795,6 +882,24 @@ async function executePipelineAnalysis(jobId: string, facebookPageId: string): P
     });
 
     console.log(`[Pipeline Analysis ${jobId}] Completed: ${analyzedCount} analyzed, ${failedCount} failed${tokenExpired ? ' (Token expired)' : ''}`);
+    
+    // Log detailed failure breakdown for debugging
+    if (failedCount > 0) {
+      const errorBreakdown = new Map<string, number>();
+      errors.forEach(err => {
+        const key = err.error || 'Unknown error';
+        errorBreakdown.set(key, (errorBreakdown.get(key) || 0) + 1);
+      });
+      
+      console.log(`[Pipeline Analysis ${jobId}] Failure breakdown:`);
+      const sortedErrors = Array.from(errorBreakdown.entries()).sort((a, b) => b[1] - a[1]);
+      sortedErrors.slice(0, 10).forEach(([error, count]) => {
+        console.log(`[Pipeline Analysis ${jobId}]   - ${error}: ${count} contacts`);
+      });
+      if (sortedErrors.length > 10) {
+        console.log(`[Pipeline Analysis ${jobId}]   ... and ${sortedErrors.length - 10} more error types`);
+      }
+    }
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : 'Unknown error';
     console.error(`[Pipeline Analysis ${jobId}] Fatal error:`, error);

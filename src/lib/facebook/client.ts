@@ -328,15 +328,54 @@ export class FacebookClient {
             throw parseFacebookError(paginationError, `Rate limited while paginating conversations for Page ID: ${pageId}`);
           }
           
-          // For timeout or other pagination errors, log but continue with what we have
-          if (paginationError.message?.includes('timeout') || paginationError.code === 'ECONNABORTED') {
-            console.warn(`[Facebook API] Page ${pageCount} timed out, continuing with ${allConversations.length} conversations already fetched`);
-            // Log warning for monitoring
-            console.warn(`[Facebook API] Failed to fetch page ${pageCount}, continuing with ${allConversations.length} conversations already fetched`);
-          } else {
-            console.warn(`[Facebook API] Failed to fetch page ${pageCount}, continuing with ${allConversations.length} conversations already fetched`);
+          // Retry logic: Try up to 2 retries for transient errors
+          const MAX_RETRIES = 2;
+          let retryCount = 0;
+          let retrySuccess = false;
+          
+          while (retryCount < MAX_RETRIES && !retrySuccess) {
+            retryCount++;
+            console.warn(`[Facebook API] Retrying page ${pageCount} (attempt ${retryCount}/${MAX_RETRIES})...`);
+            
+            try {
+              await new Promise(resolve => setTimeout(resolve, 2000 * retryCount)); // Exponential backoff
+              const retryResponse = await Promise.race([
+                axios.get(nextUrl, {
+                  timeout: 30000,
+                }),
+                new Promise((_, reject) => 
+                  setTimeout(() => reject(new Error(`Retry ${retryCount} timed out`)), 30000)
+                )
+              ]) as any;
+              
+              if (retryResponse.data.data && retryResponse.data.data.length > 0) {
+                allConversations.push(...retryResponse.data.data);
+                retrySuccess = true;
+                
+                // Update pagination info for next iteration
+                nextUrl = retryResponse.data.paging?.next || null;
+                hasMore = !!nextUrl && retryResponse.data.data.length > 0;
+                console.log(`[Facebook API] ✅ Retry successful for page ${pageCount}, continuing pagination...`);
+                break; // Exit retry loop, continue with pagination
+              }
+            } catch (retryError: any) {
+              console.warn(`[Facebook API] Retry ${retryCount} failed for page ${pageCount}:`, retryError.message || retryError);
+              if (retryCount >= MAX_RETRIES) {
+                // All retries exhausted
+                const errorType = paginationError.message?.includes('timeout') || paginationError.code === 'ECONNABORTED' 
+                  ? 'timeout' 
+                  : 'error';
+                console.warn(`[Facebook API] ⚠️ All retries exhausted for page ${pageCount} (${errorType}), continuing with ${allConversations.length} conversations already fetched`);
+                console.warn(`[Facebook API] This may result in incomplete conversation coverage. Some contacts may fail analysis.`);
+                break; // Exit pagination loop
+              }
+            }
           }
-          break;
+          
+          // If retry failed, break out of pagination
+          if (!retrySuccess) {
+            break;
+          }
         }
       }
       
@@ -665,10 +704,23 @@ export class FacebookClient {
       nextUrl = response.data.paging?.next || null;
       hasMore = !!nextUrl;
 
-      // Fetch all subsequent pages
+      // Fetch all subsequent pages with progress updates
+      let pageCount = 1;
       while (hasMore && nextUrl) {
         try {
-          const nextResponse = await axios.get(nextUrl);
+          if (pageCount % 10 === 0) {
+            console.log(`[Facebook API] Fetched ${pageCount} pages, ${allConversations.length} Instagram conversations so far...`);
+          }
+          
+          // Add timeout per page request (30 seconds)
+          const nextResponse = await Promise.race([
+            axios.get(nextUrl, {
+              timeout: 30000, // 30 second timeout per request
+            }),
+            new Promise((_, reject) => 
+              setTimeout(() => reject(new Error(`Page ${pageCount} request timed out after 30 seconds`)), 30000)
+            )
+          ]) as any;
           
           if (nextResponse.data.data && nextResponse.data.data.length > 0) {
             allConversations.push(...nextResponse.data.data);
@@ -677,10 +729,11 @@ export class FacebookClient {
           // Update pagination info
           nextUrl = nextResponse.data.paging?.next || null;
           hasMore = !!nextUrl && nextResponse.data.data?.length > 0;
+          pageCount++;
 
           // No delay - Facebook API can handle rapid pagination, and we have error handling for rate limits
         } catch (paginationError: any) {
-          console.error('Error fetching next page of Instagram conversations:', paginationError);
+          console.error(`[Facebook API] Error fetching page ${pageCount} of Instagram conversations:`, paginationError);
           
           // If we get rate limited, throw the error
           const fbError = paginationError.response?.data?.error;
@@ -688,9 +741,54 @@ export class FacebookClient {
             throw parseFacebookError(paginationError, `Rate limited while paginating Instagram conversations for Account ID: ${igAccountId}`);
           }
           
-          // For other pagination errors, log but continue with what we have
-          console.warn(`Failed to fetch Instagram page, continuing with ${allConversations.length} conversations already fetched`);
-          break;
+          // Retry logic: Try up to 2 retries for transient errors
+          const MAX_RETRIES = 2;
+          let retryCount = 0;
+          let retrySuccess = false;
+          
+          while (retryCount < MAX_RETRIES && !retrySuccess) {
+            retryCount++;
+            console.warn(`[Facebook API] Retrying Instagram page ${pageCount} (attempt ${retryCount}/${MAX_RETRIES})...`);
+            
+            try {
+              await new Promise(resolve => setTimeout(resolve, 2000 * retryCount)); // Exponential backoff
+              const retryResponse = await Promise.race([
+                axios.get(nextUrl, {
+                  timeout: 30000,
+                }),
+                new Promise((_, reject) => 
+                  setTimeout(() => reject(new Error(`Retry ${retryCount} timed out`)), 30000)
+                )
+              ]) as any;
+              
+              if (retryResponse.data.data && retryResponse.data.data.length > 0) {
+                allConversations.push(...retryResponse.data.data);
+                retrySuccess = true;
+                
+                // Update pagination info for next iteration
+                nextUrl = retryResponse.data.paging?.next || null;
+                hasMore = !!nextUrl && retryResponse.data.data.length > 0;
+                console.log(`[Facebook API] ✅ Retry successful for Instagram page ${pageCount}, continuing pagination...`);
+                break; // Exit retry loop, continue with pagination
+              }
+            } catch (retryError: any) {
+              console.warn(`[Facebook API] Retry ${retryCount} failed for Instagram page ${pageCount}:`, retryError.message || retryError);
+              if (retryCount >= MAX_RETRIES) {
+                // All retries exhausted
+                const errorType = paginationError.message?.includes('timeout') || paginationError.code === 'ECONNABORTED' 
+                  ? 'timeout' 
+                  : 'error';
+                console.warn(`[Facebook API] ⚠️ All retries exhausted for Instagram page ${pageCount} (${errorType}), continuing with ${allConversations.length} conversations already fetched`);
+                console.warn(`[Facebook API] This may result in incomplete conversation coverage. Some contacts may fail analysis.`);
+                break; // Exit pagination loop
+              }
+            }
+          }
+          
+          // If retry failed, break out of pagination
+          if (!retrySuccess) {
+            break;
+          }
         }
       }
 
