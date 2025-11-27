@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/db';
 import { safePrismaOperation, handlePrismaError } from '@/lib/prisma-error-handler';
-import { acquireCronConnection } from '@/lib/cron-connection-queue';
+import { acquireCronLock, getCronStaggerDelay } from '@/lib/cron-lock';
 import { startCampaign, getTargetContacts } from '@/lib/campaigns/send';
 import { GoogleAIService } from '@/lib/ai/google-ai-service';
 import { FacebookClient } from '@/lib/facebook/client';
@@ -25,12 +25,20 @@ export async function GET(request: NextRequest) {
     }
 
     // Stagger cron job execution to prevent simultaneous pool access
-    // Random delay 0-10 seconds to spread out multiple cron jobs more aggressively
-    const staggerDelay = Math.random() * 10000;
+    const staggerDelay = getCronStaggerDelay('send-scheduled');
     await new Promise(resolve => setTimeout(resolve, staggerDelay));
 
-    // Acquire connection lock to prevent simultaneous cron job access
-    const releaseConnection = await acquireCronConnection();
+    // Acquire database lock to prevent simultaneous cron job access across instances
+    const releaseLock = await acquireCronLock('send-scheduled');
+    
+    if (!releaseLock) {
+      console.log('[Cron Send Scheduled] Another instance is running, skipping...');
+      return NextResponse.json({
+        success: true,
+        skipped: true,
+        message: 'Another instance is processing',
+      });
+    }
     
     try {
       const currentTime = new Date();
@@ -207,8 +215,8 @@ export async function GET(request: NextRequest) {
         results,
       });
     } finally {
-      // Always release connection lock
-      releaseConnection();
+      // Always release lock
+      await releaseLock();
     }
   } catch (error) {
     console.error('[Cron Send Scheduled] Fatal error:', error);

@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/db';
 import { safePrismaOperation, handlePrismaError } from '@/lib/prisma-error-handler';
-import { acquireCronConnection } from '@/lib/cron-connection-queue';
+import { acquireCronLock, getCronStaggerDelay } from '@/lib/cron-lock';
 import { generateFollowUpMessage } from '@/lib/ai/google-ai-service';
 import { FacebookClient } from '@/lib/facebook/client';
 import { isContactEligibleForAutomation } from '@/lib/ai/conflict-prevention';
@@ -17,12 +17,23 @@ export async function GET(request: NextRequest) {
     }
 
     // Stagger cron job execution to prevent simultaneous pool access
-    // Increased delay 0-10 seconds to better spread out multiple cron jobs
-    const staggerDelay = Math.random() * 10000;
+    const staggerDelay = getCronStaggerDelay('ai-automations');
     await new Promise(resolve => setTimeout(resolve, staggerDelay));
 
-    // Acquire connection lock to prevent simultaneous cron job access
-    const releaseConnection = await acquireCronConnection();
+    // Acquire database lock to prevent simultaneous cron job access across instances
+    const releaseLock = await acquireCronLock('ai-automations');
+    
+    if (!releaseLock) {
+      console.log('[AI Automations Cron] Another instance is running, skipping...');
+      return NextResponse.json({
+        success: true,
+        skipped: true,
+        rulesProcessed: 0,
+        totalSent: 0,
+        totalFailed: 0,
+        message: 'Another instance is processing',
+      });
+    }
     
     try {
       console.log('[AI Automations Cron] Starting execution...');
@@ -738,8 +749,8 @@ export async function GET(request: NextRequest) {
         duration,
       });
     } finally {
-      // Always release connection lock
-      releaseConnection();
+      // Always release lock
+      await releaseLock();
     }
   } catch (error) {
     console.error('[AI Automations Cron] Fatal error:', error);
