@@ -8,11 +8,12 @@ const prismaClientSingleton = () => {
   if (databaseUrl.includes('pooler.supabase.com') && !databaseUrl.includes('connection_limit')) {
     const separator = databaseUrl.includes('?') ? '&' : '?';
     
-    // CRITICAL: For Vercel/serverless, use connection_limit=1
-    // The pooler handles actual pooling across all serverless functions
-    // Using 25 would exhaust the pool quickly (each function instance tries to hold 25 connections)
+    // OPTIMIZED: For Vercel/serverless, use connection_limit=5
+    // This allows multiple concurrent queries per function instance without exhausting the pool
+    // Supabase pooler can handle 60-200 connections (depending on tier), so 5 per instance is safe
+    // Previous limit of 1 was causing timeouts when multiple queries ran concurrently
     const isVercel = process.env.VERCEL === '1' || process.env.NEXT_PUBLIC_VERCEL_ENV;
-    const connectionLimit = isVercel ? 1 : 10; // 1 for serverless, 10 for traditional servers
+    const connectionLimit = isVercel ? 5 : 10; // 5 for serverless (allows concurrent queries), 10 for traditional servers
     
     // pool_timeout: 90 - gives more time to get a connection under high load
     // connect_timeout: 30 - more time for initial connection

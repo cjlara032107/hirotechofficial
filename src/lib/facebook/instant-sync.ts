@@ -354,7 +354,7 @@ async function executeInstantSync(jobId: string, facebookPageId: string, userId:
             // Contact IDs are only needed for AI analysis queuing, which happens after sync completes
             // Return count instead of IDs - we'll query IDs at the end
             return allParticipantIds.length; // Return count for progress tracking
-          })() : Promise.resolve([]),
+          })() : Promise.resolve(0),
 
           // OPTIMIZATION: Batch updates in parallel with higher concurrency
           // Note: Can't use updateMany easily since each contact has different data
@@ -407,7 +407,8 @@ async function executeInstantSync(jobId: string, facebookPageId: string, userId:
         // OPTIMIZATION: Don't collect contact IDs during sync - we'll query all at the end
         // This eliminates query-back overhead during sync (N queries → 0 queries during sync)
         // Contact IDs are only needed for AI analysis, which happens after sync completes
-        const batchCount = (Array.isArray(createdResults) ? createdResults.length : (typeof createdResults === 'number' ? createdResults : 0)) + updateResults.length;
+        // Both results are now consistently typed: createdResults is a number, updateResults is an array
+        const batchCount = (typeof createdResults === 'number' ? createdResults : 0) + (Array.isArray(updateResults) ? updateResults.length : 0);
         contactsStored += batchCount; // Update shared counter for progress tracking
         return batchCount; // Return count for this batch
       } catch (error) {
