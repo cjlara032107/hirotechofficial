@@ -503,58 +503,76 @@ export async function startCampaign(campaignId: string) {
     try {
       const { GoogleAIService } = await import('@/lib/ai/google-ai-service');
       const aiService = new GoogleAIService();
-      const BATCH_SIZE = 5;
       
-      aiMessagesMap = {};
-      
-      for (let i = 0; i < targetContacts.length; i += BATCH_SIZE) {
-        const batch = targetContacts.slice(i, i + BATCH_SIZE);
-        
-        const batchPromises = batch.map(async (contact) => {
-          try {
-            // Fetch conversation history
-            const messages = await prisma.message.findMany({
-              where: { contactId: contact.id },
-              orderBy: { createdAt: 'desc' },
-              take: 10,
+      // Concurrency limiter to utilize all 20 API keys in parallel
+      class ConcurrencyLimiter {
+        private queue: Array<{ fn: () => Promise<unknown>; resolve: (value: unknown) => void; reject: (error: unknown) => void }> = [];
+        private running = 0;
+        constructor(private limit: number) {}
+        async execute<T>(fn: () => Promise<T>): Promise<T> {
+          return new Promise<T>((resolve, reject) => {
+            this.queue.push({ fn: fn as () => Promise<unknown>, resolve: resolve as (value: unknown) => void, reject: reject as (error: unknown) => void });
+            this.process();
+          });
+        }
+        private async process() {
+          while (this.running < this.limit && this.queue.length > 0) {
+            const task = this.queue.shift();
+            if (!task) break;
+            this.running++;
+            task.fn().then(task.resolve).catch(task.reject).finally(() => {
+              this.running--;
+              this.process();
             });
-
-            const conversationHistory = messages
-              .reverse()
-              .map((msg) => ({
-                from: msg.isFromBusiness ? 'Business' : contact.firstName,
-                message: msg.content,
-                timestamp: msg.createdAt.toISOString(),
-              }));
-
-            const templateContent = campaign.template?.content || 'Hello {firstName}!';
-            const context = {
-              contactName: contact.firstName,
-              conversationHistory,
-              templateMessage: templateContent,
-              customInstructions: (campaign as any).aiCustomInstructions || undefined,
-            };
-
-            const personalizedMessage = await aiService.generatePersonalizedMessage(context);
-            aiMessagesMap![contact.id] = personalizedMessage;
-          } catch (error) {
-            console.error(`[AI Generation] Failed for contact ${contact.id}:`, error);
-            // Fallback to template
-            const fallbackMessage = (campaign.template?.content || 'Hello!')
-              .replace(/\{firstName\}/g, contact.firstName)
-              .replace(/\{lastName\}/g, contact.lastName || '')
-              .replace(/\{name\}/g, `${contact.firstName} ${contact.lastName || ''}`.trim());
-            aiMessagesMap![contact.id] = fallbackMessage;
           }
-        });
-
-        await Promise.all(batchPromises);
-        
-        // Rate limit delay between batches
-        if (i + BATCH_SIZE < targetContacts.length) {
-          await new Promise((resolve) => setTimeout(resolve, 2000));
         }
       }
+      
+      const messageGenerationLimiter = new ConcurrencyLimiter(50); // Increased to 50 to utilize all 20 API keys
+      aiMessagesMap = {};
+      
+      // Process all contacts in parallel with concurrency limit
+      await Promise.all(
+        targetContacts.map(async (contact) => {
+          return messageGenerationLimiter.execute(async () => {
+            try {
+              // Fetch conversation history
+              const messages = await prisma.message.findMany({
+                where: { contactId: contact.id },
+                orderBy: { createdAt: 'desc' },
+                take: 10,
+              });
+
+              const conversationHistory = messages
+                .reverse()
+                .map((msg) => ({
+                  from: msg.isFromBusiness ? 'Business' : contact.firstName,
+                  message: msg.content,
+                  timestamp: msg.createdAt.toISOString(),
+                }));
+
+              const templateContent = campaign.template?.content || 'Hello {firstName}!';
+              const context = {
+                contactName: contact.firstName,
+                conversationHistory,
+                templateMessage: templateContent,
+                customInstructions: (campaign as any).aiCustomInstructions || undefined,
+              };
+
+              const personalizedMessage = await aiService.generatePersonalizedMessage(context);
+              aiMessagesMap![contact.id] = personalizedMessage;
+            } catch (error) {
+              console.error(`[AI Generation] Failed for contact ${contact.id}:`, error);
+              // Fallback to template
+              const fallbackMessage = (campaign.template?.content || 'Hello!')
+                .replace(/\{firstName\}/g, contact.firstName)
+                .replace(/\{lastName\}/g, contact.lastName || '')
+                .replace(/\{name\}/g, `${contact.firstName} ${contact.lastName || ''}`.trim());
+              aiMessagesMap![contact.id] = fallbackMessage;
+            }
+          });
+        })
+      );
       
       // Save generated messages to campaign
       await prisma.campaign.update({

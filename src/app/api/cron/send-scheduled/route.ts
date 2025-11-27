@@ -306,67 +306,87 @@ async function generateAIMessages(campaign: any, contacts: any[]): Promise<Recor
   console.log(`[AI Generation] Starting for ${contacts.length} contacts`);
   
   const aiMessagesMap: Record<string, string> = {};
-  const BATCH_SIZE = 5; // Process 5 contacts at a time
-
-  try {
-    for (let i = 0; i < contacts.length; i += BATCH_SIZE) {
-      const batch = contacts.slice(i, i + BATCH_SIZE);
-      console.log(`[AI Generation] Processing batch ${Math.floor(i / BATCH_SIZE) + 1}/${Math.ceil(contacts.length / BATCH_SIZE)}`);
-
-      const batchPromises = batch.map(async (contact) => {
-        try {
-          // Fetch conversation history for context
-          const messages = await prisma.message.findMany({
-            where: {
-              contactId: contact.id,
-            },
-            orderBy: {
-              createdAt: 'desc',
-            },
-            take: 10, // Last 10 messages
-          });
-
-          const conversationHistory = messages.map((msg) => ({
-            from: msg.isFromBusiness ? 'Business' : contact.firstName,
-            message: msg.content,
-            timestamp: msg.createdAt.toISOString(),
-          }));
-
-          // Generate personalized message using AI
-          const templateContent = campaign.template?.content || 'Hello {firstName}!';
-          const context = {
-            contactName: contact.firstName,
-            conversationHistory: conversationHistory.reverse(), // Reverse to chronological order
-            templateMessage: templateContent,
-            customInstructions: campaign.aiCustomInstructions || undefined,
-          };
-
-          // Use GoogleAIService to generate personalized message
-          const aiService = new GoogleAIService();
-          const personalizedMessage = await aiService.generatePersonalizedMessage(context);
-          
-          aiMessagesMap[contact.id] = personalizedMessage;
-          
-          console.log(`[AI Generation] ✅ Generated for ${contact.firstName}`);
-        } catch (error) {
-          console.error(`[AI Generation] Failed for contact ${contact.id}:`, error);
-          // Fallback to template message
-          const fallbackMessage = (campaign.template?.content || 'Hello!')
-            .replace(/\{firstName\}/g, contact.firstName)
-            .replace(/\{lastName\}/g, contact.lastName || '')
-            .replace(/\{name\}/g, `${contact.firstName} ${contact.lastName || ''}`.trim());
-          
-          aiMessagesMap[contact.id] = fallbackMessage;
-        }
+  
+  // Concurrency limiter to utilize all 20 API keys in parallel
+  class ConcurrencyLimiter {
+    private queue: Array<{ fn: () => Promise<unknown>; resolve: (value: unknown) => void; reject: (error: unknown) => void }> = [];
+    private running = 0;
+    constructor(private limit: number) {}
+    async execute<T>(fn: () => Promise<T>): Promise<T> {
+      return new Promise<T>((resolve, reject) => {
+        this.queue.push({ fn: fn as () => Promise<unknown>, resolve: resolve as (value: unknown) => void, reject: reject as (error: unknown) => void });
+        this.process();
       });
-
-      await Promise.all(batchPromises);
-
-      // Rate limit delay between batches
-      if (i + BATCH_SIZE < contacts.length) {
-        await new Promise((resolve) => setTimeout(resolve, 2000)); // 2 second delay
+    }
+    private async process() {
+      while (this.running < this.limit && this.queue.length > 0) {
+        const task = this.queue.shift();
+        if (!task) break;
+        this.running++;
+        task.fn().then(task.resolve).catch(task.reject).finally(() => {
+          this.running--;
+          this.process();
+        });
       }
     }
+  }
+  
+  const messageGenerationLimiter = new ConcurrencyLimiter(50); // Increased to 50 to utilize all 20 API keys
+
+  try {
+    console.log(`[AI Generation] Processing ${contacts.length} contacts in parallel...`);
+    
+    // Process all contacts in parallel with concurrency limit
+    await Promise.all(
+      contacts.map(async (contact) => {
+        return messageGenerationLimiter.execute(async () => {
+          try {
+            // Fetch conversation history for context
+            const messages = await prisma.message.findMany({
+              where: {
+                contactId: contact.id,
+              },
+              orderBy: {
+                createdAt: 'desc',
+              },
+              take: 10, // Last 10 messages
+            });
+
+            const conversationHistory = messages.map((msg) => ({
+              from: msg.isFromBusiness ? 'Business' : contact.firstName,
+              message: msg.content,
+              timestamp: msg.createdAt.toISOString(),
+            }));
+
+            // Generate personalized message using AI
+            const templateContent = campaign.template?.content || 'Hello {firstName}!';
+            const context = {
+              contactName: contact.firstName,
+              conversationHistory: conversationHistory.reverse(), // Reverse to chronological order
+              templateMessage: templateContent,
+              customInstructions: campaign.aiCustomInstructions || undefined,
+            };
+
+            // Use GoogleAIService to generate personalized message
+            const aiService = new GoogleAIService();
+            const personalizedMessage = await aiService.generatePersonalizedMessage(context);
+            
+            aiMessagesMap[contact.id] = personalizedMessage;
+            
+            console.log(`[AI Generation] ✅ Generated for ${contact.firstName}`);
+          } catch (error) {
+            console.error(`[AI Generation] Failed for contact ${contact.id}:`, error);
+            // Fallback to template message
+            const fallbackMessage = (campaign.template?.content || 'Hello!')
+              .replace(/\{firstName\}/g, contact.firstName)
+              .replace(/\{lastName\}/g, contact.lastName || '')
+              .replace(/\{name\}/g, `${contact.firstName} ${contact.lastName || ''}`.trim());
+            
+            aiMessagesMap[contact.id] = fallbackMessage;
+          }
+        });
+      })
+    );
 
     console.log(`[AI Generation] Complete: ${Object.keys(aiMessagesMap).length} messages generated`);
     return aiMessagesMap;

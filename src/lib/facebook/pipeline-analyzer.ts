@@ -542,8 +542,8 @@ async function executePipelineAnalysis(jobId: string, facebookPageId: string): P
     // CRITICAL: Aggressively reduced concurrency to prevent database pool exhaustion
     // Must leave connections available for cron jobs and other operations
     // Pool has 20 connections - we use max 5 here to leave 15 for cron jobs and other operations
-    const conversationFetchLimiter = new ConcurrencyLimiter(5); // Reduced from 10 to 5
-    const analysisLimiter = new ConcurrencyLimiter(3); // Reduced from 5 to 3
+    const conversationFetchLimiter = new ConcurrencyLimiter(20); // Increased to utilize more parallel fetching
+    const analysisLimiter = new ConcurrencyLimiter(20); // Increased to 20 to utilize all API keys in parallel
     
     console.log(`[Pipeline Analysis ${jobId}] Processing ${contactsWithoutPipeline.length} contacts continuously...`);
 

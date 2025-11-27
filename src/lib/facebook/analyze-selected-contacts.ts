@@ -289,10 +289,10 @@ export async function analyzeSelectedContacts(
     }
 
     // Process all contacts continuously - each contact completes independently
-    // Optimized concurrency: Higher for fetching, lower for AI to prevent rate limits
+    // Optimized concurrency: Higher for fetching, increased for AI to utilize 20 API keys in parallel
     const conversationFetchLimiter = new ConcurrencyLimiter(200); // Very high concurrency for fetching (no API limits)
-    const analysisLimiter = new ConcurrencyLimiter(50); // Lower for AI analysis to prevent rate limit exhaustion
-    const contactInfoLimiter = new ConcurrencyLimiter(30); // Lower for contact info extraction (separate API calls)
+    const analysisLimiter = new ConcurrencyLimiter(100); // Increased to 100 to maximize parallel processing with 20 API keys
+    const contactInfoLimiter = new ConcurrencyLimiter(50); // Increased to 50 to utilize more keys for contact info extraction
 
     console.log(`[Analyze Selected] Processing ${pageContacts.length} contacts continuously...`);
     batchStartTime = Date.now();

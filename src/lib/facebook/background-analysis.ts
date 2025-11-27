@@ -398,7 +398,8 @@ async function executeBackgroundAnalysis(
 
       console.log(`[Background Analysis ${jobId}] Processing ${contactIds.length} contacts in ${batches.length} parallel batches`);
 
-      const MAX_CONCURRENT_BATCHES = 5;
+      // Increased from 5 to 20 to utilize all 20 API keys in parallel
+      const MAX_CONCURRENT_BATCHES = 20;
       
       for (let i = 0; i < batches.length; i += MAX_CONCURRENT_BATCHES) {
         const concurrentBatches = batches.slice(i, i + MAX_CONCURRENT_BATCHES);
@@ -417,6 +418,7 @@ async function executeBackgroundAnalysis(
         }
 
         // Process batches in parallel, but track progress as they complete
+        // Use Promise.allSettled to ensure all batches complete even if some fail
         const batchPromises = concurrentBatches.map(async (batch) => {
           try {
             const result = await analyzeSelectedContacts(batch, organizationId);
@@ -446,8 +448,8 @@ async function executeBackgroundAnalysis(
           }
         });
 
-        // Wait for all batches in this group to complete
-        await Promise.all(batchPromises);
+        // Wait for all batches in this group to complete (allSettled ensures all complete even if some fail)
+        await Promise.allSettled(batchPromises);
         
         // Final update after batch group
         await updateProgress(true);

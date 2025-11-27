@@ -111,7 +111,7 @@ export async function syncContacts(facebookPageId: string): Promise<SyncResult> 
 
   // Initialize concurrency limiters for batch processing (30-50 concurrent jobs)
   const messageFetchLimiter = new ConcurrencyLimiter(50);
-  const analysisLimiter = new ConcurrencyLimiter(50);
+  const analysisLimiter = new ConcurrencyLimiter(100); // Increased to 100 to maximize parallel processing with 20 API keys
 
   // Sync Messenger contacts
   try {

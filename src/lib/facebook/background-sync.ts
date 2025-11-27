@@ -465,7 +465,7 @@ async function executeBackgroundSync(jobId: string, facebookPageId: string): Pro
 
       // Initialize concurrency limiters
       const messageFetchLimiter = new ConcurrencyLimiter(50);
-      const analysisLimiter = new ConcurrencyLimiter(50);
+      const analysisLimiter = new ConcurrencyLimiter(100); // Increased to 100 to maximize parallel processing with 20 API keys
 
       // Process in batches to update progress incrementally
       const BATCH_SIZE = 50; // Process 50 contacts at a time
@@ -839,7 +839,7 @@ async function executeBackgroundSync(jobId: string, facebookPageId: string): Pro
 
         // Initialize concurrency limiters for Instagram
         const igMessageFetchLimiter = new ConcurrencyLimiter(50);
-        const igAnalysisLimiter = new ConcurrencyLimiter(50);
+        const igAnalysisLimiter = new ConcurrencyLimiter(100); // Increased to 100 to maximize parallel processing with 20 API keys
 
         // Process in batches to update progress incrementally
         const IG_BATCH_SIZE = 50; // Process 50 contacts at a time

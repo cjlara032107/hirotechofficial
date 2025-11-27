@@ -64,59 +64,78 @@ export async function POST(request: NextRequest) {
     // Generate personalized messages for each contact
     const aiService = new GoogleAIService();
     const aiMessagesMap: Record<string, string> = {};
-    const BATCH_SIZE = 3; // Process 3 at a time to avoid rate limits
-
-    for (let i = 0; i < contacts.length; i += BATCH_SIZE) {
-      const batch = contacts.slice(i, i + BATCH_SIZE);
-      
-      const batchPromises = batch.map(async (contact) => {
-        try {
-          // Get conversation history
-          const allMessages: Array<{ from: string; message: string; timestamp: string }> = [];
-          
-          for (const conversation of contact.conversations) {
-            for (const message of conversation.messages) {
-              allMessages.push({
-                from: message.isFromBusiness ? 'Business' : contact.firstName,
-                message: message.content,
-                timestamp: message.createdAt.toISOString(),
-              });
-            }
-          }
-
-          // Sort by timestamp (most recent first) and take last 10
-          const conversationHistory = allMessages
-            .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
-            .slice(0, 10)
-            .reverse(); // Reverse to show chronological order
-
-          const context = {
-            contactName: contact.firstName,
-            conversationHistory,
-            templateMessage: finalTemplateMessage,
-            customInstructions: customInstructions || undefined,
-          };
-
-          const personalizedMessage = await aiService.generatePersonalizedMessage(context);
-          aiMessagesMap[contact.id] = personalizedMessage;
-        } catch (error) {
-          console.error(`[AI Generation] Failed for contact ${contact.id}:`, error);
-          // Fallback to template with variable replacement
-          const fallbackMessage = finalTemplateMessage
-            .replace(/\{firstName\}/g, contact.firstName)
-            .replace(/\{lastName\}/g, contact.lastName || '')
-            .replace(/\{name\}/g, `${contact.firstName} ${contact.lastName || ''}`.trim());
-          aiMessagesMap[contact.id] = fallbackMessage;
+    
+    // Concurrency limiter to utilize all 20 API keys in parallel
+    class ConcurrencyLimiter {
+      private queue: Array<{ fn: () => Promise<unknown>; resolve: (value: unknown) => void; reject: (error: unknown) => void }> = [];
+      private running = 0;
+      constructor(private limit: number) {}
+      async execute<T>(fn: () => Promise<T>): Promise<T> {
+        return new Promise<T>((resolve, reject) => {
+          this.queue.push({ fn: fn as () => Promise<unknown>, resolve: resolve as (value: unknown) => void, reject: reject as (error: unknown) => void });
+          this.process();
+        });
+      }
+      private async process() {
+        while (this.running < this.limit && this.queue.length > 0) {
+          const task = this.queue.shift();
+          if (!task) break;
+          this.running++;
+          task.fn().then(task.resolve).catch(task.reject).finally(() => {
+            this.running--;
+            this.process();
+          });
         }
-      });
-
-      await Promise.all(batchPromises);
-      
-      // Rate limit delay between batches (reduced for faster generation)
-      if (i + BATCH_SIZE < contacts.length) {
-        await new Promise((resolve) => setTimeout(resolve, 500));
       }
     }
+    
+    const messageGenerationLimiter = new ConcurrencyLimiter(50); // Increased to 50 to utilize all 20 API keys
+
+    // Process all contacts in parallel with concurrency limit
+    await Promise.all(
+      contacts.map(async (contact) => {
+        return messageGenerationLimiter.execute(async () => {
+          try {
+            // Get conversation history
+            const allMessages: Array<{ from: string; message: string; timestamp: string }> = [];
+            
+            for (const conversation of contact.conversations) {
+              for (const message of conversation.messages) {
+                allMessages.push({
+                  from: message.isFromBusiness ? 'Business' : contact.firstName,
+                  message: message.content,
+                  timestamp: message.createdAt.toISOString(),
+                });
+              }
+            }
+
+            // Sort by timestamp (most recent first) and take last 10
+            const conversationHistory = allMessages
+              .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
+              .slice(0, 10)
+              .reverse(); // Reverse to show chronological order
+
+            const context = {
+              contactName: contact.firstName,
+              conversationHistory,
+              templateMessage: finalTemplateMessage,
+              customInstructions: customInstructions || undefined,
+            };
+
+            const personalizedMessage = await aiService.generatePersonalizedMessage(context);
+            aiMessagesMap[contact.id] = personalizedMessage;
+          } catch (error) {
+            console.error(`[AI Generation] Failed for contact ${contact.id}:`, error);
+            // Fallback to template with variable replacement
+            const fallbackMessage = finalTemplateMessage
+              .replace(/\{firstName\}/g, contact.firstName)
+              .replace(/\{lastName\}/g, contact.lastName || '')
+              .replace(/\{name\}/g, `${contact.firstName} ${contact.lastName || ''}`.trim());
+            aiMessagesMap[contact.id] = fallbackMessage;
+          }
+        });
+      })
+    );
 
     return NextResponse.json({
       aiMessagesMap,
