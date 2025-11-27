@@ -373,6 +373,15 @@ async function executeInstantSync(jobId: string, facebookPageId: string, userId:
     let heartbeatInterval: NodeJS.Timeout | null = null;
     let streamTimeout: NodeJS.Timeout | null = null;
     
+    // OPTIMIZATION: Parallel batch processing - queue batches and process multiple simultaneously
+    // Connection pool analysis:
+    // - Total connections: 25
+    // - Each batch uses: ~2 connections (1 for transaction, 1 for findMany query)
+    // - Leave 5 connections for other operations (progress updates, queries, etc.)
+    // - Available for batches: 20 connections
+    // - Safe limit: 10 batches in parallel (uses ~20 connections, leaves 5 for safety)
+    const batchProcessor = new ConcurrencyLimiter(10); // Process 10 batches in parallel (max safe limit)
+    
     try {
       console.log(`[Instant Sync ${jobId}] Streaming Messenger conversations...`);
       
@@ -465,8 +474,8 @@ async function executeInstantSync(jobId: string, facebookPageId: string, userId:
           }
         }
         
-        // OPTIMIZATION: Process contacts in batches during streaming (every 50 conversations)
-        // This allows contacts to appear immediately instead of waiting for all conversations
+        // OPTIMIZATION: Process contacts in batches during streaming (every 100 conversations)
+        // OPTIMIZATION: Queue batches for parallel processing instead of waiting
         if (conversationCount % PROCESS_BATCH_SIZE === 0 && participantMap.size > 0) {
           // Check for cancellation before processing batch
           if (await isJobCancelled(jobId)) {
@@ -480,17 +489,22 @@ async function executeInstantSync(jobId: string, facebookPageId: string, userId:
           const remainingCount = participantMap.size; // Store before clearing
           participantMap.clear(); // Clear processed participants
           
-          await processContactBatch(batchToProcess, 'Messenger');
-          
-          // OPTIMIZATION: Truly non-blocking progress update (fire and forget)
-          // Update progress (non-blocking) - use remainingCount before clearing
-          prisma.syncJob.update({
-            where: { id: jobId },
-            data: {
-              syncedContacts: contactsStored,
-              totalContacts: contactsStored + remainingCount, // Use count before clearing
-            },
-          }).catch(() => {}); // Silently fail - progress updates are not critical
+          // OPTIMIZATION: Queue batch for parallel processing (don't wait)
+          batchProcessor.execute(async () => {
+            await processContactBatch(batchToProcess, 'Messenger');
+            
+            // OPTIMIZATION: Truly non-blocking progress update (fire and forget)
+            // Update progress (non-blocking) - use remainingCount before clearing
+            prisma.syncJob.update({
+              where: { id: jobId },
+              data: {
+                syncedContacts: contactsStored,
+                totalContacts: contactsStored + remainingCount, // Use count before clearing
+              },
+            }).catch(() => {}); // Silently fail - progress updates are not critical
+          }).catch(err => {
+            console.error(`[Instant Sync ${jobId}] Batch processing error:`, err);
+          });
           
           lastProgressUpdate = Date.now();
         } else if (conversationCount % PROGRESS_UPDATE_INTERVAL === 0 || Date.now() - lastProgressUpdate > 5000) {
@@ -516,6 +530,10 @@ async function executeInstantSync(jobId: string, facebookPageId: string, userId:
       if (streamTimeout) clearTimeout(streamTimeout);
       
       console.log(`[Instant Sync ${jobId}] Fetched ${conversationCount} Messenger conversations`);
+
+      // OPTIMIZATION: Wait for all queued batches to complete before processing remaining
+      // This ensures all parallel batches finish before final batch
+      await new Promise(resolve => setTimeout(resolve, 200));
 
       // Process any remaining participants
       if (participantMap.size > 0) {
@@ -605,23 +623,29 @@ async function executeInstantSync(jobId: string, facebookPageId: string, userId:
             }
           }
           
-          // OPTIMIZATION: Process contacts in batches during streaming (every 50 conversations)
+          // OPTIMIZATION: Process contacts in batches during streaming (every 100 conversations)
+          // OPTIMIZATION: Queue batches for parallel processing instead of waiting
           if (igConversationCount % IG_PROCESS_BATCH_SIZE === 0 && igParticipantMap.size > 0) {
             const batchToProcess = Array.from(igParticipantMap.entries());
             const remainingCount = igParticipantMap.size; // Store before clearing
             igParticipantMap.clear(); // Clear processed participants
             
-            await processContactBatch(batchToProcess, 'Instagram');
-            
-            // OPTIMIZATION: Truly non-blocking progress update (fire and forget)
-            // Update progress (non-blocking) - use remainingCount before clearing
-            prisma.syncJob.update({
-              where: { id: jobId },
-              data: {
-                syncedContacts: contactsStored,
-                totalContacts: contactsStored + remainingCount, // Use count before clearing
-              },
-            }).catch(() => {}); // Silently fail - progress updates are not critical
+            // OPTIMIZATION: Queue batch for parallel processing (don't wait)
+            batchProcessor.execute(async () => {
+              await processContactBatch(batchToProcess, 'Instagram');
+              
+              // OPTIMIZATION: Truly non-blocking progress update (fire and forget)
+              // Update progress (non-blocking) - use remainingCount before clearing
+              prisma.syncJob.update({
+                where: { id: jobId },
+                data: {
+                  syncedContacts: contactsStored,
+                  totalContacts: contactsStored + remainingCount, // Use count before clearing
+                },
+              }).catch(() => {}); // Silently fail - progress updates are not critical
+            }).catch(err => {
+              console.error(`[Instant Sync ${jobId}] Instagram batch processing error:`, err);
+            });
             
             lastIgProgressUpdate = Date.now();
           } else if (igConversationCount % IG_PROGRESS_UPDATE_INTERVAL === 0 || Date.now() - lastIgProgressUpdate > 5000) {
@@ -642,6 +666,10 @@ async function executeInstantSync(jobId: string, facebookPageId: string, userId:
         }
         
         console.log(`[Instant Sync ${jobId}] Fetched ${igConversationCount} Instagram conversations`);
+
+        // OPTIMIZATION: Wait for all queued batches to complete before processing remaining
+        // This ensures all parallel batches finish before final batch
+        await new Promise(resolve => setTimeout(resolve, 200));
 
         // Process any remaining Instagram participants
         if (igParticipantMap.size > 0) {
