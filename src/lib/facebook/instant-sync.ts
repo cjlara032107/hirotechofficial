@@ -80,8 +80,9 @@ async function executeInstantSync(jobId: string, facebookPageId: string, userId:
   const startTime = Date.now();
   
   try {
-    // Update job status to in progress with initial progress
-    await prisma.syncJob.update({
+    // OPTIMIZATION: Non-blocking initial status update - start syncing immediately
+    // Update job status to in progress (fire and forget - don't wait)
+    prisma.syncJob.update({
       where: { id: jobId },
       data: {
         status: 'IN_PROGRESS',
@@ -89,7 +90,7 @@ async function executeInstantSync(jobId: string, facebookPageId: string, userId:
         syncedContacts: 0,
         totalContacts: 0, // Will be updated as we discover contacts
       },
-    });
+    }).catch(() => {}); // Silently fail - don't block on initial update
 
     console.log(`[Instant Sync ${jobId}] 🚀 Starting instant sync execution...`);
 
@@ -388,16 +389,9 @@ async function executeInstantSync(jobId: string, facebookPageId: string, userId:
       let lastProgressUpdate = Date.now();
       let lastConversationTime = Date.now(); // Track when we last received a conversation
       
-      // Initial progress update to show we're actively fetching
-      await prisma.syncJob.update({
-        where: { id: jobId },
-        data: {
-          syncedContacts: 0,
-          totalContacts: 0,
-        },
-      }).catch(err => console.error(`[Instant Sync ${jobId}] Failed to update initial progress:`, err));
-      
-      console.log(`[Instant Sync ${jobId}] Starting to stream conversations...`);
+      // OPTIMIZATION: Skip initial progress update - start streaming immediately
+      // No need to wait for database update before starting sync
+      console.log(`[Instant Sync ${jobId}] Starting to stream conversations immediately...`);
       
       // OPTIMIZATION: Reduced heartbeat frequency to reduce database overhead
       // Heartbeat mechanism: Update progress every 60 seconds even if no conversations processed
@@ -450,15 +444,9 @@ async function executeInstantSync(jobId: string, facebookPageId: string, userId:
           break;
         }
         
-        // Update progress immediately on first conversation to show activity
+        // OPTIMIZATION: Skip blocking progress update on first conversation
+        // Just log - don't wait for database update
         if (conversationCount === 1) {
-          prisma.syncJob.update({
-            where: { id: jobId },
-            data: {
-              syncedContacts: 0,
-              totalContacts: 0,
-            },
-          }).catch(err => console.error(`[Instant Sync ${jobId}] Failed to update first conversation progress:`, err));
           console.log(`[Instant Sync ${jobId}] ✅ Started streaming conversations...`);
         }
         
@@ -534,23 +522,25 @@ async function executeInstantSync(jobId: string, facebookPageId: string, userId:
         const remaining = Array.from(participantMap.entries());
         await processContactBatch(remaining, 'Messenger');
         
-        // Update progress after final batch
-        await prisma.syncJob.update({
+        // OPTIMIZATION: Non-blocking final progress update
+        // Update progress after final batch (fire and forget)
+        prisma.syncJob.update({
           where: { id: jobId },
           data: {
             syncedContacts: contactsStored,
             totalContacts: contactsStored,
           },
-        }).catch(err => console.error(`[Instant Sync ${jobId}] Failed to update final progress:`, err));
+        }).catch(() => {}); // Silently fail - don't block
       } else {
-        // Update progress even if no remaining participants
-        await prisma.syncJob.update({
+        // OPTIMIZATION: Non-blocking progress update
+        // Update progress even if no remaining participants (fire and forget)
+        prisma.syncJob.update({
           where: { id: jobId },
           data: {
             syncedContacts: contactsStored,
             totalContacts: contactsStored,
           },
-        }).catch(err => console.error(`[Instant Sync ${jobId}] Failed to update final progress:`, err));
+        }).catch(() => {}); // Silently fail - don't block
       }
 
       console.log(`[Instant Sync ${jobId}] ✅ Stored ${contactsStored} Messenger contacts`);
@@ -658,23 +648,25 @@ async function executeInstantSync(jobId: string, facebookPageId: string, userId:
           const remaining = Array.from(igParticipantMap.entries());
           await processContactBatch(remaining, 'Instagram');
           
-          // Update progress after final batch
-          await prisma.syncJob.update({
+          // OPTIMIZATION: Non-blocking final progress update
+          // Update progress after final batch (fire and forget)
+          prisma.syncJob.update({
             where: { id: jobId },
             data: {
               syncedContacts: contactsStored,
               totalContacts: contactsStored,
             },
-          }).catch(err => console.error(`[Instant Sync ${jobId}] Failed to update final Instagram progress:`, err));
+          }).catch(() => {}); // Silently fail - don't block
         } else {
-          // Update progress even if no remaining participants
-          await prisma.syncJob.update({
+          // OPTIMIZATION: Non-blocking progress update
+          // Update progress even if no remaining participants (fire and forget)
+          prisma.syncJob.update({
             where: { id: jobId },
             data: {
               syncedContacts: contactsStored,
               totalContacts: contactsStored,
             },
-          }).catch(err => console.error(`[Instant Sync ${jobId}] Failed to update final Instagram progress:`, err));
+          }).catch(() => {}); // Silently fail - don't block
         }
 
         console.log(`[Instant Sync ${jobId}] ✅ Stored ${contactsStored} total contacts (including Instagram)`);
