@@ -444,16 +444,24 @@ async function executePipelineAnalysis(jobId: string, facebookPageId: string): P
       }
     }
 
-    // Query contacts without pipelineId for this page (with retry)
-    const contactsWithoutPipeline = await withRetry(() => prisma.contact.findMany({
-      where: {
-        facebookPageId: page.id,
-        pipelineId: null,
-        OR: [
-          { messengerPSID: { not: null } },
-          { instagramSID: { not: null } },
-        ],
-      },
+    // Query contacts for this page based on update mode
+    // UPDATE_EXISTING: Process ALL contacts (including those already assigned)
+    // SKIP_EXISTING: Only process contacts without pipeline (default)
+    const whereClause: any = {
+      facebookPageId: page.id,
+      OR: [
+        { messengerPSID: { not: null } },
+        { instagramSID: { not: null } },
+      ],
+    };
+    
+    // Only filter by pipelineId if mode is SKIP_EXISTING
+    if (page.autoPipelineMode === 'SKIP_EXISTING') {
+      whereClause.pipelineId = null;
+    }
+    
+    const contactsToAnalyze = await withRetry(() => prisma.contact.findMany({
+      where: whereClause,
       select: {
         id: true,
         messengerPSID: true,
@@ -464,14 +472,17 @@ async function executePipelineAnalysis(jobId: string, facebookPageId: string): P
       },
     }));
 
-    console.log(`[Pipeline Analysis ${jobId}] Found ${contactsWithoutPipeline.length} contacts without pipeline`);
+    const modeDescription = page.autoPipelineMode === 'UPDATE_EXISTING' 
+      ? 'all contacts (UPDATE_EXISTING mode)' 
+      : 'contacts without pipeline (SKIP_EXISTING mode)';
+    console.log(`[Pipeline Analysis ${jobId}] Found ${contactsToAnalyze.length} ${modeDescription}`);
     
     // Log contact statistics for debugging
-    const contactsWithMessengerPSID = contactsWithoutPipeline.filter(c => c.messengerPSID).length;
-    const contactsWithInstagramSID = contactsWithoutPipeline.filter(c => c.instagramSID).length;
+    const contactsWithMessengerPSID = contactsToAnalyze.filter(c => c.messengerPSID).length;
+    const contactsWithInstagramSID = contactsToAnalyze.filter(c => c.instagramSID).length;
     console.log(`[Pipeline Analysis ${jobId}] Contact breakdown: ${contactsWithMessengerPSID} with Messenger PSID, ${contactsWithInstagramSID} with Instagram SID`);
 
-    if (contactsWithoutPipeline.length === 0) {
+    if (contactsToAnalyze.length === 0) {
       await withRetry(() => prisma.syncJob.update({
         where: { id: jobId },
         data: {
@@ -490,7 +501,7 @@ async function executePipelineAnalysis(jobId: string, facebookPageId: string): P
     await withRetry(() => prisma.syncJob.update({
       where: { id: jobId },
       data: {
-        totalContacts: contactsWithoutPipeline.length,
+        totalContacts: contactsToAnalyze.length,
       },
     }));
 
@@ -503,11 +514,11 @@ async function executePipelineAnalysis(jobId: string, facebookPageId: string): P
     // For 2227 contacts: 2 min + (2227 * 20ms) = 2 min + 44 sec = ~3 minutes
     const dynamicTimeout = Math.min(
       5 * 60 * 1000, // Max 5 minutes
-      (2 * 60 * 1000) + (contactsWithoutPipeline.length * 20) // Base 2 min + 20ms per contact
+      (2 * 60 * 1000) + (contactsToAnalyze.length * 20) // Base 2 min + 20ms per contact
     );
     const timeoutMinutes = Math.ceil(dynamicTimeout / 60000);
     
-    console.log(`[Pipeline Analysis ${jobId}] Using ${timeoutMinutes}-minute timeout for ${contactsWithoutPipeline.length} contacts`);
+    console.log(`[Pipeline Analysis ${jobId}] Using ${timeoutMinutes}-minute timeout for ${contactsToAnalyze.length} contacts`);
     
     try {
       messengerConvos = await Promise.race([
@@ -558,8 +569,8 @@ async function executePipelineAnalysis(jobId: string, facebookPageId: string): P
     console.log(`[Pipeline Analysis ${jobId}] Mapped ${messengerConversationMap.size} unique Messenger participants to conversations`);
     
     // Diagnostic: Check if we have enough conversations for the contacts
-    if (contactsWithoutPipeline.length > 0 && messengerConversationMap.size < contactsWithoutPipeline.length * 0.1) {
-      console.warn(`[Pipeline Analysis ${jobId}] ⚠️ WARNING: Only ${messengerConversationMap.size} conversations mapped for ${contactsWithoutPipeline.length} contacts (${((messengerConversationMap.size / contactsWithoutPipeline.length) * 100).toFixed(1)}% coverage)`);
+    if (contactsToAnalyze.length > 0 && messengerConversationMap.size < contactsToAnalyze.length * 0.1) {
+      console.warn(`[Pipeline Analysis ${jobId}] ⚠️ WARNING: Only ${messengerConversationMap.size} conversations mapped for ${contactsToAnalyze.length} contacts (${((messengerConversationMap.size / contactsToAnalyze.length) * 100).toFixed(1)}% coverage)`);
       console.warn(`[Pipeline Analysis ${jobId}] This suggests conversation fetching may have been incomplete. Many contacts will fail.`);
     }
     
@@ -609,7 +620,7 @@ async function executePipelineAnalysis(jobId: string, facebookPageId: string): P
     const conversationFetchLimiter = new ConcurrencyLimiter(50); // Increased to 50 for maximum parallel fetching
     const analysisLimiter = new ConcurrencyLimiter(100); // Fast mode is instant, can handle very high concurrency
     
-    console.log(`[Pipeline Analysis ${jobId}] Processing ${contactsWithoutPipeline.length} contacts continuously...`);
+    console.log(`[Pipeline Analysis ${jobId}] Processing ${contactsToAnalyze.length} contacts continuously...`);
 
     // Batch database updates for efficiency (larger batches for maximum throughput)
     // Fast mode makes analysis instant, so we can process much larger batches
@@ -653,7 +664,7 @@ async function executePipelineAnalysis(jobId: string, facebookPageId: string): P
 
     // Process all contacts in one continuous flow
     await Promise.all(
-      contactsWithoutPipeline.map(async (contact) => {
+      contactsToAnalyze.map(async (contact) => {
         // Check for cancellation periodically
         if (await isJobCancelled(jobId)) {
           return;
@@ -851,7 +862,7 @@ async function executePipelineAnalysis(jobId: string, facebookPageId: string): P
           const currentCount = ++analyzedCount;
 
           // Update progress more frequently (every 3 contacts for small jobs, every 10 for large) - non-blocking fire-and-forget
-          const progressInterval = contactsWithoutPipeline.length <= 50 ? 3 : 10;
+          const progressInterval = contactsToAnalyze.length <= 50 ? 3 : 10;
           if (currentCount % progressInterval === 0) {
             // Fire-and-forget: don't await, don't block contact processing
             prisma.syncJob.update({
@@ -879,7 +890,7 @@ async function executePipelineAnalysis(jobId: string, facebookPageId: string): P
           });
           
           // Update progress more frequently (every 3 failures for small jobs, every 10 for large) - non-blocking fire-and-forget
-          const progressInterval = contactsWithoutPipeline.length <= 50 ? 3 : 10;
+          const progressInterval = contactsToAnalyze.length <= 50 ? 3 : 10;
           if (currentFailedCount % progressInterval === 0) {
             // Fire-and-forget: don't await, don't block contact processing
             prisma.syncJob.update({
