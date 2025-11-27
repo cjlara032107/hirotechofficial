@@ -109,6 +109,16 @@ async function sendMessageDirect(data: {
       const errorDetails = 'error' in result ? result.error : 'Failed to send message';
       const errorMessage = 'message' in result ? result.message : errorDetails;
       
+      // Log detailed error for debugging
+      console.error(`[Campaign Send] Message failed:`, {
+        contactId,
+        recipientId,
+        platform,
+        error: errorDetails,
+        message: errorMessage,
+        code: 'code' in result ? result.code : undefined,
+      });
+      
       await prisma.message.create({
         data: {
           content,
@@ -123,30 +133,17 @@ async function sendMessageDirect(data: {
         },
       });
 
-    // Update failedCount atomically
-    try {
-      await prisma.campaign.update({
-        where: { id: campaignId },
-        data: { failedCount: { increment: 1 } },
-      });
-    } catch (error) {
-      console.error(`Failed to update failedCount for campaign ${campaignId}:`, error);
-    }
-
-    const errorDetails = 'error' in result ? result.error : 'Unknown error';
-    const errorMessage = 'message' in result ? result.message : errorDetails;
+      // Update failedCount atomically
+      try {
+        await prisma.campaign.update({
+          where: { id: campaignId },
+          data: { failedCount: { increment: 1 } },
+        });
+      } catch (error) {
+        console.error(`Failed to update failedCount for campaign ${campaignId}:`, error);
+      }
     
-    // Log detailed error for debugging
-    console.error(`[Campaign Send] Message failed:`, {
-      contactId,
-      recipientId,
-      platform,
-      error: errorDetails,
-      message: errorMessage,
-      code: 'code' in result ? result.code : undefined,
-    });
-    
-    return { success: false, error: errorDetails, message: errorMessage };
+      return { success: false, error: errorDetails, message: errorMessage };
     }
   } catch (error: any) {
     await prisma.message.create({
