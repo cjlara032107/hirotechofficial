@@ -3,7 +3,6 @@ import { FacebookClient } from './client';
 import { analyzeWithFallback } from '@/lib/ai/enhanced-analysis';
 import { analyzeConversation } from '@/lib/ai/google-ai-service';
 import { autoAssignContactToPipeline } from '@/lib/pipelines/auto-assign';
-import { extractContactInfo } from '@/lib/ai/contact-info-extraction';
 import { analyzeReplyTimes } from '@/lib/ai/reply-time-analyzer';
 
 /**
@@ -119,7 +118,7 @@ export async function analyzeSelectedContacts(
     console.log(`[Analyze Selected] Contact ID to fetch: ${contactIds[0]}`);
   }
 
-  // Fetch contacts with their Facebook page info (including contactInfo for optimization)
+  // Fetch contacts with their Facebook page info
   const contacts = await prisma.contact.findMany({
     where: {
       id: { in: contactIds },
@@ -132,7 +131,6 @@ export async function analyzeSelectedContacts(
       firstName: true,
       lastName: true,
       lastInteraction: true,
-      contactInfo: true,
       aiContext: true,
       aiContextUpdatedAt: true,
       facebookPageId: true,
@@ -292,7 +290,6 @@ export async function analyzeSelectedContacts(
     // Optimized concurrency: Higher for fetching, increased for AI to utilize 20 API keys in parallel
     const conversationFetchLimiter = new ConcurrencyLimiter(200); // Very high concurrency for fetching (no API limits)
     const analysisLimiter = new ConcurrencyLimiter(100); // Increased to 100 to maximize parallel processing with 20 API keys
-    const contactInfoLimiter = new ConcurrencyLimiter(50); // Increased to 50 to utilize more keys for contact info extraction
 
     console.log(`[Analyze Selected] Processing ${pageContacts.length} contacts continuously...`);
     batchStartTime = Date.now();
@@ -352,54 +349,21 @@ export async function analyzeSelectedContacts(
             return;
           }
 
-          // Step 3.5: Extract contact information and analyze reply times (parallel)
-          // OPTIMIZATION: Skip contact info extraction if contact already has data (saves 5-10s per contact)
-          const shouldExtractContactInfo = !contact.contactInfo || 
-            (typeof contact.contactInfo === 'object' && contact.contactInfo !== null && Object.keys(contact.contactInfo).length === 0);
-          
-          const [contactInfo, replyTimeAnalysis] = await Promise.all([
-            // Extract comprehensive contact information (only if needed)
-            shouldExtractContactInfo 
-              ? contactInfoLimiter.execute(async () => {
-                  try {
-                    const info = await extractContactInfo(messagesToAnalyze);
-                    if (info && Object.keys(info).length > 0) {
-                      console.log(`[Analyze Selected] ✅ Successfully extracted contact info for ${contact.id}`);
-                      const extractedFields = Object.keys(info).filter(key => {
-                        const value = info[key as keyof typeof info];
-                        if (Array.isArray(value)) return value.length > 0;
-                        if (typeof value === 'object' && value !== null) return Object.keys(value).length > 0;
-                        return value !== null && value !== undefined;
-                      });
-                      if (extractedFields.length > 0) {
-                        console.log(`[Analyze Selected] Extracted fields: ${extractedFields.join(', ')}`);
-                      }
-                    }
-                    return info;
-                  } catch (error) {
-                    const errorMessage = error instanceof Error ? error.message : String(error);
-                    console.warn(`[Analyze Selected] Failed to extract contact info for ${contact.id}:`, errorMessage);
-                    // Don't fail the entire analysis if contact info extraction fails
-                    return null;
-                  }
-                })
-              : Promise.resolve(null), // Skip if already has recent data
-            // Analyze reply times for best contact times (synchronous, no API calls)
-            (() => {
-              try {
-                const analysis = analyzeReplyTimes(messagesToAnalyze, page.pageId);
-                if (analysis) {
-                  console.log(`[Analyze Selected] Successfully analyzed reply times for ${contact.id}`);
-                }
-                return analysis;
-              } catch (error) {
-                const errorMessage = error instanceof Error ? error.message : String(error);
-                console.warn(`[Analyze Selected] Failed to analyze reply times for ${contact.id}:`, errorMessage);
-                // Don't fail the entire analysis if reply time analysis fails
-                return null;
+          // Step 3.5: Analyze reply times for best contact times (synchronous, no API calls)
+          const replyTimeAnalysis = (() => {
+            try {
+              const analysis = analyzeReplyTimes(messagesToAnalyze, page.pageId);
+              if (analysis) {
+                console.log(`[Analyze Selected] Successfully analyzed reply times for ${contact.id}`);
               }
-            })(),
-          ]);
+              return analysis;
+            } catch (error) {
+              const errorMessage = error instanceof Error ? error.message : String(error);
+              console.warn(`[Analyze Selected] Failed to analyze reply times for ${contact.id}:`, errorMessage);
+              // Don't fail the entire analysis if reply time analysis fails
+              return null;
+            }
+          })();
 
           // Step 4: Analyze with AI (concurrency limited)
           // OPTIMIZATION: Skip AI analysis if contact already has recent analysis (saves 5-10s per contact)
@@ -459,44 +423,16 @@ export async function analyzeSelectedContacts(
             throw new Error('Analysis failed');
           }
 
-          // Step 5: Update contact with AI context, contact info, and best contact times
+          // Step 5: Update contact with AI context and best contact times
           try {
             // Build update data - only include new fields if they exist in database
-            // CRITICAL: More thorough check - ensure object has meaningful data, not just keys
-            const hasContactInfo = !!contactInfo && (() => {
-              if (typeof contactInfo !== 'object' || contactInfo === null) return false;
-              const info = contactInfo as Record<string, unknown>;
-              
-              // Check if any field has actual data
-              const hasAge = info.age !== null && info.age !== undefined && typeof info.age === 'number';
-              const hasArrays = ['phoneNumbers', 'emails', 'businessNames', 'pageLinks', 
-                'facebookPages', 'locations', 'occupations', 'companies', 'websites'].some(field => {
-                const value = info[field];
-                return Array.isArray(value) && value.length > 0;
-              });
-              const hasSingles = ['phoneNumber', 'email', 'facebookPage', 'location', 
-                'occupation', 'company', 'website'].some(field => {
-                const value = info[field];
-                return value !== null && value !== undefined && value !== '';
-              });
-              const hasSocial = info.socialMedia && typeof info.socialMedia === 'object' && 
-                Object.values(info.socialMedia).some(v => v !== null && v !== undefined && v !== '' && 
-                  (Array.isArray(v) ? v.length > 0 : true));
-              const hasOther = info.otherInfo && typeof info.otherInfo === 'object' && 
-                Object.keys(info.otherInfo).length > 0;
-              
-              return hasAge || hasArrays || hasSingles || hasSocial || hasOther;
-            })();
             const hasBestContactTimes = !!replyTimeAnalysis;
             const updateData: any = {
               aiContext: analysis.summary,
               aiContextUpdatedAt: new Date(),
             };
 
-            // Only add new fields if they have values (will fail gracefully if columns don't exist)
-            if (contactInfo) {
-              updateData.contactInfo = contactInfo;
-            }
+            // Only add best contact times if available (will fail gracefully if columns don't exist)
             if (replyTimeAnalysis) {
               updateData.bestContactTimes = replyTimeAnalysis;
             }
@@ -506,10 +442,7 @@ export async function analyzeSelectedContacts(
               data: updateData,
             });
             
-            // Log success if contactInfo was saved
-            if (hasContactInfo) {
-              console.log(`[Analyze Selected] ✅ Successfully saved contact info for ${contact.id}`);
-            }
+            // Log success if bestContactTimes was saved
             if (hasBestContactTimes) {
               console.log(`[Analyze Selected] ✅ Successfully saved best contact times for ${contact.id}`);
             }
@@ -526,14 +459,7 @@ export async function analyzeSelectedContacts(
             if (dbErrorObj?.code === 'P2022' || dbErrorObj?.message?.includes('does not exist')) {
               console.warn(`[Analyze Selected] ⚠️ New columns not found in database for contact ${contact.id}, updating without them`);
               
-              // CRITICAL: Log if we're losing extracted data
-              if (contactInfo && Object.keys(contactInfo).length > 0) {
-                console.error(`[Analyze Selected] 🚨 CRITICAL: Contact info was extracted but NOT SAVED due to missing database column!`);
-                console.error(`[Analyze Selected] Contact ID: ${contact.id}`);
-                console.error(`[Analyze Selected] Extracted contactInfo:`, JSON.stringify(contactInfo, null, 2));
-                console.error(`[Analyze Selected] Action required: Run migration (apply-production-migration.sql) to add contactInfo column`);
-                console.error(`[Analyze Selected] Migration file: apply-production-migration.sql`);
-              }
+              // CRITICAL: Log if we're losing analyzed data
               if (replyTimeAnalysis) {
                 console.error(`[Analyze Selected] 🚨 CRITICAL: Best contact times were analyzed but NOT SAVED due to missing database column!`);
                 console.error(`[Analyze Selected] Contact ID: ${contact.id}`);
