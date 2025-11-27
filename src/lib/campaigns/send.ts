@@ -143,7 +143,7 @@ async function sendMessageDirect(data: {
         console.error(`Failed to update failedCount for campaign ${campaignId}:`, error);
       }
     
-      return { success: false, error: errorDetails, message: errorMessage };
+      return { success: false, error: errorMessage };
     }
   } catch (error: any) {
     await prisma.message.create({
