@@ -3,6 +3,7 @@ import { FacebookClient, FacebookApiError } from './client';
 import { analyzeWithFallback } from '@/lib/ai/enhanced-analysis';
 import { autoAssignContactToPipeline } from '@/lib/pipelines/auto-assign';
 import { applyStageScoreRanges } from '@/lib/pipelines/stage-analyzer';
+import { computeAndStoreBestContactTimes } from '@/lib/contacts/compute-contact-times';
 
 /**
  * Concurrency limiter utility for parallel operations
@@ -247,6 +248,11 @@ export async function syncContacts(facebookPageId: string): Promise<SyncResult> 
             });
           }
 
+          // Step 6: Compute best contact times (non-blocking, runs in background)
+          computeAndStoreBestContactTimes(savedContact.id).catch((error) => {
+            console.error(`[BestContactTimes] Failed to compute for contact ${savedContact.id}:`, error);
+          });
+
           syncedCount++;
         } catch (error: unknown) {
           failedCount++;
@@ -381,35 +387,83 @@ export async function syncContacts(facebookPageId: string): Promise<SyncResult> 
               }
             }
 
+            // Validate Instagram SID format
+            const { isValidSID, normalizeContactId, hasValidContactId } = await import('./contact-validation');
+            const normalizedId = normalizeContactId(task.participantId);
+            if (!normalizedId || !isValidSID(normalizedId)) {
+              console.warn(`[Sync] Skipping invalid Instagram SID: ${task.participantId}`);
+              failedCount++;
+              errors.push({
+                platform: 'Instagram',
+                id: task.participantId,
+                error: 'Invalid Instagram SID format',
+                code: undefined,
+              });
+              return;
+            }
+
             // Step 4: Check if contact exists by Instagram ID or Messenger PSID
             const existingContact = await prisma.contact.findFirst({
               where: {
                 OR: [
-                  { instagramSID: task.participantId, facebookPageId: page.id },
-                  { messengerPSID: task.participantId, facebookPageId: page.id },
+                  { instagramSID: normalizedId, facebookPageId: page.id },
+                  { messengerPSID: normalizedId, facebookPageId: page.id },
                 ],
               },
+              select: { id: true, messengerPSID: true, instagramSID: true },
             });
 
             // Step 5: Save to database (immediate - contact appears in pipeline now)
             let savedContact;
             if (existingContact) {
+              // Handle contacts with both Messenger and Instagram IDs
+              const updateData: {
+                instagramSID: string;
+                firstName: string;
+                lastName: string | null;
+                hasInstagram: boolean;
+                lastInteraction: Date;
+                aiContext: string | null;
+                aiContextUpdatedAt: Date | null;
+                hasMessenger?: boolean;
+                messengerPSID?: string;
+              } = {
+                instagramSID: normalizedId,
+                firstName: firstName,
+                lastName: lastName,
+                hasInstagram: true,
+                lastInteraction: new Date(task.updatedTime),
+                aiContext: aiContext,
+                aiContextUpdatedAt: aiContext ? new Date() : null,
+              };
+
+              // Preserve Messenger ID if contact already has it
+              if (existingContact.messengerPSID) {
+                updateData.hasMessenger = true;
+                updateData.messengerPSID = existingContact.messengerPSID;
+              }
+
               savedContact = await prisma.contact.update({
                 where: { id: existingContact.id },
-                data: {
-                  instagramSID: task.participantId,
-                  firstName: firstName,
-                  lastName: lastName,
-                  hasInstagram: true,
-                  lastInteraction: new Date(task.updatedTime),
-                  aiContext: aiContext,
-                  aiContextUpdatedAt: aiContext ? new Date() : null,
-                },
+                data: updateData,
               });
             } else {
+              // Ensure contact has at least one valid ID before creating
+              if (!hasValidContactId(null, normalizedId)) {
+                console.warn(`[Sync] Cannot create contact without valid ID: ${normalizedId}`);
+                failedCount++;
+                errors.push({
+                  platform: 'Instagram',
+                  id: normalizedId,
+                  error: 'Contact must have at least one valid ID',
+                  code: undefined,
+                });
+                return;
+              }
+
               savedContact = await prisma.contact.create({
                 data: {
-                  instagramSID: task.participantId,
+                  instagramSID: normalizedId,
                   firstName: firstName,
                   lastName: lastName,
                   hasInstagram: true,
@@ -433,6 +487,11 @@ export async function syncContacts(facebookPageId: string): Promise<SyncResult> 
                 console.error(`[Auto-Pipeline] Failed to assign IG contact ${savedContact.id} to pipeline:`, error);
               });
             }
+
+            // Step 7: Compute best contact times (non-blocking, runs in background)
+            computeAndStoreBestContactTimes(savedContact.id).catch((error) => {
+              console.error(`[BestContactTimes] Failed to compute for IG contact ${savedContact.id}:`, error);
+            });
 
             syncedCount++;
           } catch (error: unknown) {

@@ -5,6 +5,8 @@ import { acquireCronLock, getCronStaggerDelay } from '@/lib/cron-lock';
 import { startCampaign, getTargetContacts } from '@/lib/campaigns/send';
 import { GoogleAIService } from '@/lib/ai/google-ai-service';
 import { FacebookClient } from '@/lib/facebook/client';
+import { logJobStart, logJobProgress, logJobComplete, logJobFailure } from '@/lib/logging/job-logger';
+import { logErrorWithContext } from '@/lib/logging/error-logger';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 300; // 5 minutes max execution time
@@ -14,6 +16,10 @@ export const maxDuration = 300; // 5 minutes max execution time
  * This endpoint is called by Vercel Cron every minute
  */
 export async function GET(request: NextRequest) {
+  const jobType = 'cron-send-scheduled';
+  let jobStartTime: number | undefined;
+  let releaseLock: (() => Promise<void>) | null = null;
+  
   try {
     // Security: Verify cron secret (optional)
     const authHeader = request.headers.get('authorization');
@@ -29,7 +35,7 @@ export async function GET(request: NextRequest) {
     await new Promise(resolve => setTimeout(resolve, staggerDelay));
 
     // Acquire database lock to prevent simultaneous cron job access across instances
-    const releaseLock = await acquireCronLock('send-scheduled');
+    releaseLock = await acquireCronLock('send-scheduled');
     
     if (!releaseLock) {
       console.log('[Cron Send Scheduled] Another instance is running, skipping...');
@@ -42,6 +48,11 @@ export async function GET(request: NextRequest) {
     
     try {
       const currentTime = new Date();
+      jobStartTime = Date.now();
+      
+      await logJobStart(jobType, undefined, `Starting scheduled campaign send job at ${currentTime.toISOString()}`).catch(() => {
+        // Silently fail - logging should not break the app
+      });
       console.log('[Cron Send Scheduled] Starting at', currentTime.toISOString());
 
       // Find all campaigns that are scheduled and due to be sent (with retry for pool exhaustion)
@@ -69,6 +80,10 @@ export async function GET(request: NextRequest) {
 
     if (dueCampaigns.length === 0) {
       console.log('[Cron Send Scheduled] No campaigns due');
+      const duration = Date.now() - jobStartTime;
+      await logJobComplete(jobType, undefined, 'No campaigns due', duration, { dispatched: 0 }).catch(() => {
+        // Silently fail - logging should not break the app
+      });
       return NextResponse.json({
         success: true,
         dispatched: 0,
@@ -82,9 +97,15 @@ export async function GET(request: NextRequest) {
     let failed = 0;
     const results = [];
 
-    for (const campaign of dueCampaigns) {
+    for (let i = 0; i < dueCampaigns.length; i++) {
+      const campaign = dueCampaigns[i];
+      const progress = Math.round((i / dueCampaigns.length) * 80) + 10; // 10-90% progress
+      
       try {
         console.log(`[Cron Send Scheduled] Processing campaign: ${campaign.id} - ${campaign.name}`);
+        await logJobProgress(jobType, campaign.id, `Processing campaign: ${campaign.name}`, progress, { campaignId: campaign.id, campaignName: campaign.name }).catch(() => {
+          // Silently fail - logging should not break the app
+        });
 
         // STEP 1: Auto-fetch recipients if enabled (check if property exists for backward compatibility)
         if ('autoFetchEnabled' in campaign && campaign.autoFetchEnabled) {
@@ -127,6 +148,7 @@ export async function GET(request: NextRequest) {
         // STEP 3: AI Personalization if enabled
         let aiMessagesMap: Record<string, string> | null = null;
         
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         if ('useAiPersonalization' in campaign && (campaign as any).useAiPersonalization && targetContacts.length > 0) {
           console.log(`[Cron Send Scheduled] AI personalization for ${targetContacts.length} contacts`);
           
@@ -156,7 +178,9 @@ export async function GET(request: NextRequest) {
             where: { id: campaign.id },
             data: {
               totalRecipients: targetContacts.length,
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
               lastFetchAt: ('autoFetchEnabled' in campaign && (campaign as any).autoFetchEnabled) ? new Date() : undefined,
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
               fetchCount: ('autoFetchEnabled' in campaign && (campaign as any).autoFetchEnabled) ? { increment: 1 } : undefined,
             },
           }),
@@ -208,6 +232,17 @@ export async function GET(request: NextRequest) {
 
     console.log(`[Cron Send Scheduled] Complete: ${dispatched} dispatched, ${failed} failed`);
 
+      const duration = Date.now() - jobStartTime;
+      await logJobComplete(
+        jobType,
+        undefined,
+        `Complete: ${dispatched} dispatched, ${failed} failed`,
+        duration,
+        { dispatched, failed, results }
+      ).catch(() => {
+        // Silently fail - logging should not break the app
+      });
+
       return NextResponse.json({
         success: true,
         dispatched,
@@ -216,9 +251,28 @@ export async function GET(request: NextRequest) {
       });
     } finally {
       // Always release lock
-      await releaseLock();
+      if (releaseLock) {
+        await releaseLock();
+      }
     }
   } catch (error) {
+    const duration = jobStartTime ? Date.now() - jobStartTime : 0;
+    await logJobFailure(
+      jobType,
+      undefined,
+      'Fatal error processing scheduled campaigns',
+      error as Error,
+      { duration }
+    ).catch(() => {
+      // Silently fail - logging should not break the app
+    });
+    await logErrorWithContext(error as Error, {
+      operation: 'cron-send-scheduled',
+      metadata: { duration },
+    }).catch(() => {
+      // Silently fail - logging should not break the app
+    });
+    
     console.error('[Cron Send Scheduled] Fatal error:', error);
     const { message, status } = handlePrismaError(error, 'Failed to process scheduled campaigns');
     return NextResponse.json(
@@ -234,6 +288,7 @@ export async function GET(request: NextRequest) {
 /**
  * Auto-fetch fresh recipients from Facebook and apply tag filters
  */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 async function autoFetchRecipients(campaign: any) {
   console.log(`[Auto-Fetch] Starting for campaign ${campaign.id}`);
   
@@ -334,6 +389,7 @@ async function autoFetchRecipients(campaign: any) {
 /**
  * Generate AI personalized messages for each contact
  */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 async function generateAIMessages(campaign: any, contacts: any[]): Promise<Record<string, string>> {
   console.log(`[AI Generation] Starting for ${contacts.length} contacts`);
   
@@ -363,7 +419,10 @@ async function generateAIMessages(campaign: any, contacts: any[]): Promise<Recor
     }
   }
   
-  const messageGenerationLimiter = new ConcurrencyLimiter(50); // Increased to 50 to utilize all 20 API keys
+  // Dynamic concurrency based on number of API keys
+  const { getCachedConcurrencyLimits } = await import('@/lib/ai/dynamic-concurrency');
+  const concurrencyLimits = await getCachedConcurrencyLimits();
+  const messageGenerationLimiter = new ConcurrencyLimiter(concurrencyLimits.messageGenerationConcurrency);
 
   try {
     console.log(`[AI Generation] Processing ${contacts.length} contacts in parallel...`);
