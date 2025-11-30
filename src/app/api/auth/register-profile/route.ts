@@ -1,23 +1,23 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/db';
+import { logger } from '@/lib/utils/logger';
 
 export async function POST(request: NextRequest) {
+  let userId: string | undefined;
+  let email: string | undefined;
   try {
-    console.log('[Register Profile] === Starting Profile Creation ===');
+    logger.debug('Starting profile creation');
     
     const body = await request.json();
-    const { userId, name, email, organizationName } = body;
+    userId = body.userId;
+    email = body.email;
+    const { name, organizationName } = body;
 
-    console.log('[Register Profile] Received data:', {
-      userId,
-      name,
-      email,
-      organizationName,
-    });
+    logger.debug('Received registration data', { userId, email, hasName: !!name, hasOrg: !!organizationName });
 
     // Validate required fields
     if (!userId || !name || !email || !organizationName) {
-      console.error('[Register Profile] ❌ Missing required fields');
+      logger.warn('Missing required fields for profile registration');
       return NextResponse.json(
         { error: 'Missing required fields' },
         { status: 400 }
@@ -27,9 +27,9 @@ export async function POST(request: NextRequest) {
     // Test database connection
     try {
       await prisma.$connect();
-      console.log('[Register Profile] ✅ Database connected');
+      logger.debug('Database connected');
     } catch (dbError) {
-      console.error('[Register Profile] ❌ Database connection failed:', dbError);
+      logger.error('Database connection failed', dbError instanceof Error ? dbError : new Error(String(dbError)));
       return NextResponse.json(
         { error: 'Database connection failed' },
         { status: 500 }
@@ -37,13 +37,13 @@ export async function POST(request: NextRequest) {
     }
 
     // Check if user already exists in our database
-    console.log('[Register Profile] 🔍 Checking for existing user...');
+    logger.debug('Checking for existing user', { userId });
     const existingUser = await prisma.user.findUnique({
       where: { id: userId },
     });
 
     if (existingUser) {
-      console.log('[Register Profile] ✅ User profile already exists');
+      logger.info('User profile already exists', { userId });
       return NextResponse.json(
         {
           success: true,
@@ -67,15 +67,15 @@ export async function POST(request: NextRequest) {
     // Check if organization slug exists
     let finalSlug = slug;
     let counter = 1;
-    console.log('[Register Profile] 🔍 Checking organization slug availability...');
+    logger.debug('Checking organization slug availability', { baseSlug: slug });
     while (await prisma.organization.findUnique({ where: { slug: finalSlug } })) {
       finalSlug = `${slug}-${counter}`;
       counter++;
     }
-    console.log('[Register Profile] ✅ Organization slug:', finalSlug);
+    logger.debug('Organization slug determined', { slug: finalSlug });
 
     // Create organization and user in a transaction
-    console.log('[Register Profile] 📝 Creating organization and user profile...');
+    logger.info('Creating organization and user profile', { userId, organizationName });
     const user = await prisma.$transaction(async (tx) => {
       const organization = await tx.organization.create({
         data: {
@@ -84,7 +84,7 @@ export async function POST(request: NextRequest) {
         },
       });
 
-      console.log('[Register Profile] ✅ Organization created:', organization.id);
+      logger.debug('Organization created', { organizationId: organization.id });
 
       return await tx.user.create({
         data: {
@@ -98,8 +98,7 @@ export async function POST(request: NextRequest) {
       });
     });
 
-    console.log('[Register Profile] ✅ User profile created:', user.id);
-    console.log('[Register Profile] 🎉 Profile creation successful!');
+    logger.info('User profile created successfully', { userId: user.id, organizationId: user.organizationId });
 
     return NextResponse.json(
       {
@@ -115,7 +114,7 @@ export async function POST(request: NextRequest) {
       { status: 201 }
     );
   } catch (error) {
-    console.error('[Register Profile] 💥 Exception:', error);
+    logger.error('Profile registration exception', error instanceof Error ? error : new Error(String(error)), userId && email ? { userId, email } : {});
     return NextResponse.json(
       { 
         error: 'An error occurred during profile creation',
