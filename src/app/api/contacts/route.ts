@@ -139,13 +139,7 @@ export async function GET(request: NextRequest) {
     }
 
     // Determine orderBy based on sortBy parameter
-    type OrderByClause = 
-      | { createdAt: 'asc' | 'desc' }
-      | { firstName: 'asc' | 'desc' }
-      | { leadScore: 'asc' | 'desc' }
-      | [{ conversionProbability?: 'desc' | null }, { leadScore: 'desc' }, { lastInteraction?: 'desc' | null }];
-
-    let orderBy: OrderByClause = { createdAt: 'desc' as 'asc' | 'desc' };
+    let orderBy: any = { createdAt: 'desc' as 'asc' | 'desc' };
     if (sortBy === 'name') {
       orderBy = { firstName: sortOrder };
     } else if (sortBy === 'score') {
