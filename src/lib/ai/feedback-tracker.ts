@@ -41,11 +41,6 @@ export async function recordStageChangeFeedback(
           select: { name: true }
         } : undefined,
       },
-      include: {
-        stage: oldStageId ? {
-          select: { name: true }
-        } : undefined,
-      }
     });
 
     if (!contact) return;
