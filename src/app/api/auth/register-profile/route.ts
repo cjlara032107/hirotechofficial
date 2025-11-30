@@ -88,9 +88,9 @@ export async function POST(request: NextRequest) {
 
       return await tx.user.create({
         data: {
-          id: userId, // Use Supabase user ID
+          id: userId!, // Use Supabase user ID (validated above)
           name,
-          email,
+          email: email!,
           password: null, // No password stored in our DB - managed by Supabase
           role: 'ADMIN',
           organizationId: organization.id,
