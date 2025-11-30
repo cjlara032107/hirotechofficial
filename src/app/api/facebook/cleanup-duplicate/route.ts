@@ -26,8 +26,11 @@ export async function POST(request: NextRequest) {
     }
 
     // Find the page
-    const page = await prisma.facebookPage.findUnique({
-      where: { pageId },
+    const page = await prisma.facebookPage.findFirst({
+      where: { 
+        pageId,
+        organizationId: session.user.organizationId,
+      },
       select: {
         id: true,
         pageId: true,
