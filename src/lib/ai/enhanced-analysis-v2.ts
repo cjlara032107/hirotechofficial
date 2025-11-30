@@ -28,7 +28,7 @@ interface PipelineStage {
   leadScoreMax?: number;
 }
 
-interface EnhancedAnalysisResult {
+export interface EnhancedAnalysisResult {
   summary: string; // User-friendly summary (longer, more detailed)
   reasoning: string; // Detailed reasoning for AI context (comprehensive analysis)
   recommendedStage: string;
