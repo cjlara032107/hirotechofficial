@@ -759,8 +759,8 @@ export class FacebookClient {
 
             if (newConversations.length > 0) {
               // Mark as fetched and update local set
-              const newIds = new Set(newConversations.map((c: any) => c.id));
-              newIds.forEach(id => fetchedIds.add(id));
+              const newIds = new Set<string>(newConversations.map((c: any) => c.id as string));
+              newIds.forEach((id: string) => fetchedIds.add(id));
               this.markConversationsAsFetched(pageId, 'messenger', newIds);
               
               // Cache chunk metadata (optional, for tracking)
@@ -867,8 +867,8 @@ export class FacebookClient {
 
             if (newConversations.length > 0) {
               // Mark as fetched and update local set
-              const newIds = new Set(newConversations.map((c: any) => c.id));
-              newIds.forEach(id => fetchedIds.add(id));
+              const newIds = new Set<string>(newConversations.map((c: any) => c.id as string));
+              newIds.forEach((id: string) => fetchedIds.add(id));
               this.markConversationsAsFetched(instagramAccountId, 'instagram', newIds);
               
               // Cache chunk metadata (optional, for tracking)
