@@ -166,7 +166,7 @@ export async function getFeedbackStatistics(organizationId: string) {
     const allFeedback: StageChangeFeedback[] = [];
     contacts.forEach(contact => {
       if (Array.isArray(contact.stageChangeFeedback)) {
-        allFeedback.push(...(contact.stageChangeFeedback as StageChangeFeedback[]));
+        allFeedback.push(...(contact.stageChangeFeedback as unknown as StageChangeFeedback[]));
       }
     });
 
