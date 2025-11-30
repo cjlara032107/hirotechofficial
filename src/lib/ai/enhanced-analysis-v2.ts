@@ -951,7 +951,7 @@ export async function analyzeConversationEnhanced(
     : 0;
   
   const summary = `This contact has engaged in an active conversation spanning ${messageCount} ${messageCount === 1 ? 'message' : 'messages'}${conversationDuration > 0 ? ` over approximately ${conversationDuration} minutes` : ''}, demonstrating ${engagementLevel.toLowerCase()} engagement levels. ` +
-    `The conversation reveals a ${buyerIntent.toLowerCase().replace('_', ' ')} intent pattern with ${sentimentDetection.sentiment.toLowerCase()} sentiment, ` +
+    `The conversation reveals a ${intentDetection.intent.toLowerCase().replace('_', ' ')} intent pattern with ${sentimentDetection.sentiment.toLowerCase()} sentiment, ` +
     `${productInterests.length > 0 ? `showing interest in ${productInterests.join(', ')}. ` : 'with general product inquiry. '}` +
     `${intentSignals.rapidReplies ? 'The contact responds rapidly, indicating strong interest. ' : ''}` +
     `${intentSignals.multipleQuestions ? 'Multiple questions were asked, showing active consideration. ' : ''}` +
