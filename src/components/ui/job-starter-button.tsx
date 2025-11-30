@@ -10,7 +10,7 @@ type ButtonProps = React.ComponentProps<'button'> & VariantProps<typeof buttonVa
   asChild?: boolean;
 };
 
-interface JobStarterButtonProps extends Omit<ButtonProps, 'onClick' | 'disabled'> {
+interface JobStarterButtonProps extends Omit<ButtonProps, 'onClick' | 'disabled' | 'onError'> {
   /**
    * Function that starts a job and returns a jobId
    * Should return a Promise that resolves to a jobId string
