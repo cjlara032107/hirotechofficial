@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { auth } from '@/auth';
 import { prisma } from '@/lib/db';
 import { processAssistantMessage } from '@/lib/ai/assistant-service';
+import { logger } from '@/lib/utils/logger';
 
 /**
  * POST /api/ai-assistant/chats/[chatId]/messages
@@ -11,8 +12,10 @@ export async function POST(
   request: NextRequest,
   props: { params: Promise<{ chatId: string }> }
 ) {
+  let chatId: string | undefined;
   try {
-    const { chatId } = await props.params;
+    const params = await props.params;
+    chatId = params.chatId;
     const session = await auth();
     if (!session?.user) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
@@ -56,7 +59,7 @@ export async function POST(
     });
 
     // Build chat history for context
-    const chatHistory = chat.messages.map((msg) => ({
+    const chatHistory = chat.messages.map((msg: { role: string; content: string }) => ({
       role: msg.role.toLowerCase() as 'user' | 'assistant',
       content: msg.content,
     }));
@@ -99,13 +102,17 @@ export async function POST(
       assistantMessage,
     });
   } catch (error) {
-    console.error('Send message error:', error);
+    logger.error('Send message error', error instanceof Error ? error : new Error(String(error)), chatId ? { chatId } : {});
     return NextResponse.json(
       { error: error instanceof Error ? error.message : 'Failed to send message' },
       { status: 500 }
     );
   }
 }
+
+
+
+
 
 
 
