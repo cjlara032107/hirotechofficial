@@ -709,19 +709,19 @@ function assessLeadRisk(
   }
   
   // High ghosting probability
-  if (buyerReliability.ghostingProbability >= 60) {
+  if (buyerReliability && buyerReliability.ghostingProbability >= 60) {
     riskScore += 25;
     reasons.push('High ghosting probability');
   }
   
   // Low follow-through probability
-  if (buyerReliability.followThroughProbability < 40) {
+  if (buyerReliability && buyerReliability.followThroughProbability < 40) {
     riskScore += 20;
     reasons.push('Low follow-through probability');
   }
   
   // High item switch probability
-  if (buyerReliability.itemSwitchProbability >= 50) {
+  if (buyerReliability && buyerReliability.itemSwitchProbability >= 50) {
     riskScore += 15;
     reasons.push('May switch to different item');
   }
