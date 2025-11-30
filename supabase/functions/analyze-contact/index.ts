@@ -9,12 +9,15 @@
  * This function runs in Supabase's edge runtime with its own connection pool.
  */
 
-/// <reference types="https://esm.sh/@supabase/functions-js/src/edge-runtime.d.ts" />
-declare const Deno: {
-  env: {
-    get(key: string): string | undefined;
+import "jsr:@supabase/functions-js/edge-runtime.d.ts";
+
+declare global {
+  const Deno: {
+    env: {
+      get(key: string): string | undefined;
+    };
   };
-};
+}
 
 interface Message {
   from: string;
