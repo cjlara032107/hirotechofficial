@@ -768,8 +768,8 @@ function evaluateBotAccuracy(
 function generateSimilarLeadsInsight(
   productInterests: string[],
   buyerIntent: string,
-  buyerStyle?: EnhancedAnalysisResult['buyerStyle'],
-  conversionPath: string[]
+  conversionPath: string[],
+  buyerStyle?: EnhancedAnalysisResult['buyerStyle']
 ): string {
   const insights: string[] = [];
   
