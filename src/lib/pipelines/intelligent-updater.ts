@@ -159,7 +159,7 @@ export class IntelligentPipelineUpdater {
       // Enqueue with adjusted priority
       this.queue.set(pipeline.id, {
         pipelineId: pipeline.id,
-        priority: adjusted.adjustedPriority,
+        priority: adjusted.adjustedPriority as 'low' | 'medium' | 'high' | 'paused',
         scheduledTime: nextUpdateTime,
         activityScore,
         costBenefit,
