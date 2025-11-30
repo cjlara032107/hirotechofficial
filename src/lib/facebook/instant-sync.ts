@@ -1,8 +1,15 @@
-import { prisma } from '@/lib/db';
+import { prisma, connectPrisma } from '@/lib/db';
 import { Prisma } from '@prisma/client';
 import { FacebookClient, FacebookApiError } from './client';
 import { startBackgroundAnalysis } from './background-analysis';
 import { startPipelineAnalysis } from './pipeline-analyzer';
+import { isValidPSID, isValidSID, hasValidContactId, normalizeContactId } from './contact-validation';
+import {
+  isJobActive,
+  verifyPageExists,
+  markJobFailedDueToPageDeletion,
+} from './job-safety-checks';
+import { autoAssignBestContactTimes } from '@/lib/contacts/compute-contact-times';
 
 interface InstantSyncResult {
   success: boolean;
@@ -10,6 +17,17 @@ interface InstantSyncResult {
   message: string;
   contactsStored: number;
   aiAnalysisQueued: boolean;
+}
+
+interface FacebookMessage {
+  id?: string;
+  message?: string;
+  attachments?: unknown;
+  created_time?: string;
+  from?: {
+    id?: string;
+    name?: string;
+  };
 }
 
 /**
@@ -80,9 +98,13 @@ async function executeInstantSync(jobId: string, facebookPageId: string, userId:
   const startTime = Date.now();
   
   try {
-    // OPTIMIZATION: Non-blocking initial status update - start syncing immediately
-    // Update job status to in progress (fire and forget - don't wait)
-    prisma.syncJob.update({
+    // CRITICAL: Ensure database connection is established (required for Vercel serverless)
+    await connectPrisma();
+    
+    // CRITICAL: Update job status to IN_PROGRESS BEFORE checking if job is active
+    // We must wait for this update to complete, otherwise the job status check will fail
+    // because it will still see PENDING status
+    await prisma.syncJob.update({
       where: { id: jobId },
       data: {
         status: 'IN_PROGRESS',
@@ -90,26 +112,24 @@ async function executeInstantSync(jobId: string, facebookPageId: string, userId:
         syncedContacts: 0,
         totalContacts: 0, // Will be updated as we discover contacts
       },
-    }).catch(() => {}); // Silently fail - don't block on initial update
+    });
 
     console.log(`[Instant Sync ${jobId}] 🚀 Starting instant sync execution...`);
 
-    // Get page info (including auto-pipeline configuration)
-    const page = await prisma.facebookPage.findUnique({
-      where: { id: facebookPageId },
-      select: {
-        id: true,
-        pageId: true,
-        pageAccessToken: true,
-        instagramAccountId: true,
-        organizationId: true,
-        autoPipelineId: true,
-      },
-    });
-
-    if (!page) {
-      throw new Error('Facebook page not found');
+    // Check job status before starting (now that status is updated)
+    const statusCheck = await isJobActive(jobId, 'sync');
+    if (!statusCheck.active) {
+      console.log(`[Instant Sync ${jobId}] Job is not active: ${statusCheck.reason}`);
+      return;
     }
+
+    // Verify page exists before proceeding
+    const pageCheck = await verifyPageExists(facebookPageId);
+    if (!pageCheck.exists || !pageCheck.page) {
+      await markJobFailedDueToPageDeletion(jobId, pageCheck.reason || 'Facebook page not found');
+      throw new Error(pageCheck.reason || 'Facebook page not found');
+    }
+    const page = pageCheck.page;
 
     const client = new FacebookClient(page.pageAccessToken);
     let contactsStored = 0;
@@ -119,12 +139,12 @@ async function executeInstantSync(jobId: string, facebookPageId: string, userId:
     // OPTIMIZATION: Cache existing contacts across batches to avoid repeated queries
     // This significantly reduces database queries for large syncs
     const existingContactsCache = new Map<string, string>(); // participantId -> contactId
-    let cacheInitialized = false;
+    const cacheInitialized = false;
 
     // OPTIMIZATION: Process contacts in batches during streaming for immediate storage
     // Returns the number of contacts stored (created + updated)
     const processContactBatch = async (
-      participants: Array<[string, { updatedTime: string; name?: string }]>,
+      participants: Array<[string, { updatedTime: string; name?: string; conversationId?: string }]>,
       platform: 'Messenger' | 'Instagram'
     ): Promise<number> => {
       if (participants.length === 0) return 0;
@@ -189,23 +209,32 @@ async function executeInstantSync(jobId: string, facebookPageId: string, userId:
       }
       
       // Build existing map from cache and newly fetched contacts
+      // Normalize IDs when building map to match lookup keys
       const existingMap = new Map<string, string>();
       
-      // First, add cached contacts
+      // First, add cached contacts (normalize IDs for consistency)
       for (const participantId of participantIds) {
-        const cachedId = existingContactsCache.get(participantId);
-        if (cachedId) {
-          existingMap.set(participantId, cachedId);
+        const normalized = normalizeContactId(participantId);
+        if (normalized) {
+          const cachedId = existingContactsCache.get(normalized) || existingContactsCache.get(participantId);
+          if (cachedId) {
+            existingMap.set(normalized, cachedId);
+            // Also cache with normalized ID
+            existingContactsCache.set(normalized, cachedId);
+          }
         }
       }
       
-      // Then, add newly fetched contacts to map and cache
+      // Then, add newly fetched contacts to map and cache (normalize IDs)
       for (const contact of existingContacts) {
         const id = platform === 'Messenger' ? contact.messengerPSID : (contact.instagramSID || contact.messengerPSID);
         if (id) {
-          existingMap.set(id, contact.id);
-          // Already cached above, but ensure it's set
-          existingContactsCache.set(id, contact.id);
+          const normalized = normalizeContactId(id);
+          if (normalized) {
+            existingMap.set(normalized, contact.id);
+            // Cache with normalized ID
+            existingContactsCache.set(normalized, contact.id);
+          }
         }
       }
 
@@ -215,6 +244,9 @@ async function executeInstantSync(jobId: string, facebookPageId: string, userId:
       const estimatedUpdates = Math.ceil(participants.length * 0.3);
       
       // Separate new contacts from updates
+      // Track conversation IDs for message fetching (participantId -> conversationId)
+      const conversationIdMap = new Map<string, string>();
+      
       const toCreate: Array<{
         messengerPSID?: string;
         instagramSID?: string;
@@ -236,6 +268,7 @@ async function executeInstantSync(jobId: string, facebookPageId: string, userId:
         hasMessenger?: boolean;
         hasInstagram?: boolean;
         instagramSID?: string;
+        messengerPSID?: string;
       }> = new Array(estimatedUpdates); // Pre-allocate with estimated size
       let toUpdateIndex = 0;
 
@@ -247,6 +280,20 @@ async function executeInstantSync(jobId: string, facebookPageId: string, userId:
         : { hasInstagram: true, hasMessenger: false };
 
       for (const [participantId, info] of participants) {
+        // Validate and normalize the participant ID
+        const normalizedId = normalizeContactId(participantId);
+        if (!normalizedId) {
+          console.warn(`[Instant Sync ${jobId}] Skipping invalid participant ID: ${participantId}`);
+          continue; // Skip invalid IDs
+        }
+
+        // Validate ID format based on platform
+        const isValidId = isMessenger ? isValidPSID(normalizedId) : isValidSID(normalizedId);
+        if (!isValidId) {
+          console.warn(`[Instant Sync ${jobId}] Skipping invalid ${platform} ID format: ${normalizedId}`);
+          continue; // Skip invalid ID formats
+        }
+
         // OPTIMIZATION: Optimize name parsing - reduce string operations
         let firstName: string;
         let lastName: string | null = null;
@@ -264,28 +311,73 @@ async function executeInstantSync(jobId: string, facebookPageId: string, userId:
           }
         } else {
           // OPTIMIZATION: Pre-computed prefix + slice (faster than template literal)
-          firstName = defaultNamePrefix + participantId.slice(-6);
+          firstName = defaultNamePrefix + normalizedId.slice(-6);
         }
 
-        const existingId = existingMap.get(participantId);
+        // Track conversation ID for message fetching
+        if (info.conversationId) {
+          conversationIdMap.set(normalizedId, info.conversationId);
+        }
+        
+        const existingId = existingMap.get(normalizedId);
         // OPTIMIZATION: Cache Date parsing - only parse once per updatedTime
         const lastInteraction = new Date(info.updatedTime);
 
         if (existingId) {
-          // OPTIMIZATION: Direct array assignment instead of push (faster)
-          toUpdate[toUpdateIndex++] = {
+          // Get existing contact to check if it has both IDs
+          const existingContact = existingContacts.find(c => c.id === existingId);
+          
+          // Handle contacts with both Messenger and Instagram IDs
+          const updateData: {
+            id: string;
+            firstName: string;
+            lastName: string | null;
+            lastInteraction: Date;
+            hasMessenger?: boolean;
+            hasInstagram?: boolean;
+            instagramSID?: string;
+            messengerPSID?: string;
+          } = {
             id: existingId,
             firstName,
             lastName,
             lastInteraction,
-            ...(isMessenger ? { hasMessenger: true } : { hasInstagram: true, instagramSID: participantId }),
           };
+
+          if (isMessenger) {
+            updateData.hasMessenger = true;
+            updateData.messengerPSID = normalizedId;
+            // If contact already has Instagram ID, preserve it
+            if (existingContact?.instagramSID) {
+              updateData.hasInstagram = true;
+            }
+          } else {
+            updateData.hasInstagram = true;
+            updateData.instagramSID = normalizedId;
+            // If contact already has Messenger PSID, preserve it
+            if (existingContact?.messengerPSID) {
+              updateData.hasMessenger = true;
+              updateData.messengerPSID = existingContact.messengerPSID;
+            }
+          }
+
+          // OPTIMIZATION: Direct array assignment instead of push (faster)
+          toUpdate[toUpdateIndex++] = updateData;
         } else {
+          // Ensure contact has at least one valid ID before creating
+          if (!hasValidContactId(
+            isMessenger ? normalizedId : null,
+            isMessenger ? null : normalizedId
+          )) {
+            console.warn(`[Instant Sync ${jobId}] Cannot create contact without valid ID: ${normalizedId}`);
+            continue; // Skip contacts without valid IDs
+          }
+
           // OPTIMIZATION: Direct array assignment and pre-computed fields
           toCreate[toCreateIndex++] = {
             ...(isMessenger 
-              ? { messengerPSID: participantId, ...messengerFields }
-              : { instagramSID: participantId, ...messengerFields }),
+              ? { messengerPSID: normalizedId, ...messengerFields }
+              : { instagramSID: normalizedId, ...messengerFields }),
             firstName,
             lastName,
             organizationId: page.organizationId,
@@ -410,6 +502,150 @@ async function executeInstantSync(jobId: string, facebookPageId: string, userId:
         // Both results are now consistently typed: createdResults is a number, updateResults is an array
         const batchCount = (typeof createdResults === 'number' ? createdResults : 0) + (Array.isArray(updateResults) ? updateResults.length : 0);
         contactsStored += batchCount; // Update shared counter for progress tracking
+        
+        // Fetch and save messages for contacts in this batch (non-blocking, runs in background)
+        if (conversationIdMap.size > 0) {
+          // Query back contacts to get their IDs
+          const participantIds = Array.from(conversationIdMap.keys());
+          const savedContacts = await prisma.contact.findMany({
+            where: {
+              facebookPageId: page.id,
+              OR: platform === 'Messenger'
+                ? [{ messengerPSID: { in: participantIds } }]
+                : [{ instagramSID: { in: participantIds } }],
+            },
+            select: {
+              id: true,
+              messengerPSID: true,
+              instagramSID: true,
+            },
+          });
+          
+          // Fetch messages for each contact in background
+          for (const contact of savedContacts) {
+            const participantId = platform === 'Messenger' ? contact.messengerPSID : contact.instagramSID;
+            const conversationId = participantId ? conversationIdMap.get(participantId) : undefined;
+            
+            if (conversationId && participantId) {
+              // Fetch messages in background without blocking
+              client.getRecentMessagesForConversation(conversationId, 200)
+                .then(async (messages) => {
+                  if (messages && messages.length > 0) {
+                    try {
+                      const conversationPlatform = platform === 'Messenger' ? 'MESSENGER' : 'INSTAGRAM';
+                      let conversation = await prisma.conversation.findFirst({
+                        where: {
+                          contactId: contact.id,
+                          platform: conversationPlatform,
+                        },
+                      });
+
+                      if (!conversation) {
+                        conversation = await prisma.conversation.create({
+                          data: {
+                            contactId: contact.id,
+                            facebookPageId: page.id,
+                            platform: conversationPlatform,
+                            status: 'OPEN',
+                            lastMessageAt: new Date(),
+                          },
+                        });
+                      }
+
+                      // Check which messages already exist
+                      const messageIds = messages
+                        .map((m: FacebookMessage) => m.id)
+                        .filter((id): id is string => !!id);
+                      
+                      const existingMessages = messageIds.length > 0
+                        ? await prisma.message.findMany({
+                            where: {
+                              facebookMessageId: { in: messageIds },
+                              conversationId: conversation.id,
+                            },
+                            select: { facebookMessageId: true },
+                          })
+                        : [];
+                      
+                      const existingIds = new Set(
+                        existingMessages
+                          .map(m => m.facebookMessageId)
+                          .filter((id): id is string => !!id)
+                      );
+
+                      // Prepare messages for bulk insert
+                      const messagesToSave = messages
+                        .filter((msg: FacebookMessage) => {
+                          if (!msg.message && !msg.attachments) return false;
+                          if (!msg.created_time) return false;
+                          if (msg.id && existingIds.has(msg.id)) return false;
+                          return true;
+                        })
+                        .map((msg: FacebookMessage) => {
+                          const isFromBusiness = msg.from?.id === (platform === 'Messenger' ? page.pageId : page.instagramAccountId);
+                          const createdAt = new Date(msg.created_time);
+                          
+                          return {
+                            contactId: contact.id,
+                            conversationId: conversation.id,
+                            content: msg.message || '[Media]',
+                            platform: conversationPlatform,
+                            facebookMessageId: msg.id || '',
+                            isFromBusiness,
+                            status: 'DELIVERED' as const,
+                            createdAt,
+                            sentAt: createdAt,
+                            deliveredAt: createdAt,
+                          };
+                        })
+                        .filter(msg => !!msg.facebookMessageId && msg.facebookMessageId.length > 0); // Filter out messages without IDs
+
+                      // Save messages in batches
+                      if (messagesToSave.length > 0) {
+                        const BATCH_SIZE = 100;
+                        for (let i = 0; i < messagesToSave.length; i += BATCH_SIZE) {
+                          const batch = messagesToSave.slice(i, i + BATCH_SIZE);
+                          try {
+                            await prisma.message.createMany({
+                              data: batch,
+                            });
+                          } catch (batchError) {
+                            // Try individual inserts if batch fails
+                            for (const msg of batch) {
+                              try {
+                                await prisma.message.create({ data: msg });
+                              } catch (individualError) {
+                                // Skip if already exists
+                              }
+                            }
+                          }
+                        }
+                        
+                        // Update conversation's lastMessageAt
+                        if (messagesToSave.length > 0) {
+                          const mostRecentMessage = messagesToSave.reduce((latest, msg) => {
+                            return msg.createdAt > latest.createdAt ? msg : latest;
+                          });
+                          await prisma.conversation.update({
+                            where: { id: conversation.id },
+                            data: { lastMessageAt: mostRecentMessage.createdAt },
+                          });
+                        }
+                        
+                        console.log(`[Instant Sync ${jobId}] Saved ${messagesToSave.length} messages for contact ${contact.id} (bulk path)`);
+                      }
+                    } catch (msgError) {
+                      console.error(`[Instant Sync ${jobId}] Failed to save messages for contact ${contact.id}:`, msgError);
+                    }
+                  }
+                })
+                .catch((error) => {
+                  console.warn(`[Instant Sync ${jobId}] Failed to fetch messages for conversation ${conversationId}:`, error);
+                });
+            }
+          }
+        }
+        
         return batchCount; // Return count for this batch
       } catch (error) {
         console.error(`[Instant Sync ${jobId}] Bulk operation failed, falling back to individual operations:`, error);
@@ -440,7 +676,7 @@ async function executeInstantSync(jobId: string, facebookPageId: string, userId:
                     : `IG User ${participantId.slice(-6)}`;
                 }
 
-                const existingId = existingMap.get(participantId);
+                const existingId = existingMap.get(normalizedId);
                 let savedContact;
 
                 if (existingId) {
@@ -467,6 +703,134 @@ async function executeInstantSync(jobId: string, facebookPageId: string, userId:
                     },
                   });
                 }
+
+                // Fetch and save messages for this contact (non-blocking, runs in background)
+                if (info.conversationId) {
+                  // Fetch messages in background without blocking contact storage
+                  client.getRecentMessagesForConversation(info.conversationId, 200)
+                    .then(async (messages) => {
+                      if (messages && messages.length > 0) {
+                        try {
+                          // Find or create conversation
+                          const conversationPlatform = platform === 'Messenger' ? 'MESSENGER' : 'INSTAGRAM';
+                          let conversation = await prisma.conversation.findFirst({
+                            where: {
+                              contactId: savedContact.id,
+                              platform: conversationPlatform,
+                            },
+                          });
+
+                          if (!conversation) {
+                            conversation = await prisma.conversation.create({
+                              data: {
+                                contactId: savedContact.id,
+                                facebookPageId: page.id,
+                                platform: conversationPlatform,
+                                status: 'OPEN',
+                                lastMessageAt: new Date(info.updatedTime),
+                              },
+                            });
+                          }
+
+                          // Check which messages already exist
+                          const messageIds = messages
+                            .map((m: FacebookMessage) => m.id)
+                            .filter((id): id is string => !!id);
+                          
+                          const existingMessages = messageIds.length > 0
+                            ? await prisma.message.findMany({
+                                where: {
+                                  facebookMessageId: { in: messageIds },
+                                  conversationId: conversation.id,
+                                },
+                                select: { facebookMessageId: true },
+                              })
+                            : [];
+                          
+                          const existingIds = new Set(
+                            existingMessages
+                              .map(m => m.facebookMessageId)
+                              .filter((id): id is string => !!id)
+                          );
+
+                          // Prepare messages for bulk insert
+                          const messagesToSave = messages
+                            .filter((msg: FacebookMessage) => {
+                              if (!msg.message && !msg.attachments) return false;
+                              if (!msg.created_time) return false;
+                              if (msg.id && existingIds.has(msg.id)) return false;
+                              return true;
+                            })
+                            .map((msg: FacebookMessage) => {
+                              const isFromBusiness = msg.from?.id === page.pageId;
+                              const createdAt = new Date(msg.created_time);
+                              
+                              return {
+                                contactId: savedContact.id,
+                                conversationId: conversation.id,
+                                content: msg.message || '[Media]',
+                                platform: conversationPlatform,
+                                facebookMessageId: msg.id || '',
+                                isFromBusiness,
+                                status: 'DELIVERED' as const,
+                                createdAt,
+                                sentAt: createdAt,
+                                deliveredAt: createdAt,
+                              };
+                            })
+                            .filter(msg => msg.facebookMessageId); // Filter out messages without IDs
+
+                          // Save messages in batches
+                          if (messagesToSave.length > 0) {
+                            const BATCH_SIZE = 100;
+                            for (let i = 0; i < messagesToSave.length; i += BATCH_SIZE) {
+                              const batch = messagesToSave.slice(i, i + BATCH_SIZE);
+                              try {
+                                await prisma.message.createMany({
+                                  data: batch,
+                                });
+                              } catch (batchError) {
+                                // Try individual inserts if batch fails
+                                for (const msg of batch) {
+                                  try {
+                                    await prisma.message.create({ data: msg });
+                                  } catch (individualError) {
+                                    // Skip if already exists
+                                  }
+                                }
+                              }
+                            }
+                            
+                            // Update conversation's lastMessageAt
+                            if (messagesToSave.length > 0) {
+                              const mostRecentMessage = messagesToSave.reduce((latest, msg) => {
+                                return msg.createdAt > latest.createdAt ? msg : latest;
+                              });
+                              await prisma.conversation.update({
+                                where: { id: conversation.id },
+                                data: { lastMessageAt: mostRecentMessage.createdAt },
+                              });
+                            }
+                            
+                            console.log(`[Instant Sync ${jobId}] Saved ${messagesToSave.length} messages for contact ${savedContact.id}`);
+                          }
+                        } catch (msgError) {
+                          // Log but don't fail sync if message saving fails
+                          console.error(`[Instant Sync ${jobId}] Failed to save messages for contact ${savedContact.id}:`, msgError);
+                        }
+                      }
+                    })
+                    .catch((error) => {
+                      // Log but don't fail sync if message fetching fails
+                      console.warn(`[Instant Sync ${jobId}] Failed to fetch messages for conversation ${info.conversationId}:`, error);
+                    });
+                }
+
+                // Automatically assign best contact times (non-blocking, runs in background)
+                // Uses fallback: compute from messages -> similar contact -> default times
+                autoAssignBestContactTimes(savedContact.id, page.organizationId).catch((error) => {
+                  console.error(`[Instant Sync ${jobId}] Failed to assign best contact times for contact ${savedContact.id}:`, error);
+                });
 
                 // OPTIMIZATION: Don't collect contact IDs during sync - we'll query all at the end
                 contactsStored++; // Update shared counter for progress tracking
@@ -524,10 +888,22 @@ async function executeInstantSync(jobId: string, facebookPageId: string, userId:
         console.log(`[Instant Sync ${jobId}] Streaming Messenger conversations...`);
         
         for await (const convo of client.fetchMessengerConversationsStream(page.pageId)) {
-          // Check for cancellation
+          // Check for cancellation and verify page still exists
           if (conversationCount % CANCELLATION_CHECK_INTERVAL === 0) {
-            if (await isJobCancelled(jobId)) {
-              console.log(`[Instant Sync ${jobId}] Messenger sync cancelled by user`);
+            try {
+              const statusCheck = await isJobActive(jobId, 'sync');
+              if (!statusCheck.active) {
+                console.log(`[Instant Sync ${jobId}] ${statusCheck.reason || 'Job stopped'}`);
+                break;
+              }
+              const pageRecheck = await verifyPageExists(facebookPageId);
+              if (!pageRecheck.exists || !pageRecheck.page) {
+                await markJobFailedDueToPageDeletion(jobId, 'Page deleted during job execution');
+                throw new Error('Page deleted during job execution');
+              }
+            } catch (error) {
+              const errorMsg = error instanceof Error ? error.message : 'Job stopped';
+              console.log(`[Instant Sync ${jobId}] ${errorMsg}`);
               break;
             }
           }
@@ -541,7 +917,7 @@ async function executeInstantSync(jobId: string, facebookPageId: string, userId:
           
           if (!convo.participants?.data) continue;
           
-          // Extract participants
+          // Extract participants and track conversation IDs for message fetching
           for (const participant of convo.participants.data) {
             if (participant.id === page.pageId) continue;
             
@@ -551,6 +927,7 @@ async function executeInstantSync(jobId: string, facebookPageId: string, userId:
               participantMap.set(participant.id, {
                 updatedTime: convo.updated_time,
                 name: participant.name,
+                conversationId: convo.id, // Track conversation ID for message fetching
               });
             }
           }
@@ -558,7 +935,7 @@ async function executeInstantSync(jobId: string, facebookPageId: string, userId:
           // Process in batches
           if (conversationCount % PROCESS_BATCH_SIZE === 0 && participantMap.size > 0) {
             // OPTIMIZATION: Direct iteration instead of Array.from() for better performance
-            const batchToProcess: Array<[string, { updatedTime: string; name?: string }]> = [];
+            const batchToProcess: Array<[string, { updatedTime: string; name?: string; conversationId?: string }]> = [];
             batchToProcess.length = participantMap.size; // Pre-allocate
             let batchIndex = 0;
             for (const entry of participantMap.entries()) {
@@ -659,8 +1036,20 @@ async function executeInstantSync(jobId: string, facebookPageId: string, userId:
         
         for await (const convo of client.fetchInstagramConversationsStream(page.instagramAccountId)) {
           if (igConversationCount % IG_CANCELLATION_CHECK_INTERVAL === 0) {
-            if (await isJobCancelled(jobId)) {
-              console.log(`[Instant Sync ${jobId}] Instagram sync cancelled by user`);
+            try {
+              const statusCheck = await isJobActive(jobId, 'sync');
+              if (!statusCheck.active) {
+                console.log(`[Instant Sync ${jobId}] ${statusCheck.reason || 'Job stopped'}`);
+                break;
+              }
+              const pageRecheck = await verifyPageExists(facebookPageId);
+              if (!pageRecheck.exists || !pageRecheck.page) {
+                await markJobFailedDueToPageDeletion(jobId, 'Page deleted during job execution');
+                throw new Error('Page deleted during job execution');
+              }
+            } catch (error) {
+              const errorMsg = error instanceof Error ? error.message : 'Job stopped';
+              console.log(`[Instant Sync ${jobId}] ${errorMsg}`);
               break;
             }
           }
@@ -683,13 +1072,14 @@ async function executeInstantSync(jobId: string, facebookPageId: string, userId:
               igParticipantMap.set(participant.id, {
                 updatedTime: convo.updated_time,
                 name: participant.name,
+                conversationId: convo.id, // Track conversation ID for message fetching
               });
             }
           }
           
           if (igConversationCount % IG_PROCESS_BATCH_SIZE === 0 && igParticipantMap.size > 0) {
             // OPTIMIZATION: Direct iteration instead of Array.from() for better performance
-            const batchToProcess: Array<[string, { updatedTime: string; name?: string }]> = [];
+            const batchToProcess: Array<[string, { updatedTime: string; name?: string; conversationId?: string }]> = [];
             batchToProcess.length = igParticipantMap.size; // Pre-allocate
             let batchIndex = 0;
             for (const entry of igParticipantMap.entries()) {
@@ -838,6 +1228,24 @@ async function executeInstantSync(jobId: string, facebookPageId: string, userId:
     const finalContactCount = contactsStored;
     console.log(`[Instant Sync ${jobId}] Final sync summary: contactsStored=${contactsStored}, errors=${errors.length}`);
     
+    // Get job to retrieve startedAt for metrics calculation
+    const job = await prisma.syncJob.findUnique({
+      where: { id: jobId },
+      select: { startedAt: true },
+    });
+
+    const completedAt = new Date();
+    
+    // Calculate performance metrics
+    const { calculateJobMetrics } = await import('@/lib/jobs/job-metrics');
+    const metrics = calculateJobMetrics({
+      startedAt: job?.startedAt || null,
+      completedAt,
+      totalContacts: finalContactCount,
+      processedContacts: finalContactCount,
+      failedContacts: errors.length,
+    });
+    
     await prisma.syncJob.update({
       where: { id: jobId },
       data: {
@@ -846,9 +1254,19 @@ async function executeInstantSync(jobId: string, facebookPageId: string, userId:
         totalContacts: finalContactCount,
         failedContacts: errors.length,
         errors: errors.length > 0 ? errors : Prisma.JsonNull,
-        completedAt: new Date(),
+        completedAt,
+        durationMs: metrics.durationMs,
+        contactsPerSecond: metrics.contactsPerSecond,
       },
     });
+
+    // Log metrics
+    if (metrics.durationMs) {
+      console.log(`[Instant Sync ${jobId}] ⏱️ Duration: ${(metrics.durationMs / 1000).toFixed(1)}s`);
+    }
+    if (metrics.contactsPerSecond) {
+      console.log(`[Instant Sync ${jobId}] 📊 Contacts/sec: ${metrics.contactsPerSecond.toFixed(2)}`);
+    }
 
     const elapsedTime = ((Date.now() - startTime) / 1000).toFixed(1);
     console.log(`[Instant Sync ${jobId}] ✅ Completed in ${elapsedTime}s: ${contactsStored} contacts stored, AI analysis queued: ${aiAnalysisQueued}`);
@@ -893,36 +1311,66 @@ export async function startInstantSync(
   userId: string
 ): Promise<InstantSyncResult> {
   try {
-    // Check if there's already an active sync job for this page
-    const existingJob = await prisma.syncJob.findFirst({
-      where: {
-        facebookPageId,
-        status: {
-          in: ['PENDING', 'IN_PROGRESS'],
+    // CRITICAL: Ensure database connection is established (required for Vercel serverless)
+    await connectPrisma();
+    
+    // Use PostgreSQL advisory lock to prevent concurrent job creation for the same page
+    // This ensures only one job can be created per page at a time, even with concurrent requests
+    const lockId = `sync_job_${facebookPageId}`.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0) % 2147483647;
+    
+    // Use transaction with advisory lock
+    const result = await prisma.$transaction(async (tx) => {
+      // Acquire advisory lock (blocks until available)
+      await tx.$executeRawUnsafe(`SELECT pg_advisory_xact_lock(${lockId})`);
+      
+      // Check for existing active job (within locked transaction)
+      const existingJob = await tx.syncJob.findFirst({
+        where: {
+          facebookPageId,
+          status: {
+            in: ['PENDING', 'IN_PROGRESS'],
+          },
         },
-      },
-      orderBy: {
-        createdAt: 'desc',
-      },
+        orderBy: {
+          createdAt: 'desc',
+        },
+      });
+
+      if (existingJob) {
+        return {
+          existing: true,
+          jobId: existingJob.id,
+        };
+      }
+
+      // Create a new sync job (within locked transaction to prevent duplicates)
+      const syncJob = await tx.syncJob.create({
+        data: {
+          facebookPageId,
+          status: 'PENDING',
+        },
+      });
+
+      return {
+        existing: false,
+        jobId: syncJob.id,
+        syncJob,
+      };
+      // Lock is automatically released when transaction commits
     });
 
-    if (existingJob) {
+    // If existing job found, return early
+    if (result.existing) {
       return {
         success: true,
-        jobId: existingJob.id,
+        jobId: result.jobId,
         message: 'Sync already in progress',
         contactsStored: 0,
         aiAnalysisQueued: false,
       };
     }
 
-    // Create a new sync job
-    const syncJob = await prisma.syncJob.create({
-      data: {
-        facebookPageId,
-        status: 'PENDING',
-      },
-    });
+    const syncJob = result.syncJob!;
 
     console.log(`[Instant Sync ${syncJob.id}] 🚀 Starting instant sync...`);
 
