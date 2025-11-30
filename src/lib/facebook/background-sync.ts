@@ -4,6 +4,9 @@ import { FacebookClient, FacebookApiError } from './client';
 import { analyzeWithFallback } from '@/lib/ai/enhanced-analysis';
 import { autoAssignContactToPipeline } from '@/lib/pipelines/auto-assign';
 import { applyStageScoreRanges } from '@/lib/pipelines/stage-analyzer';
+import { logger } from '@/lib/utils/logger';
+import { autoAssignBestContactTimes } from '@/lib/contacts/compute-contact-times';
+import { logJobProgress } from '@/lib/logging/job-logger';
 
 interface BackgroundSyncResult {
   success: boolean;
@@ -102,10 +105,10 @@ export async function startBackgroundSync(facebookPageId: string): Promise<Backg
     // Use immediate execution with proper error handling
     const backgroundPromise = (async () => {
       try {
-        console.log(`[Background Sync ${syncJob.id}] 🚀 Starting background execution immediately...`);
+        logger.info('Starting background execution immediately', { jobId: syncJob.id, operation: 'background-sync' });
         await executeBackgroundSync(syncJob.id, facebookPageId);
       } catch (error) {
-        console.error(`[Background Sync ${syncJob.id}] ❌ Failed:`, error);
+        logger.error('Background sync failed', error as Error, { jobId: syncJob.id, operation: 'background-sync' });
         // Mark job as failed in database
         try {
           await prisma.syncJob.update({
@@ -122,7 +125,7 @@ export async function startBackgroundSync(facebookPageId: string): Promise<Backg
             },
           });
         } catch (dbError) {
-          console.error(`[Background Sync ${syncJob.id}] ❌ Failed to update job status:`, dbError);
+          logger.error('Failed to update job status', dbError as Error, { jobId: syncJob.id, operation: 'background-sync' });
         }
       }
     })(); // Immediately invoked async function
@@ -146,7 +149,7 @@ export async function startBackgroundSync(facebookPageId: string): Promise<Backg
       message: 'Sync started',
     };
   } catch (error) {
-    console.error('Failed to start background sync:', error);
+    logger.error('Failed to start background sync', error as Error, { operation: 'background-sync' });
     throw error;
   }
 }
@@ -233,9 +236,16 @@ async function getExistingContactsMap(
  * Executes the actual sync operation and updates the job status
  */
 async function executeBackgroundSync(jobId: string, facebookPageId: string): Promise<void> {
+  const jobType = 'background-sync';
+  const startTime = Date.now();
+  
   try {
     // CRITICAL: Ensure database connection is established (required for Vercel serverless)
     await connectPrisma();
+    
+    await logJobProgress(jobType, jobId, 'Sync job started, updating status to IN_PROGRESS', 5, { jobId, facebookPageId }).catch(() => {
+      // Silently fail - logging should not break the app
+    });
     
     // Update job status to in progress
     await prisma.syncJob.update({
@@ -265,10 +275,9 @@ async function executeBackgroundSync(jobId: string, facebookPageId: string): Pro
     let syncedCount = 0;
     let failedCount = 0;
     
-    console.log(`[Background Sync ${jobId}] Auto-Pipeline Enabled:`, !!page.autoPipelineId);
+    logger.debug('Auto-Pipeline configuration', { jobId, autoPipelineEnabled: !!page.autoPipelineId, operation: 'background-sync' });
     if (page.autoPipelineId && page.autoPipeline) {
-      console.log(`[Background Sync ${jobId}] Target Pipeline:`, page.autoPipeline.name);
-      console.log(`[Background Sync ${jobId}] Mode:`, page.autoPipelineMode);
+      logger.debug('Target pipeline details', { jobId, pipelineName: page.autoPipeline.name, mode: page.autoPipelineMode, operation: 'background-sync' });
       
       // Auto-generate score ranges if stages still have defaults
       const hasDefaultRanges = page.autoPipeline.stages.some(
@@ -276,9 +285,9 @@ async function executeBackgroundSync(jobId: string, facebookPageId: string): Pro
       );
 
       if (hasDefaultRanges) {
-        console.log(`[Background Sync ${jobId}] Detected default score ranges, auto-generating intelligent ranges...`);
+        logger.info('Detected default score ranges, auto-generating intelligent ranges', { jobId, pipelineId: page.autoPipelineId, operation: 'background-sync' });
         await applyStageScoreRanges(page.autoPipelineId);
-        console.log(`[Background Sync ${jobId}] Score ranges applied successfully`);
+        logger.info('Score ranges applied successfully', { jobId, pipelineId: page.autoPipelineId, operation: 'background-sync' });
         
         // Reload page with updated ranges
         const updatedPage = await prisma.facebookPage.findUnique({
@@ -300,7 +309,7 @@ async function executeBackgroundSync(jobId: string, facebookPageId: string): Pro
     let tokenExpired = false;
     const errors: Array<{ platform: string; id: string; error: string; code?: number }> = [];
 
-    console.log(`[Background Sync ${jobId}] Starting contact sync for Facebook Page: ${page.pageId}`);
+    logger.info('Starting contact sync for Facebook Page', { jobId, pageId: page.pageId, operation: 'background-sync' });
 
     // Set initial status - this helps UI show progress immediately
     await prisma.syncJob.update({
@@ -312,7 +321,7 @@ async function executeBackgroundSync(jobId: string, facebookPageId: string): Pro
 
     // Sync Messenger contacts
     try {
-      console.log(`[Background Sync ${jobId}] Fetching Messenger conversations...`);
+      logger.debug('Fetching Messenger conversations', { jobId, operation: 'background-sync' });
       
       // Add timeout wrapper to prevent hanging (3 minutes max for initial fetch)
       const fetchWithTimeout = async (): Promise<any[]> => {
@@ -347,15 +356,16 @@ async function executeBackgroundSync(jobId: string, facebookPageId: string): Pro
       });
       
       const messengerConvos = await fetchWithTimeout();
-      console.log(`[Background Sync ${jobId}] Fetched ${messengerConvos.length} Messenger conversations`);
+      logger.info('Fetched Messenger conversations', { jobId, count: messengerConvos.length, operation: 'background-sync' });
       
       // Check if no conversations found
       if (messengerConvos.length === 0) {
-        console.warn(`[Background Sync ${jobId}] ⚠️ No Messenger conversations found for page ${page.pageId}. This could mean:
-          - The page has no conversations yet
-          - The access token doesn't have 'pages_messaging' permission
-          - The page ID is incorrect
-          - The page hasn't received any messages`);
+        logger.warn('No Messenger conversations found', { 
+          jobId, 
+          pageId: page.pageId, 
+          operation: 'background-sync',
+          reason: 'No conversations found - could be no conversations, missing permissions, incorrect page ID, or no messages received'
+        });
         
         // Still mark as completed (not failed) since this is a valid state
         await prisma.syncJob.update({
@@ -391,7 +401,7 @@ async function executeBackgroundSync(jobId: string, facebookPageId: string): Pro
       let skippedPageSelf = 0;
       for (const convo of messengerConvos) {
         if (!convo.participants || !convo.participants.data) {
-          console.warn(`[Background Sync ${jobId}] Conversation ${convo.id} has no participants data`);
+          logger.warn('Conversation has no participants data', { jobId, conversationId: convo.id, operation: 'background-sync' });
           continue;
         }
         for (const participant of convo.participants.data) {
@@ -407,11 +417,11 @@ async function executeBackgroundSync(jobId: string, facebookPageId: string): Pro
         }
       }
 
-      console.log(`[Background Sync ${jobId}] Processing ${participantTasks.length} Messenger participants (skipped ${skippedPageSelf} page self references)`);
+      logger.info('Processing Messenger participants', { jobId, participantCount: participantTasks.length, skippedPageSelf, operation: 'background-sync' });
       
       // Check if no participants found after filtering
       if (participantTasks.length === 0) {
-        console.warn(`[Background Sync ${jobId}] ⚠️ No participants found after filtering. All participants were the page itself.`);
+        logger.warn('No participants found after filtering', { jobId, reason: 'All participants were the page itself', operation: 'background-sync' });
         await prisma.syncJob.update({
           where: { id: jobId },
           data: {
@@ -436,13 +446,13 @@ async function executeBackgroundSync(jobId: string, facebookPageId: string): Pro
 
       // Batch fetch existing contacts for early skip checks
       const participantIds = participantTasks.map(t => t.participantId);
-      console.log(`[Background Sync ${jobId}] Checking existing contacts for ${participantIds.length} participants...`);
+      logger.debug('Checking existing contacts', { jobId, participantCount: participantIds.length, operation: 'background-sync' });
       const existingContactsMap = await getExistingContactsMap(
         page.id,
         participantIds,
         'messenger'
       );
-      console.log(`[Background Sync ${jobId}] Found ${existingContactsMap.size} existing contacts`);
+      logger.debug('Found existing contacts', { jobId, existingCount: existingContactsMap.size, operation: 'background-sync' });
 
       // Filter out contacts that should be skipped (incremental sync optimization)
       const tasksToProcess = participantTasks.filter(task => {
@@ -456,20 +466,20 @@ async function executeBackgroundSync(jobId: string, facebookPageId: string): Pro
         // This prevents re-processing unchanged contacts
         const conversationUpdatedTime = new Date(task.updatedTime);
         if (existing.lastInteraction && conversationUpdatedTime <= existing.lastInteraction) {
-          console.log(`[Background Sync ${jobId}] Skipping ${task.participantId} - conversation unchanged since ${existing.lastInteraction.toISOString()}`);
+          logger.debug('Skipping contact - conversation unchanged', { jobId, participantId: task.participantId, lastInteraction: existing.lastInteraction.toISOString(), operation: 'background-sync' });
           return false; // Skip unchanged contact
         }
 
         // SKIP_EXISTING mode: Skip if already in pipeline
         if (page.autoPipelineMode === 'SKIP_EXISTING' && page.autoPipelineId && existing.pipelineId) {
-          console.log(`[Background Sync ${jobId}] Skipping ${task.participantId} - contact already in pipeline`);
+          logger.debug('Skipping contact - already in pipeline', { jobId, participantId: task.participantId, operation: 'background-sync' });
           return false;
         }
 
         return true; // Contact needs processing
       });
 
-      console.log(`[Background Sync ${jobId}] ${tasksToProcess.length} participants need processing (${participantTasks.length - tasksToProcess.length} skipped)`);
+      logger.info('Participants processing summary', { jobId, toProcess: tasksToProcess.length, skipped: participantTasks.length - tasksToProcess.length, operation: 'background-sync' });
 
       // Set initial total contacts estimate for progress tracking
       await prisma.syncJob.update({
@@ -490,7 +500,7 @@ async function executeBackgroundSync(jobId: string, facebookPageId: string): Pro
         batches.push(tasksToProcess.slice(i, i + BATCH_SIZE));
       }
 
-      console.log(`[Background Sync ${jobId}] Processing ${tasksToProcess.length} contacts in ${batches.length} batches of ${BATCH_SIZE}`);
+      logger.info('Processing contacts in batches', { jobId, totalContacts: tasksToProcess.length, batchCount: batches.length, batchSize: BATCH_SIZE, operation: 'background-sync' });
 
       // Process each batch
       for (let batchIndex = 0; batchIndex < batches.length; batchIndex++) {
@@ -502,7 +512,7 @@ async function executeBackgroundSync(jobId: string, facebookPageId: string): Pro
           return;
         }
 
-        console.log(`[Background Sync ${jobId}] Processing batch ${batchIndex + 1}/${batches.length} (${batch.length} contacts)...`);
+        logger.debug('Processing batch', { jobId, batchIndex: batchIndex + 1, totalBatches: batches.length, batchSize: batch.length, operation: 'background-sync' });
 
         // Step 1: Fetch messages for this batch (SAFE OPTIMIZATION: Use recent messages only)
         const messageResults = await Promise.all(
@@ -525,7 +535,7 @@ async function executeBackgroundSync(jobId: string, facebookPageId: string): Pro
               } catch (error) {
                 const errorMessage = error instanceof Error ? error.message : 'Unknown error';
                 const errorCode = error instanceof FacebookApiError ? error.code : undefined;
-                console.warn(`[Background Sync ${jobId}] Failed to fetch messages for conversation ${task.conversationId}: ${errorMessage}`);
+                logger.warn('Failed to fetch messages for conversation', { jobId, conversationId: task.conversationId, error: errorMessage, operation: 'background-sync' });
                 return { task, messages: null, error: { message: errorMessage, code: errorCode }, existing: undefined };
               }
             })
@@ -537,7 +547,7 @@ async function executeBackgroundSync(jobId: string, facebookPageId: string): Pro
           messageResults.map(({ task, messages, error, existing }) =>
             analysisLimiter.execute(async () => {
               if (error) {
-                return { task, processed: null, error };
+                return { task, processed: null, error, messages: null };
               }
 
               if (!messages || messages.length === 0) {
@@ -553,6 +563,7 @@ async function executeBackgroundSync(jobId: string, facebookPageId: string): Pro
                     skipAI: false,
                   },
                   error: null,
+                  messages: null,
                 };
               }
 
@@ -583,7 +594,7 @@ async function executeBackgroundSync(jobId: string, facebookPageId: string): Pro
                 let aiAnalysis = null;
                 
                 if (shouldSkipAI && existing?.aiContextUpdatedAt) {
-                  console.log(`[Background Sync ${jobId}] Skipping AI analysis for ${task.participantId} - conversation unchanged since ${existing.aiContextUpdatedAt.toISOString()}`);
+                  logger.debug('Skipping AI analysis - conversation unchanged', { jobId, participantId: task.participantId, aiContextUpdatedAt: existing.aiContextUpdatedAt.toISOString(), operation: 'background-sync' });
                   // Keep existing AI context, don't re-analyze
                   aiContext = null; // Will be preserved in update if not provided
                   aiAnalysis = null;
@@ -609,7 +620,7 @@ async function executeBackgroundSync(jobId: string, facebookPageId: string): Pro
                     aiContext = analysis.summary;
                     
                     if (usedFallback) {
-                      console.warn(`[Background Sync ${jobId}] Used fallback scoring for ${task.participantId} - Score: ${analysis.leadScore}`);
+                      logger.warn('Used fallback scoring', { jobId, participantId: task.participantId, leadScore: analysis.leadScore, operation: 'background-sync' });
                     }
                   }
                 }
@@ -626,10 +637,11 @@ async function executeBackgroundSync(jobId: string, facebookPageId: string): Pro
                     skipAI: shouldSkipAI,
                   },
                   error: null,
+                  messages,
                 };
               } catch (error) {
                 const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-                return { task, processed: null, error: { message: errorMessage, code: undefined } };
+                return { task, processed: null, error: { message: errorMessage, code: undefined }, messages: null };
               }
             })
           )
@@ -637,7 +649,7 @@ async function executeBackgroundSync(jobId: string, facebookPageId: string): Pro
 
         // Step 3: Save this batch to database
         await Promise.all(
-          analysisResults.map(({ task, processed, error }) => {
+          analysisResults.map(({ task, processed, error, messages }) => {
             if (error) {
               failedCount++;
               errors.push({
@@ -693,6 +705,138 @@ async function executeBackgroundSync(jobId: string, facebookPageId: string): Pro
               update: updateData,
               })
               .then(async (savedContact) => {
+            // Save messages to database if we have them
+            if (messages && messages.length > 0 && !error) {
+              try {
+                // Find or create conversation
+                let conversation = await prisma.conversation.findFirst({
+                  where: {
+                    contactId: savedContact.id,
+                    platform: 'MESSENGER',
+                  },
+                });
+
+                if (!conversation) {
+                  conversation = await prisma.conversation.create({
+                    data: {
+                      contactId: savedContact.id,
+                      facebookPageId: page.id,
+                      platform: 'MESSENGER',
+                      status: 'OPEN',
+                      lastMessageAt: new Date(task.updatedTime),
+                    },
+                  });
+                }
+
+                // Prepare messages for bulk insert
+                const messagesToSave = messages
+                  .filter((msg: any) => msg.message && msg.created_time) // Only save messages with content and timestamp
+                  .map((msg: any) => {
+                    const isFromBusiness = msg.from?.id === page.pageId;
+                    const createdAt = new Date(msg.created_time);
+                    
+                    return {
+                      contactId: savedContact.id,
+                      conversationId: conversation.id,
+                      content: msg.message || '[Media]',
+                      platform: 'MESSENGER',
+                      facebookMessageId: msg.id,
+                      isFromBusiness,
+                      status: 'DELIVERED',
+                      createdAt,
+                      sentAt: createdAt,
+                      deliveredAt: createdAt,
+                    };
+                  });
+
+                // Save messages in batches to avoid overwhelming the database
+                if (messagesToSave.length > 0) {
+                  const BATCH_SIZE = 100;
+                  let savedCount = 0;
+                  
+                  // Check which messages already exist (by facebookMessageId) to avoid duplicates
+                  const messageIds = messagesToSave
+                    .map(m => m.facebookMessageId)
+                    .filter((id): id is string => !!id);
+                  
+                  const existingMessages = messageIds.length > 0
+                    ? await prisma.message.findMany({
+                        where: {
+                          facebookMessageId: { in: messageIds },
+                          conversationId: conversation.id,
+                        },
+                        select: { facebookMessageId: true },
+                      })
+                    : [];
+                  
+                  const existingIds = new Set(
+                    existingMessages
+                      .map(m => m.facebookMessageId)
+                      .filter((id): id is string => !!id)
+                  );
+                  
+                  // Filter out messages that already exist
+                  const newMessagesToSave = messagesToSave.filter(
+                    msg => !msg.facebookMessageId || !existingIds.has(msg.facebookMessageId)
+                  );
+                  
+                  logger.debug('Filtering messages for saving', { 
+                    jobId, 
+                    contactId: savedContact.id, 
+                    total: messagesToSave.length,
+                    existing: existingIds.size,
+                    new: newMessagesToSave.length,
+                    operation: 'background-sync' 
+                  });
+                  
+                  for (let i = 0; i < newMessagesToSave.length; i += BATCH_SIZE) {
+                    const batch = newMessagesToSave.slice(i, i + BATCH_SIZE);
+                    try {
+                      await prisma.message.createMany({
+                        data: batch,
+                      });
+                      savedCount += batch.length;
+                    } catch (batchError) {
+                      // If batch fails, try individual inserts
+                      logger.warn('Batch insert failed, trying individual inserts', { jobId, contactId: savedContact.id, error: batchError, operation: 'background-sync' });
+                      for (const msg of batch) {
+                        try {
+                          await prisma.message.create({
+                            data: msg,
+                          });
+                          savedCount++;
+                        } catch (individualError: any) {
+                          // Log but continue - message might already exist
+                          logger.warn('Failed to save individual message (may already exist)', { 
+                            jobId, 
+                            contactId: savedContact.id, 
+                            error: individualError?.message,
+                            operation: 'background-sync' 
+                          });
+                        }
+                      }
+                    }
+                  }
+                  
+                  // Update conversation's lastMessageAt to the most recent message
+                  if (savedCount > 0 && messagesToSave.length > 0) {
+                    const mostRecentMessage = messagesToSave.reduce((latest, msg) => {
+                      return msg.createdAt > latest.createdAt ? msg : latest;
+                    });
+                    await prisma.conversation.update({
+                      where: { id: conversation.id },
+                      data: { lastMessageAt: mostRecentMessage.createdAt },
+                    });
+                  }
+                  
+                  logger.debug('Saved messages for contact', { jobId, contactId: savedContact.id, messageCount: savedCount, operation: 'background-sync' });
+                }
+              } catch (msgError) {
+                // Log but don't fail the sync if message saving fails
+                logger.error('Failed to save messages for contact', { jobId, contactId: savedContact.id, error: msgError, operation: 'background-sync' });
+              }
+            }
+
             // Auto-assign to pipeline if enabled
                 if (processed.aiAnalysis && page.autoPipelineId) {
               await autoAssignContactToPipeline({
@@ -702,6 +846,13 @@ async function executeBackgroundSync(jobId: string, facebookPageId: string): Pro
                 updateMode: page.autoPipelineMode,
               });
             }
+            
+            // Automatically assign best contact times (non-blocking, runs in background)
+            // Uses fallback: compute from messages -> similar contact -> default times
+            autoAssignBestContactTimes(savedContact.id, page.organizationId).catch((error) => {
+              logger.error('Failed to assign best contact times', { jobId, contactId: savedContact.id, error, operation: 'background-sync' });
+            });
+            
             syncedCount++;
                 return savedContact;
               })
@@ -735,7 +886,7 @@ async function executeBackgroundSync(jobId: string, facebookPageId: string): Pro
             },
           });
         }
-        console.log(`[Background Sync ${jobId}] Batch ${batchIndex + 1}/${batches.length} complete: ${syncedCount} synced, ${failedCount} failed`);
+        logger.info('Batch complete', { jobId, batchIndex: batchIndex + 1, totalBatches: batches.length, syncedCount, failedCount, operation: 'background-sync' });
       }
     } catch (error) {
       const errorCode = error instanceof FacebookApiError ? error.code : undefined;
@@ -745,18 +896,21 @@ async function executeBackgroundSync(jobId: string, facebookPageId: string): Pro
         tokenExpired = true;
       }
 
-      console.error(`[Background Sync ${jobId}] ❌ Failed to fetch Messenger conversations:`, error);
-      console.error(`[Background Sync ${jobId}] Error details:`, {
-        code: errorCode,
-        message: errorMessage,
+      logger.error('Failed to fetch Messenger conversations', error as Error, { 
+        jobId, 
+        errorCode, 
+        errorMessage,
+        operation: 'background-sync',
         isTokenExpired: tokenExpired,
         errorType: error instanceof FacebookApiError ? error.type : 'Unknown',
       });
       
+      // SECURITY: Sanitize error messages to prevent sensitive data exposure
+      const { formatSyncError } = await import('@/lib/facebook/error-messages');
       errors.push({
         platform: 'Messenger',
         id: 'conversations',
-        error: errorMessage,
+        error: formatSyncError(error),
         code: errorCode,
       });
       
@@ -1082,17 +1236,24 @@ async function executeBackgroundSync(jobId: string, facebookPageId: string): Pro
                 });
               }
               
+              // Automatically assign best contact times (non-blocking, runs in background)
+              // Uses fallback: compute from messages -> similar contact -> default times
+              autoAssignBestContactTimes(savedContact.id, page.organizationId).catch((error) => {
+                console.error(`[Background Sync ${jobId}] Failed to assign best contact times for IG contact ${savedContact.id}:`, error);
+              });
+              
               syncedCount++;
                   return savedContact;
                 })
-                .catch((err) => {
+                .catch(async (err) => {
                   failedCount++;
-                  const errorMessage = err instanceof Error ? err.message : 'Unknown error';
+                  // SECURITY: Sanitize error messages to prevent sensitive data exposure
+                  const { formatSyncError } = await import('@/lib/facebook/error-messages');
                   const errorCode = err instanceof FacebookApiError ? err.code : undefined;
                   errors.push({
                     platform: 'Instagram',
                     id: task.participantId,
-                    error: errorMessage,
+                    error: formatSyncError(err),
                     code: errorCode,
                   });
                   if (err instanceof FacebookApiError && err.isTokenExpired) {
@@ -1142,6 +1303,24 @@ async function executeBackgroundSync(jobId: string, facebookPageId: string): Pro
       });
     }
 
+    // Get job to retrieve startedAt for metrics calculation
+    const job = await prisma.syncJob.findUnique({
+      where: { id: jobId },
+      select: { startedAt: true },
+    });
+
+    const completedAt = new Date();
+    
+    // Calculate performance metrics
+    const { calculateJobMetrics } = await import('@/lib/jobs/job-metrics');
+    const metrics = calculateJobMetrics({
+      startedAt: job?.startedAt || null,
+      completedAt,
+      totalContacts: syncedCount + failedCount,
+      processedContacts: syncedCount,
+      failedContacts: failedCount,
+    });
+
     // Update job with final results
     await prisma.syncJob.update({
       where: { id: jobId },
@@ -1152,23 +1331,73 @@ async function executeBackgroundSync(jobId: string, facebookPageId: string): Pro
         totalContacts: syncedCount + failedCount,
         errors: errors.length > 0 ? errors : Prisma.JsonNull,
         tokenExpired,
-        completedAt: new Date(),
+        completedAt,
+        durationMs: metrics.durationMs,
+        contactsPerSecond: metrics.contactsPerSecond,
       },
     });
 
+    // Log metrics
+    if (metrics.durationMs) {
+      console.log(`[Background Sync ${jobId}] ⏱️ Duration: ${(metrics.durationMs / 1000).toFixed(1)}s`);
+    }
+    if (metrics.contactsPerSecond) {
+      console.log(`[Background Sync ${jobId}] 📊 Contacts/sec: ${metrics.contactsPerSecond.toFixed(2)}`);
+    }
+    
+    // Log job completion
+    const duration = Date.now() - startTime;
+    if (tokenExpired) {
+      await logJobFailure(jobType, jobId, 'Sync job failed due to token expiration', new Error('Token expired'), { syncedCount, failedCount, errors }).catch(() => {
+        // Silently fail - logging should not break the app
+      });
+    } else {
+      await logJobComplete(jobType, jobId, `Sync completed: ${syncedCount} synced, ${failedCount} failed`, duration, { syncedCount, failedCount, totalContacts: syncedCount + failedCount, errors: errors.length > 0 ? errors : undefined }).catch(() => {
+        // Silently fail - logging should not break the app
+      });
+    }
+
     console.log(`[Background Sync ${jobId}] Completed: ${syncedCount} synced, ${failedCount} failed${tokenExpired ? ' (Token expired)' : ''}`);
   } catch (error) {
-    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    // SECURITY: Sanitize error messages to prevent sensitive data exposure
+    const { formatSyncError } = await import('@/lib/facebook/error-messages');
     console.error(`[Background Sync ${jobId}] Fatal error:`, error);
 
+    // Get job to retrieve startedAt for metrics calculation
+    const job = await prisma.syncJob.findUnique({
+      where: { id: jobId },
+      select: { startedAt: true, totalContacts: true },
+    });
+
+    const completedAt = new Date();
+    
+    // Calculate metrics even for failed jobs
+    const { calculateJobMetrics } = await import('@/lib/jobs/job-metrics');
+    const metrics = calculateJobMetrics({
+      startedAt: job?.startedAt || null,
+      completedAt,
+      totalContacts: job?.totalContacts || 0,
+      processedContacts: 0,
+      failedContacts: 0,
+    });
+
     // Mark job as failed
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
     await prisma.syncJob.update({
       where: { id: jobId },
       data: {
         status: 'FAILED',
-        errors: [{ error: errorMessage }],
-        completedAt: new Date(),
+        errors: [{ error: formatSyncError(error) }],
+        completedAt,
+        durationMs: metrics.durationMs,
+        contactsPerSecond: metrics.contactsPerSecond,
       },
+    });
+    
+    // Log job failure
+    const duration = Date.now() - startTime;
+    await logJobFailure(jobType, jobId, `Sync job failed: ${formatSyncError(error)}`, error as Error, { duration }).catch(() => {
+      // Silently fail - logging should not break the app
     });
   }
 }
