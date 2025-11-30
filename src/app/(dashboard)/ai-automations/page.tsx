@@ -28,6 +28,7 @@ interface Rule {
   activeHoursEnd: number;
   run24_7: boolean;
   stopOnReply: boolean;
+  respectBestContactTime: boolean;
   removeTagOnReply?: string;
   messageTag?: string;
   facebookPageId?: string;
@@ -46,6 +47,23 @@ interface Rule {
   };
 }
 
+interface Execution {
+  id: string;
+  status: string;
+  executedAt: string;
+  contactId?: string;
+  messageId?: string;
+  error?: string;
+  contact?: {
+    firstName?: string;
+  };
+  recipientName?: string;
+  generatedMessage?: string;
+  aiReasoning?: string;
+  errorMessage?: string;
+  facebookMessageId?: string;
+}
+
 export default function AIAutomationsPage() {
   const [rules, setRules] = useState<Rule[]>([]);
   const [loading, setLoading] = useState(true);
@@ -57,7 +75,7 @@ export default function AIAutomationsPage() {
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedRules, setSelectedRules] = useState<Set<string>>(new Set());
   const [viewingHistory, setViewingHistory] = useState<string | null>(null);
-  const [executionHistory, setExecutionHistory] = useState<Record<string, any[]>>({});
+  const [executionHistory, setExecutionHistory] = useState<Record<string, Execution[]>>({});
   const [loadingHistory, setLoadingHistory] = useState<Set<string>>(new Set());
 
   useEffect(() => {
@@ -612,7 +630,7 @@ export default function AIAutomationsPage() {
                           Loading execution history...
                         </div>
                       ) : executionHistory[rule.id]?.length > 0 ? (
-                        executionHistory[rule.id].map((exec: any) => (
+                        executionHistory[rule.id].map((exec: Execution) => (
                           <div
                             key={exec.id}
                             className="p-3 bg-muted rounded-md text-sm border border-border"
