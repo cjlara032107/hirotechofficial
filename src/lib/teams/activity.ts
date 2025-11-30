@@ -1,5 +1,6 @@
 import { prisma } from '@/lib/db'
 import { TeamActivityType, Prisma } from '@prisma/client'
+import { safePrismaOperation } from '../prisma-error-handler'
 
 export interface ActivityLogOptions {
   teamId: string
@@ -13,18 +14,101 @@ export interface ActivityLogOptions {
   ipAddress?: string
   userAgent?: string
   duration?: number
+  /**
+   * Optional unique identifier for idempotency.
+   * If provided, will check for existing log entry before creating.
+   * Format: `${type}-${entityType}-${entityId}-${timestamp}` or custom
+   */
+  idempotencyKey?: string
 }
 
 /**
- * Logs a team activity
+ * Logs a team activity with error handling, retry logic, idempotency, and non-blocking behavior.
+ * 
+ * Features:
+ * - Handles database errors gracefully (wraps in safePrismaOperation)
+ * - Handles duplicate log entries (idempotency via idempotencyKey)
+ * - Uses retry logic for resilience (via safePrismaOperation)
+ * - Is non-blocking (catches and logs errors without throwing)
+ * 
+ * @param options Activity log options
+ * @returns Promise that resolves to the created activity or null if error occurred
  */
-export async function logActivity(options: ActivityLogOptions) {
-  return prisma.teamActivity.create({
-    data: {
-      ...options,
-      metadata: options.metadata ? (options.metadata as Prisma.InputJsonValue) : undefined
+export async function logActivity(options: ActivityLogOptions): Promise<any> {
+  // Non-blocking: wrap in try-catch to prevent throwing
+  try {
+    // If idempotency key is provided, check for existing entry
+    if (options.idempotencyKey) {
+      try {
+        const existing = await safePrismaOperation(
+          async () => {
+            // Check if a similar activity already exists within the last 5 minutes
+            // This prevents duplicate logs from rapid retries or concurrent requests
+            const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000);
+            
+            return await prisma.teamActivity.findFirst({
+              where: {
+                teamId: options.teamId,
+                type: options.type,
+                action: options.action,
+                entityType: options.entityType || null,
+                entityId: options.entityId || null,
+                createdAt: { gte: fiveMinutesAgo },
+              },
+              orderBy: { createdAt: 'desc' },
+            });
+          },
+          {
+            operationName: 'check duplicate activity log',
+            maxRetries: 2, // Fewer retries for read operations
+          }
+        );
+
+        // If duplicate found, return existing entry (idempotent behavior)
+        if (existing) {
+          return existing;
+        }
+      } catch (checkError) {
+        // Non-blocking: if duplicate check fails, continue to create
+        // This ensures idempotency check doesn't block logging
+        console.warn('[Activity Log] Duplicate check failed, proceeding with create:', {
+          error: checkError instanceof Error ? checkError.message : String(checkError),
+        });
+      }
     }
-  })
+
+    // Create activity log with retry logic and error handling
+    const activity = await safePrismaOperation(
+      async () => {
+        return await prisma.teamActivity.create({
+          data: {
+            ...options,
+            metadata: options.metadata ? (options.metadata as Prisma.InputJsonValue) : undefined
+          }
+        });
+      },
+      {
+        operationName: 'create activity log',
+        maxRetries: 3,
+        initialDelay: 1000,
+        maxDelay: 10000,
+      }
+    );
+
+    return activity;
+  } catch (error) {
+    // Non-blocking: log error but don't throw
+    // This ensures logging failures don't break the main application flow
+    console.error('[Activity Log] Failed to log activity:', {
+      error: error instanceof Error ? error.message : String(error),
+      teamId: options.teamId,
+      type: options.type,
+      action: options.action,
+    });
+    
+    // Return null instead of throwing (non-blocking behavior)
+    return null;
+  }
 }
 
 /**
