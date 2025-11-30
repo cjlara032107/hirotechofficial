@@ -1,19 +1,58 @@
 import OpenAI from 'openai';
 import apiKeyManager from './api-key-manager';
+import { executeAIRequest, getTimeoutForOperation, getPriorityForOperation } from './ai-request-wrapper';
+import { RequestPriority } from './request-queue';
 
-const RATE_LIMIT_RETRY_DELAY_MS = 2000; // 2 seconds between retries (reduced from 6s for speed)
 const MAX_ATTEMPTS = 3;
+const BASE_RETRY_DELAY_MS = 500; // Base delay: 500ms (optimized for speed)
+const MAX_RETRY_DELAY_MS = 2000; // Max delay: 2 seconds (optimized for speed)
 
-// NVIDIA API model - using openai/gpt-oss-20b
-const MODEL = 'openai/gpt-oss-20b';
+// Model configuration - prefer faster models when available
+const PRIMARY_MODEL = process.env.AI_PRIMARY_MODEL || 'openai/gpt-oss-120b';
+const FAST_MODEL = process.env.AI_FAST_MODEL || 'openai/gpt-oss-20b'; // Faster, smaller model for simple operations
+const MODEL = PRIMARY_MODEL; // Default model
+
+// Determine if we should use a faster model based on operation complexity
+function getModelForOperation(operation: 'simple' | 'complex' = 'complex'): string {
+  if (operation === 'simple') {
+    return FAST_MODEL;
+  }
+  return PRIMARY_MODEL;
+}
 
 // Log model configuration on module load
-console.log(`[NVIDIA] Model Configuration:`);
-console.log(`  Model: ${MODEL}`);
-console.log(`  BaseURL: https://integrate.api.nvidia.com/v1`);
+import { logger } from '@/lib/utils/logger';
+logger.debug('NVIDIA Model Configuration', { 
+  model: MODEL, 
+  baseURL: 'https://integrate.api.nvidia.com/v1' 
+});
 
 function sleep(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+/**
+ * Calculates exponential backoff delay for rate limit retries
+ * 
+ * Uses exponential backoff formula: baseDelay * (2 ^ attemptNumber), capped at maxDelay.
+ * This provides increasing delays between retry attempts to avoid overwhelming the API.
+ * 
+ * @param attemptNumber - Zero-based attempt number (0 = first retry, 1 = second retry, etc.)
+ * @returns Delay in milliseconds, capped at MAX_RETRY_DELAY_MS
+ * 
+ * @example
+ * ```typescript
+ * // First retry: 500ms
+ * calculateExponentialBackoff(0); // 500
+ * // Second retry: 1000ms
+ * calculateExponentialBackoff(1); // 1000
+ * // Third retry: 2000ms (capped)
+ * calculateExponentialBackoff(2); // 2000
+ * ```
+ */
+function calculateExponentialBackoff(attemptNumber: number): number {
+  const delay = BASE_RETRY_DELAY_MS * Math.pow(2, attemptNumber);
+  return Math.min(delay, MAX_RETRY_DELAY_MS);
 }
 
 // Get API key from database first, then fall back to environment variables
@@ -32,6 +71,31 @@ async function getApiKey(requestContext?: { operation?: string; contactId?: stri
   return envKey;
 }
 
+/**
+ * Helper function to log rate limit exhaustion information when no API key is available
+ */
+async function logRateLimitExhaustion(): Promise<void> {
+  const rateLimitInfo = await apiKeyManager.getRateLimitExhaustionInfo();
+  if (rateLimitInfo.allRateLimited) {
+    const timeUntilAvailable = rateLimitInfo.earliestAvailableAt 
+      ? Math.max(0, rateLimitInfo.earliestAvailableAt.getTime() - Date.now())
+      : null;
+    const minutesUntilAvailable = timeUntilAvailable 
+      ? Math.ceil(timeUntilAvailable / 60000)
+      : null;
+    
+    console.error(
+      `[NVIDIA] 🚫 All API keys are rate-limited. ` +
+      (minutesUntilAvailable 
+        ? `Earliest key available in ~${minutesUntilAvailable} minute(s). ` 
+        : '') +
+      `Please wait or add additional API keys through Settings → API Keys.`
+    );
+  } else {
+    console.error('[NVIDIA] No API key available. Add one through Settings → API Keys or set NVIDIA_API_KEY environment variable.');
+  }
+}
+
 // Helper function to create OpenAI client configured for NVIDIA API
 function createNvidiaClient(apiKey: string): OpenAI {
   console.log(`[NVIDIA] Creating client with baseURL: https://integrate.api.nvidia.com/v1`);
@@ -43,6 +107,38 @@ function createNvidiaClient(apiKey: string): OpenAI {
   });
 }
 
+/**
+ * Analyzes a conversation and generates a summary using AI
+ * 
+ * This function processes a conversation between a contact and the business,
+ * using AI to generate a concise summary (3-5 sentences) that captures the
+ * key points, sentiment, and context of the conversation.
+ * 
+ * Features:
+ * - Automatic API key rotation and rate limit handling
+ * - Retry logic with exponential backoff
+ * - Circuit breaker protection
+ * - Performance monitoring and timeout handling
+ * - Uses faster model for simple analysis operations
+ * 
+ * @param messages - Array of conversation messages with sender and text
+ * @param messages[].from - Sender identifier (e.g., contact ID or 'business')
+ * @param messages[].text - Message text content
+ * @param messages[].timestamp - Optional message timestamp
+ * @param retries - Number of retry attempts on failure (default: 2)
+ * @param context - Optional context for API key selection and logging
+ * @param context.contactId - Contact ID for context-aware key selection
+ * @param context.conversationId - Conversation ID for logging
+ * @returns Promise resolving to AI-generated summary string, or null if analysis fails
+ * 
+ * @example
+ * ```typescript
+ * const summary = await analyzeConversation([
+ *   { from: 'contact_123', text: 'Hello, I need help with my order' },
+ *   { from: 'business', text: 'Hi! I can help you with that.' }
+ * ], 2, { contactId: 'contact_123' });
+ * ```
+ */
 export async function analyzeConversation(
   messages: Array<{
     from: string;
@@ -52,28 +148,50 @@ export async function analyzeConversation(
   retries = 2,
   context?: { contactId?: string; conversationId?: string }
 ): Promise<string | null> {
-  const startTime = Date.now();
+  const operation = 'analyzeConversation';
   const apiKey = await getApiKey({ 
-    operation: 'analyzeConversation',
+    operation,
     contactId: context?.contactId 
   });
   if (!apiKey) {
-    console.error('[NVIDIA] No API key available. Add one through Settings → API Keys or set NVIDIA_API_KEY environment variable.');
+    await logRateLimitExhaustion();
     return null;
   }
 
-  const result = await analyzeConversationWithKey(apiKey, messages, retries, 0);
-  
-  // Record success with duration
-  if (result) {
-    const duration = Date.now() - startTime;
-    await apiKeyManager.recordSuccess(apiKey, { 
-      operation: 'analyzeConversation',
-      duration 
-    });
+  try {
+    // Use faster model for simple conversation analysis
+    const model = getModelForOperation('simple');
+    const result = await executeAIRequest(
+      () => analyzeConversationWithKey(apiKey, messages, retries, 0, model),
+      {
+        operation,
+        priority: getPriorityForOperation(operation, false),
+        timeout: getTimeoutForOperation(operation),
+        circuitBreaker: 'conversationAnalysis',
+        apiKeyId: apiKey.substring(0, 16), // Use key prefix for tracking
+      }
+    );
+
+    // Record success
+    if (result) {
+      await apiKeyManager.recordSuccess(apiKey, { 
+        operation,
+      });
+    }
+    
+    return result;
+  } catch (error) {
+    // Error already logged by performance monitor
+    // Try retry logic if not a circuit breaker error
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    if (!errorMessage.includes('Circuit breaker') && retries > 0) {
+      console.log(`[NVIDIA] Retrying analyzeConversation (${retries} retries left)...`);
+      const backoffDelay = calculateExponentialBackoff(0); // Use base delay for general retries
+      await sleep(backoffDelay);
+      return analyzeConversation(messages, retries - 1, context);
+    }
+    throw error;
   }
-  
-  return result;
 }
 
 async function analyzeConversationWithKey(
@@ -84,8 +202,10 @@ async function analyzeConversationWithKey(
     timestamp?: Date;
   }>,
   retries: number,
-  keyAttempts: number
+  keyAttempts: number,
+  modelOverride?: string
 ): Promise<string | null> {
+  const modelToUse = modelOverride || MODEL;
   try {
     const openai = createNvidiaClient(apiKey);
 
@@ -106,11 +226,11 @@ ${conversationText}
 Summary:`;
 
     console.log(
-      `[NVIDIA] Sending request - Model: ${MODEL}, Messages: ${messages.length}`
+      `[NVIDIA] Sending request - Model: ${modelToUse}, Messages: ${messages.length}`
     );
 
     const completion = await openai.chat.completions.create({
-      model: MODEL,
+      model: modelToUse,
       messages: [
         {
           role: 'user',
@@ -147,6 +267,20 @@ Summary:`;
       return null;
     }
     
+    // Cache the result
+    const { setCachedAnalysis, hashConversation } = await import('./conversation-cache');
+    const hash = hashConversation(messages);
+    await setCachedAnalysis(hash, {
+      summary,
+      recommendedStage: 'New Lead',
+      leadScore: 50,
+      leadStatus: 'NEW',
+      confidence: 80,
+      reasoning: 'Cached conversation analysis'
+    }).catch(() => {
+      // Non-critical if caching fails
+    });
+    
     // Success will be recorded by caller with duration
     
     console.log(`[NVIDIA] ✅ Generated summary (${summary.length} chars)`);
@@ -174,11 +308,12 @@ Summary:`;
     if (errorMessage?.includes('429') || errorMessage?.includes('quota') || errorMessage?.includes('rate limit')) {
       const attemptNumber = keyAttempts + 1;
       if (attemptNumber < MAX_ATTEMPTS) {
+        const backoffDelay = calculateExponentialBackoff(keyAttempts);
         console.warn(
-          `[NVIDIA] Rate limit hit, retrying (attempt ${attemptNumber + 1}/${MAX_ATTEMPTS}) after ${RATE_LIMIT_RETRY_DELAY_MS}ms...`
+          `[NVIDIA] Rate limit hit, retrying (attempt ${attemptNumber + 1}/${MAX_ATTEMPTS}) after ${backoffDelay}ms (exponential backoff)...`
         );
-        await sleep(RATE_LIMIT_RETRY_DELAY_MS);
-        return analyzeConversationWithKey(apiKey, messages, retries, keyAttempts + 1);
+        await sleep(backoffDelay);
+        return analyzeConversationWithKey(apiKey, messages, retries, keyAttempts + 1, modelOverride);
       }
 
       console.error('[NVIDIA] Rate limit persists after multiple attempts');
@@ -188,7 +323,8 @@ Summary:`;
       
       // Try again if we have retries left (will get a different key from rotation)
       if (retries > 0) {
-        await sleep(RATE_LIMIT_RETRY_DELAY_MS);
+        const backoffDelay = calculateExponentialBackoff(0); // Reset backoff for new key
+        await sleep(backoffDelay);
         return analyzeConversation(messages, retries - 1);
       }
       
@@ -258,7 +394,7 @@ export async function generateFollowUpMessage(
 ): Promise<AIFollowUpResult | null> {
   const apiKey = await getApiKey();
   if (!apiKey) {
-    console.error('[NVIDIA] No API key available. Add one through Settings → API Keys or set NVIDIA_API_KEY environment variable.');
+    await logRateLimitExhaustion();
     return null;
   }
 
@@ -399,10 +535,11 @@ Respond ONLY with valid JSON (no markdown, no explanation):
     ) {
       const attemptNumber = keyAttempts + 1;
       if (attemptNumber < MAX_ATTEMPTS) {
+        const backoffDelay = calculateExponentialBackoff(keyAttempts);
         console.warn(
-          `[NVIDIA] Rate limit hit (follow-up), retrying (attempt ${attemptNumber + 1}/${MAX_ATTEMPTS}) after ${RATE_LIMIT_RETRY_DELAY_MS}ms...`
+          `[NVIDIA] Rate limit hit (follow-up), retrying (attempt ${attemptNumber + 1}/${MAX_ATTEMPTS}) after ${backoffDelay}ms (exponential backoff)...`
         );
-        await sleep(RATE_LIMIT_RETRY_DELAY_MS);
+        await sleep(backoffDelay);
         return generateFollowUpWithKey(
           apiKey,
           contactName,
@@ -418,7 +555,8 @@ Respond ONLY with valid JSON (no markdown, no explanation):
       
       // Try again if we have retries left
       if (retries > 0) {
-        await sleep(RATE_LIMIT_RETRY_DELAY_MS);
+        const backoffDelay = calculateExponentialBackoff(0); // Reset backoff for new key
+        await sleep(backoffDelay);
         return generateFollowUpMessage(
           contactName,
           conversationHistory,
@@ -477,34 +615,60 @@ export async function analyzeConversationWithStageRecommendation(
   retries = 2,
   context?: { contactId?: string }
 ): Promise<AIContactAnalysis | null> {
-  const startTime = Date.now();
+  const operation = 'analyzeConversationWithStageRecommendation';
+  
+  // Check cache first (include pipeline stages in hash for accuracy)
+  const { hashConversation, getCachedAnalysis } = await import('./conversation-cache');
+  const hash = hashConversation([
+    ...messages,
+    ...pipelineStages.map(s => ({ from: 'system', text: JSON.stringify(s) }))
+  ]);
+  const cached = await getCachedAnalysis(hash);
+  if (cached) {
+    console.log(`[NVIDIA] ✅ Using cached stage recommendation for conversation ${hash.substring(0, 8)}...`);
+    return cached;
+  }
+  
   const apiKey = await getApiKey({ 
-    operation: 'analyzeConversationWithStageRecommendation',
+    operation,
     contactId: context?.contactId 
   });
   if (!apiKey) {
-    console.error('[NVIDIA] No API key available. Add one through Settings → API Keys or set NVIDIA_API_KEY environment variable.');
+    await logRateLimitExhaustion();
     return null;
   }
 
-  const result = await analyzeConversationWithStageAndKey(
-    apiKey,
-    messages,
-    pipelineStages,
-    retries,
-    0
-  );
-  
-  // Record success with duration
-  if (result) {
-    const duration = Date.now() - startTime;
-    await apiKeyManager.recordSuccess(apiKey, { 
-      operation: 'analyzeConversationWithStageRecommendation',
-      duration 
-    });
+  try {
+    const result = await executeAIRequest(
+      () => analyzeConversationWithStageAndKey(apiKey, messages, pipelineStages, retries, 0),
+      {
+        operation,
+        priority: getPriorityForOperation(operation, false),
+        timeout: getTimeoutForOperation(operation),
+        circuitBreaker: 'conversationAnalysis',
+        apiKeyId: apiKey.substring(0, 16),
+      }
+    );
+
+    // Record success
+    if (result) {
+      await apiKeyManager.recordSuccess(apiKey, { 
+        operation,
+      });
+    }
+    
+    return result;
+  } catch (error) {
+    // Error already logged by performance monitor
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    if (!errorMessage.includes('Circuit breaker') && retries > 0) {
+      console.log(`[NVIDIA] Retrying analyzeConversationWithStageRecommendation (${retries} retries left)...`);
+      const backoffDelay = calculateExponentialBackoff(0); // Use base delay for general retries
+      await sleep(backoffDelay);
+      return analyzeConversationWithStageRecommendation(messages, pipelineStages, retries - 1, context);
+    }
+    throw error;
   }
-  
-  return result;
 }
 
 async function analyzeConversationWithStageAndKey(
@@ -593,12 +757,13 @@ Respond ONLY with valid JSON (no markdown, no explanation):
   "reasoning": "brief explanation of stage choice and score"
 }`;
 
+    const modelToUse = getModelForOperation('complex');
     console.log(
-      `[NVIDIA] Sending stage recommendation request - Model: ${MODEL}, Stages: ${pipelineStages.length}`
+      `[NVIDIA] Sending stage recommendation request - Model: ${modelToUse}, Stages: ${pipelineStages.length}`
     );
 
     const completion = await openai.chat.completions.create({
-      model: MODEL,
+      model: modelToUse,
       messages: [
         {
           role: 'user',
@@ -642,6 +807,16 @@ Respond ONLY with valid JSON (no markdown, no explanation):
     
     const analysis = JSON.parse(jsonMatch[0]) as AIContactAnalysis;
     
+    // Cache the result
+    const { setCachedAnalysis, hashConversation } = await import('./conversation-cache');
+    const hash = hashConversation([
+      ...messages,
+      ...pipelineStages.map(s => ({ from: 'system', text: JSON.stringify(s) }))
+    ]);
+    await setCachedAnalysis(hash, analysis).catch(() => {
+      // Non-critical if caching fails
+    });
+    
     // Success will be recorded by caller with duration
     
     console.log(`[NVIDIA] ✅ Stage recommendation: ${analysis.recommendedStage} (confidence: ${analysis.confidence}%, score: ${analysis.leadScore})`);
@@ -663,10 +838,11 @@ Respond ONLY with valid JSON (no markdown, no explanation):
     if (errorMessage?.includes('429') || errorMessage?.includes('quota') || errorMessage?.includes('rate limit')) {
       const attemptNumber = keyAttempts + 1;
       if (attemptNumber < MAX_ATTEMPTS) {
+        const backoffDelay = calculateExponentialBackoff(keyAttempts);
         console.warn(
-          `[NVIDIA] Rate limit hit (stage recommendation), retrying (attempt ${attemptNumber + 1}/${MAX_ATTEMPTS}) after ${RATE_LIMIT_RETRY_DELAY_MS}ms...`
+          `[NVIDIA] Rate limit hit (stage recommendation), retrying (attempt ${attemptNumber + 1}/${MAX_ATTEMPTS}) after ${backoffDelay}ms (exponential backoff)...`
         );
-        await sleep(RATE_LIMIT_RETRY_DELAY_MS);
+        await sleep(backoffDelay);
         return analyzeConversationWithStageAndKey(
           apiKey,
           messages,
@@ -683,7 +859,8 @@ Respond ONLY with valid JSON (no markdown, no explanation):
       
       // Try again if we have retries left (will get a different key from rotation)
       if (retries > 0) {
-        await sleep(RATE_LIMIT_RETRY_DELAY_MS);
+        const backoffDelay = calculateExponentialBackoff(0); // Reset backoff for new key
+        await sleep(backoffDelay);
         return analyzeConversationWithStageRecommendation(messages, pipelineStages, retries - 1);
       }
       
@@ -842,12 +1019,13 @@ Respond with ONLY the personalized message text (no JSON, no markdown, no explan
     } catch (error: unknown) {
       const errorMessage = error instanceof Error ? error.message : String(error);
       if (errorMessage?.includes('429') || errorMessage?.includes('quota') || errorMessage?.includes('rate limit')) {
+        const backoffDelay = calculateExponentialBackoff(0); // Use base delay for personalization retries
         console.warn(
-          `[NVIDIA] Rate limit hit (personalization), retrying after ${RATE_LIMIT_RETRY_DELAY_MS}ms...`
+          `[NVIDIA] Rate limit hit (personalization), retrying after ${backoffDelay}ms (exponential backoff)...`
         );
 
         if (retries > 0) {
-          await sleep(RATE_LIMIT_RETRY_DELAY_MS);
+          await sleep(backoffDelay);
           return this.generatePersonalizedMessage(context, retries - 1);
         }
 
