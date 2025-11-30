@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { auth } from '@/auth';
 import { prisma } from '@/lib/db';
+import { logger } from '@/lib/utils/logger';
 
 /**
  * GET /api/ai-assistant/chats/[chatId]
@@ -10,8 +11,10 @@ export async function GET(
   request: NextRequest,
   props: { params: Promise<{ chatId: string }> }
 ) {
+  let chatId: string | undefined;
   try {
-    const { chatId } = await props.params;
+    const params = await props.params;
+    chatId = params.chatId;
     const session = await auth();
     if (!session?.user) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
@@ -36,7 +39,7 @@ export async function GET(
 
     return NextResponse.json(chat);
   } catch (error) {
-    console.error('Get chat error:', error);
+    logger.error('Get chat error', error instanceof Error ? error : new Error(String(error)), chatId ? { chatId } : {});
     return NextResponse.json(
       { error: 'Failed to fetch chat' },
       { status: 500 }
@@ -52,29 +55,47 @@ export async function DELETE(
   request: NextRequest,
   props: { params: Promise<{ chatId: string }> }
 ) {
+  let chatId: string | undefined;
   try {
-    const { chatId } = await props.params;
+    const params = await props.params;
+    chatId = params.chatId;
     const session = await auth();
     if (!session?.user) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
-    await prisma.assistantChat.delete({
+    // Verify chat belongs to user and organization before deleting
+    const chat = await prisma.assistantChat.findFirst({
       where: {
         id: chatId,
         userId: session.user.id,
+        organizationId: session.user.organizationId,
+      },
+    });
+
+    if (!chat) {
+      return NextResponse.json({ error: 'Chat not found' }, { status: 404 });
+    }
+
+    await prisma.assistantChat.delete({
+      where: {
+        id: chatId,
       },
     });
 
     return NextResponse.json({ success: true });
   } catch (error) {
-    console.error('Delete chat error:', error);
+    logger.error('Delete chat error', error instanceof Error ? error : new Error(String(error)), chatId ? { chatId } : {});
     return NextResponse.json(
       { error: 'Failed to delete chat' },
       { status: 500 }
     );
   }
 }
+
+
+
+
 
 
 
