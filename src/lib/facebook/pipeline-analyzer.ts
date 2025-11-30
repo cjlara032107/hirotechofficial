@@ -1119,6 +1119,7 @@ async function executePipelineAnalysis(jobId: string, facebookPageId: string): P
     }
     
     // Calculate metrics even for failed jobs
+    const { calculateJobMetrics } = await import('@/lib/jobs/job-metrics');
     const metrics = calculateJobMetrics({
       startedAt: job?.startedAt || null,
       completedAt,
