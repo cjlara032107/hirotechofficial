@@ -766,9 +766,9 @@ function evaluateBotAccuracy(
 
 // NEW FEATURE: Similar Leads Insight
 function generateSimilarLeadsInsight(
-  buyerStyle?: EnhancedAnalysisResult['buyerStyle'],
   productInterests: string[],
   buyerIntent: string,
+  buyerStyle?: EnhancedAnalysisResult['buyerStyle'],
   conversionPath: string[]
 ): string {
   const insights: string[] = [];
@@ -938,7 +938,7 @@ export async function analyzeConversationEnhanced(
   const buyerReliability = calculateBuyerReliability(messages, intentSignals, conversionProbability, buyerStyle);
   const leadRisk = assessLeadRisk(messages, sentimentDetection.sentiment, buyerReliability, intentSignals);
   const botAccuracy = evaluateBotAccuracy(intentDetection.confidence, sentimentDetection.confidence, conversionProbability);
-  const similarLeadsInsight = generateSimilarLeadsInsight(buyerStyle, productInterests, intentDetection.intent, conversionPath);
+  const similarLeadsInsight = generateSimilarLeadsInsight(productInterests, intentDetection.intent, conversionPath, buyerStyle);
   
   // Create comprehensive, detailed user-friendly summary (much longer)
   const engagementLevel = messages.length >= 10 ? 'High' : messages.length >= 5 ? 'Moderate' : 'Low';
