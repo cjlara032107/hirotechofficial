@@ -5,6 +5,17 @@ import { analyzeWithFallback } from '@/lib/ai/enhanced-analysis';
 import { autoAssignContactToPipeline } from '@/lib/pipelines/auto-assign';
 import { applyStageScoreRanges } from '@/lib/pipelines/stage-analyzer';
 import { withRetry } from '@/lib/db-retry';
+import { filterSystemMessages, hasUserMessages } from './message-filtering';
+import { progressBatcher } from './pipeline-analyzer/progress-batcher';
+import {
+  isJobActive,
+  verifyPageExists,
+  verifyPipelineExists,
+  isTokenExpiredError,
+  markJobFailedDueToPageDeletion,
+  markJobFailedDueToPipelineDeletion,
+  markJobFailedDueToTokenExpiration,
+} from './job-safety-checks';
 
 interface PipelineAnalysisResult {
   success: boolean;
@@ -224,14 +235,25 @@ async function processBatch(
       }
 
       // Priority 2: Score-based routing (if no status match)
+      // Handle boundary cases: score 0 matches stages with min <= 0, score 100 matches stages with max >= 100
       if (!proposedStage) {
-        proposedStage = pipeline.stages.find(stage => 
-          leadScore >= stage.leadScoreMin && 
-          leadScore <= stage.leadScoreMax &&
-          stage.type !== 'WON' &&
-          stage.type !== 'LOST' &&
-          stage.type !== 'ARCHIVED'
-        );
+        proposedStage = pipeline.stages.find(stage => {
+          // Handle null/undefined stage properties
+          const stageMin = stage.leadScoreMin ?? 0;
+          const stageMax = stage.leadScoreMax ?? 100;
+          
+          // Handle exact boundary scores (0 and 100) and all scores in between
+          // Score 0 matches if stageMin <= 0, score 100 matches if stageMax >= 100
+          // All other scores match if they fall within the range [stageMin, stageMax]
+          const scoreMatches = (leadScore === 0 && stageMin <= 0) ||
+                               (leadScore === 100 && stageMax >= 100) ||
+                               (leadScore >= stageMin && leadScore <= stageMax);
+          
+          return scoreMatches &&
+                 stage.type !== 'WON' &&
+                 stage.type !== 'LOST' &&
+                 stage.type !== 'ARCHIVED';
+        });
       }
 
       // Priority 3: Try exact name match from AI recommendation
@@ -243,12 +265,26 @@ async function processBatch(
 
       // Priority 4: Closest match fallback
       if (!proposedStage) {
+        if (!pipeline.stages || pipeline.stages.length === 0) {
+          console.warn(`[Pipeline Analysis ${jobId}] No stages available in pipeline ${pipelineId}, skipping contact ${item.contactId}`);
+          continue;
+        }
+        
         let closestStage = pipeline.stages[0];
-        let closestDistance = Math.abs((pipeline.stages[0].leadScoreMin + pipeline.stages[0].leadScoreMax) / 2 - leadScore);
+        if (!closestStage) {
+          continue;
+        }
+        
+        const stageMin1 = closestStage.leadScoreMin ?? 0;
+        const stageMax1 = closestStage.leadScoreMax ?? 100;
+        let closestDistance = Math.abs((stageMin1 + stageMax1) / 2 - leadScore);
 
         for (const stage of pipeline.stages) {
           if (stage.type === 'ARCHIVED') continue;
-          const stageMidpoint = (stage.leadScoreMin + stage.leadScoreMax) / 2;
+          // Handle null/undefined stage properties
+          const stageMin = stage.leadScoreMin ?? 0;
+          const stageMax = stage.leadScoreMax ?? 100;
+          const stageMidpoint = (stageMin + stageMax) / 2;
           const distance = Math.abs(stageMidpoint - leadScore);
           if (distance < closestDistance) {
             closestDistance = distance;
@@ -260,7 +296,18 @@ async function processBatch(
 
       // Final fallback to first stage (should never happen, but safety check)
       if (!proposedStage) {
-        proposedStage = pipeline.stages[0];
+        if (pipeline.stages && pipeline.stages.length > 0) {
+          proposedStage = pipeline.stages[0];
+        } else {
+          console.warn(`[Pipeline Analysis ${jobId}] ⚠️ No stages available in pipeline ${pipelineId}, skipping contact ${item.contactId}`);
+          continue;
+        }
+      }
+
+      // Safety check: ensure proposedStage is defined before using it
+      if (!proposedStage) {
+        console.warn(`[Pipeline Analysis ${jobId}] Could not determine stage for contact ${item.contactId}, skipping`);
+        continue;
       }
 
       // Check downgrade protection
@@ -269,8 +316,8 @@ async function processBatch(
           contact.stage.order,
           proposedStage.order,
           contact.leadScore || 0,
-          aiAnalysis.leadScore,
-          proposedStage.leadScoreMin
+          leadScore, // Use clamped score
+          proposedStage.leadScoreMin ?? 0
         );
 
         if (shouldBlock) {
@@ -281,8 +328,8 @@ async function processBatch(
       assignments.push({
         contactId: item.contactId,
         stageId: proposedStage.id,
-        leadScore: aiAnalysis.leadScore,
-        leadStatus: (aiAnalysis.leadStatus || 'NEW') as LeadStatus,
+        leadScore: leadScore, // Use clamped score
+        leadStatus: leadStatus,
         fromStageId: contact.stageId,
       });
     }
@@ -624,10 +671,22 @@ async function executePipelineAnalysis(jobId: string, facebookPageId: string): P
     // Process all contacts continuously - each contact completes independently
     // OPTIMIZED: Maximum concurrency for fastest processing (fast mode uses fallback scoring, no AI calls)
     // Fast mode processes 200+ contacts/minute with recent messages only
+    
+    // Start memory monitoring
+    memoryMonitor.startMonitoring(
+      (stats) => {
+        console.warn(`[Pipeline Analysis ${jobId}] ⚠️ High memory usage: ${memoryMonitor.formatStats(stats)}`);
+      },
+      (stats) => {
+        console.error(`[Pipeline Analysis ${jobId}] 🚨 CRITICAL memory usage: ${memoryMonitor.formatStats(stats)}`);
+      }
+    );
+    
     const conversationFetchLimiter = new ConcurrencyLimiter(50); // Increased to 50 for maximum parallel fetching
     const analysisLimiter = new ConcurrencyLimiter(100); // Fast mode is instant, can handle very high concurrency
     
     console.log(`[Pipeline Analysis ${jobId}] Processing ${contactsToAnalyze.length} contacts continuously...`);
+    console.log(`[Pipeline Analysis ${jobId}] 💾 Memory monitoring: ${memoryMonitor.formatStats()}`);
 
     // Batch database updates for efficiency (larger batches for maximum throughput)
     // Fast mode makes analysis instant, so we can process much larger batches
@@ -672,8 +731,18 @@ async function executePipelineAnalysis(jobId: string, facebookPageId: string): P
     // Process all contacts in one continuous flow
     await Promise.all(
       contactsToAnalyze.map(async (contact) => {
-        // Check for cancellation periodically
-        if (await isJobCancelled(jobId)) {
+        // Check for cancellation and verify page/pipeline still exist periodically
+        try {
+          const statusCheck = await isJobActive(jobId, 'sync');
+          if (!statusCheck.active) {
+            console.log(`[Pipeline Analysis ${jobId}] ${statusCheck.reason || 'Job stopped'}`);
+            return;
+          }
+          // Note: Page and pipeline verification would require passing them as parameters
+          // For now, we rely on the initial checks and status checks
+        } catch (error) {
+          const errorMsg = error instanceof Error ? error.message : 'Job stopped';
+          console.log(`[Pipeline Analysis ${jobId}] ${errorMsg}`);
           return;
         }
 
@@ -775,23 +844,46 @@ async function executePipelineAnalysis(jobId: string, facebookPageId: string): P
             return;
           }
 
-          // Step 3: Prepare messages for analysis
-          const messagesToAnalyze = messages
-            .filter((msg: { message?: string }) => msg.message)
-            .map((msg: { 
-              from?: { name?: string; username?: string; id?: string }; 
-              message?: string; 
-              created_time?: string 
-            }) => ({
-              from: msg.from?.name || msg.from?.username || msg.from?.id || 'Unknown',
-              text: msg.message || '',
-              timestamp: msg.created_time ? new Date(msg.created_time) : undefined,
-            }))
+          // Step 3: Filter out system messages and prepare messages for analysis
+          // Handle conversations with only system messages
+          if (!hasUserMessages(messages, page.pageId)) {
+            failedCount++;
+            const errorMsg = `No user messages found (only system messages) - ${messages.length} total messages`;
+            errors.push({
+              platform: contact.messengerPSID ? 'Messenger' : 'Instagram',
+              id: contact.id,
+              error: errorMsg,
+              code: undefined,
+            });
+            
+            // Log first 10 failures for debugging
+            if (failedCount <= 10) {
+              console.warn(`[Pipeline Analysis ${jobId}] ${errorMsg} (Contact: ${contact.firstName} ${contact.lastName || ''})`);
+            }
+            return;
+          }
+
+          // Filter system messages and prepare for analysis
+          const messagesToAnalyze = filterSystemMessages(messages, page.pageId)
+            .map((msg, index) => {
+              // Find original message to get timestamp if available
+              const originalMsg = messages.find(m => 
+                (m.message || '').trim() === msg.text.trim() ||
+                (m.from?.id === msg.from) ||
+                (m.from?.name === msg.from)
+              );
+              
+              return {
+                from: msg.from,
+                text: msg.text,
+                timestamp: originalMsg?.created_time ? new Date(originalMsg.created_time) : undefined,
+              };
+            })
             .reverse(); // Oldest first
 
           if (messagesToAnalyze.length === 0) {
             failedCount++;
-            const errorMsg = `No valid messages to analyze (${messages.length} total messages, all filtered out)`;
+            const errorMsg = `No valid messages to analyze after filtering (${messages.length} total messages, all were system messages)`;
             errors.push({
               platform: contact.messengerPSID ? 'Messenger' : 'Instagram',
               id: contact.id,
@@ -933,6 +1025,34 @@ async function executePipelineAnalysis(jobId: string, facebookPageId: string): P
       await processBatch(updateQueue, jobId, pipelineId, pipelineMode);
     }
 
+    // Get job to retrieve startedAt for metrics calculation
+    const job = await prisma.syncJob.findUnique({
+      where: { id: jobId },
+      select: { startedAt: true },
+    });
+
+    const completedAt = new Date();
+    
+    // CRITICAL: Flush all batched progress updates before final job update
+    // This ensures all progress updates are written to the database
+    try {
+      await progressBatcher.flushBatch();
+      console.log(`[Pipeline Analysis ${jobId}] ✅ Flushed all batched progress updates`);
+    } catch (flushError) {
+      console.warn(`[Pipeline Analysis ${jobId}] ⚠️ Error flushing progress updates:`, flushError);
+      // Continue with job completion even if flush fails
+    }
+
+    // Calculate performance metrics
+    const { calculateJobMetrics } = await import('@/lib/jobs/job-metrics');
+    const metrics = calculateJobMetrics({
+      startedAt: job?.startedAt || null,
+      completedAt,
+      totalContacts: analyzedCount + failedCount,
+      processedContacts: analyzedCount,
+      failedContacts: failedCount,
+    });
+
     // Update job with final results
     await prisma.syncJob.update({
       where: { id: jobId },
@@ -943,9 +1063,19 @@ async function executePipelineAnalysis(jobId: string, facebookPageId: string): P
         totalContacts: analyzedCount + failedCount,
         errors: errors.length > 0 ? errors : Prisma.JsonNull,
         tokenExpired,
-        completedAt: new Date(),
+        completedAt,
+        durationMs: metrics.durationMs,
+        contactsPerSecond: metrics.contactsPerSecond,
       },
     });
+
+    // Log metrics
+    if (metrics.durationMs) {
+      console.log(`[Pipeline Analysis ${jobId}] ⏱️ Duration: ${(metrics.durationMs / 1000).toFixed(1)}s`);
+    }
+    if (metrics.contactsPerSecond) {
+      console.log(`[Pipeline Analysis ${jobId}] 📊 Contacts/sec: ${metrics.contactsPerSecond.toFixed(2)}`);
+    }
 
     console.log(`[Pipeline Analysis ${jobId}] Completed: ${analyzedCount} analyzed, ${failedCount} failed${tokenExpired ? ' (Token expired)' : ''}`);
     
@@ -970,13 +1100,41 @@ async function executePipelineAnalysis(jobId: string, facebookPageId: string): P
     const errorMessage = error instanceof Error ? error.message : 'Unknown error';
     console.error(`[Pipeline Analysis ${jobId}] Fatal error:`, error);
 
+    // Get job to retrieve startedAt for metrics calculation
+    const job = await prisma.syncJob.findUnique({
+      where: { id: jobId },
+      select: { startedAt: true, totalContacts: true },
+    });
+
+    const completedAt = new Date();
+    
+    // CRITICAL: Flush all batched progress updates before final job update
+    try {
+      await progressBatcher.flushBatch();
+      console.log(`[Pipeline Analysis ${jobId}] ✅ Flushed all batched progress updates (on error)`);
+    } catch (flushError) {
+      console.warn(`[Pipeline Analysis ${jobId}] ⚠️ Error flushing progress updates:`, flushError);
+      // Continue with job failure marking even if flush fails
+    }
+    
+    // Calculate metrics even for failed jobs
+    const metrics = calculateJobMetrics({
+      startedAt: job?.startedAt || null,
+      completedAt,
+      totalContacts: job?.totalContacts || 0,
+      processedContacts: 0,
+      failedContacts: 0,
+    });
+
     // Mark job as failed
     await prisma.syncJob.update({
       where: { id: jobId },
       data: {
         status: 'FAILED',
         errors: [{ error: errorMessage }],
-        completedAt: new Date(),
+        completedAt,
+        durationMs: metrics.durationMs,
+        contactsPerSecond: metrics.contactsPerSecond,
       },
     });
   }
