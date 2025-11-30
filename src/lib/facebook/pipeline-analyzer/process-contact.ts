@@ -272,9 +272,9 @@ export async function processContact(
       conversationPatterns: 'conversationPatterns' in analysis ? analysis.conversationPatterns : undefined,
       indirectIntent: 'indirectIntent' in analysis ? analysis.indirectIntent : undefined,
       buyerReliability: 'buyerReliability' in analysis ? analysis.buyerReliability : undefined,
-      buyerStyle: analysis.buyerStyle,
-      leadRiskLevel: analysis.leadRiskLevel,
-      leadRiskReasons: analysis.leadRiskReasons,
+      buyerStyle: 'buyerStyle' in analysis ? analysis.buyerStyle : undefined,
+      leadRiskLevel: 'leadRiskLevel' in analysis ? analysis.leadRiskLevel : undefined,
+      leadRiskReasons: 'leadRiskReasons' in analysis ? analysis.leadRiskReasons : undefined,
     };
   } catch (error) {
     // Handle all error cases gracefully - return null (doesn't throw)
