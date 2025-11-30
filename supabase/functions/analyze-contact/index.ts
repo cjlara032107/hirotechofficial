@@ -322,7 +322,7 @@ Deno.serve(async (req: Request) => {
 
     // If fast analysis failed, use fallback scoring
     if (!analysisResult) {
-      const fallback = calculateFallbackScore(messages, lastInteraction);
+      const fallback = calculateFallbackScore(convertedMessages, lastInteraction);
       analysisResult = {
         summary: `Contact analysis: ${fallback.reasoning}`,
         recommendedStage: pipelineStages?.[0]?.name || 'New Lead',
