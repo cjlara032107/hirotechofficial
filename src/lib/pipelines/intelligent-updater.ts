@@ -263,8 +263,7 @@ export class IntelligentPipelineUpdater {
 
       // Start pipeline analysis
       const result = await startPipelineAnalysis(
-        item.facebookPageId,
-        false // Don't force update existing - let the system decide
+        item.facebookPageId
       );
 
       const duration = Date.now() - startTime;
