@@ -1,5 +1,5 @@
 import { prisma, connectPrisma } from '@/lib/db';
-import { Prisma, Platform } from '@prisma/client';
+import { Prisma, Platform, MessageStatus } from '@prisma/client';
 import { FacebookClient, FacebookApiError } from './client';
 import { analyzeWithFallback } from '@/lib/ai/enhanced-analysis';
 import { autoAssignContactToPipeline } from '@/lib/pipelines/auto-assign';
@@ -742,7 +742,7 @@ async function executeBackgroundSync(jobId: string, facebookPageId: string): Pro
                       platform: Platform.MESSENGER,
                       facebookMessageId: msg.id,
                       isFromBusiness,
-                      status: 'DELIVERED',
+                      status: MessageStatus.DELIVERED,
                       createdAt,
                       sentAt: createdAt,
                       deliveredAt: createdAt,
