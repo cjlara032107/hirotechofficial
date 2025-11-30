@@ -944,8 +944,10 @@ export async function analyzeConversationEnhanced(
   const engagementLevel = messages.length >= 10 ? 'High' : messages.length >= 5 ? 'Moderate' : 'Low';
   const messageCount = messages.length;
   const avgMessageLength = messages.reduce((sum, m) => sum + m.text.length, 0) / messageCount;
-  const conversationDuration = messages.length > 1 && messages[0].timestamp && messages[messages.length - 1].timestamp
-    ? Math.round((messages[messages.length - 1].timestamp.getTime() - messages[0].timestamp.getTime()) / (1000 * 60))
+  const firstMsg = messages[0];
+  const lastMsg = messages[messages.length - 1];
+  const conversationDuration = messages.length > 1 && firstMsg?.timestamp && lastMsg?.timestamp
+    ? Math.round((lastMsg.timestamp.getTime() - firstMsg.timestamp.getTime()) / (1000 * 60))
     : 0;
   
   const summary = `This contact has engaged in an active conversation spanning ${messageCount} ${messageCount === 1 ? 'message' : 'messages'}${conversationDuration > 0 ? ` over approximately ${conversationDuration} minutes` : ''}, demonstrating ${engagementLevel.toLowerCase()} engagement levels. ` +
