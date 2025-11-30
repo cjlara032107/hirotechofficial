@@ -1028,7 +1028,7 @@ async function executeInstantSync(jobId: string, facebookPageId: string, userId:
     const processInstagram = async (): Promise<number> => {
       if (!page.instagramAccountId) return 0;
       
-      const igParticipantMap = new Map<string, { updatedTime: string; name?: string }>();
+      const igParticipantMap = new Map<string, { updatedTime: string; name?: string; conversationId?: string }>();
       let igConversationCount = 0;
       const IG_PROCESS_BATCH_SIZE = 500;
       const MAX_IG_STREAM_TIME = 10 * 60 * 1000;
