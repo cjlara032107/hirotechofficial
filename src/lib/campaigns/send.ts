@@ -1,5 +1,7 @@
 import { prisma } from '@/lib/db';
+import { Prisma } from '@prisma/client';
 import { FacebookClient } from '@/lib/facebook/client';
+import { formatUserFriendlyError } from '@/lib/facebook/error-messages';
 
 /**
  * Send a single message directly
@@ -12,6 +14,8 @@ async function sendMessageDirect(data: {
   messageTag?: string | null;
   pageAccessToken: string;
   recipientId: string | null;
+  mediaUrl?: string | null;
+  mediaType?: 'image' | 'video' | null;
 }): Promise<{ success: boolean; error?: string; message?: string; code?: number; type?: string }> {
   const {
     campaignId,
@@ -21,6 +25,8 @@ async function sendMessageDirect(data: {
     messageTag,
     pageAccessToken,
     recipientId,
+    mediaUrl,
+    mediaType,
   } = data;
 
   // Validate recipientId before attempting to send
@@ -59,7 +65,59 @@ async function sendMessageDirect(data: {
     const client = new FacebookClient(pageAccessToken);
 
     let result;
-    if (platform === 'MESSENGER') {
+    if (mediaUrl && mediaType) {
+      console.log(`📸 Sending media message to ${recipientId}:`, {
+        mediaUrl,
+        mediaType,
+        message: content || '(no text)',
+        messageTag: messageTag || '(none)',
+      });
+      
+      // Ensure mediaUrl is a full public URL
+      let fullMediaUrl = mediaUrl;
+      if (mediaUrl.startsWith('/')) {
+        // Relative path - convert to full URL
+        const baseUrl = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000';
+        fullMediaUrl = `${baseUrl}${mediaUrl}`;
+        console.log(`🔗 Converted relative URL to full URL: ${fullMediaUrl}`);
+      }
+      
+      // Validate URL format
+      try {
+        new URL(fullMediaUrl);
+      } catch (urlError) {
+        console.error(`❌ Invalid media URL format: ${fullMediaUrl}`);
+        throw new Error(`Invalid media URL format: ${fullMediaUrl}`);
+      }
+      
+      // Warn if using localhost (Facebook won't be able to access it)
+      if (fullMediaUrl.includes('localhost') || fullMediaUrl.includes('127.0.0.1')) {
+        console.warn(`⚠️ WARNING: Media URL uses localhost. Facebook cannot access localhost URLs. Use a publicly accessible URL.`);
+      }
+      
+      result = await client.sendMediaMessage({
+        recipientId,
+        message: content || undefined,
+        mediaUrl: fullMediaUrl,
+        mediaType,
+        messageTag: messageTag as any,
+      });
+      
+      if (!result.success) {
+        console.error(`❌ Failed to send media message:`, {
+          error: result.error,
+          message: result.message,
+          code: result.code,
+          recipientId,
+          mediaUrl: fullMediaUrl,
+        });
+      } else {
+        console.log(`✅ Media message sent successfully:`, {
+          messageId: result.data?.message_id,
+          recipientId,
+        });
+      }
+    } else if (platform === 'MESSENGER') {
       result = await client.sendMessengerMessage({
         recipientId,
         message: content,
@@ -72,7 +130,7 @@ async function sendMessageDirect(data: {
     if (result.success) {
       await prisma.message.create({
         data: {
-          content,
+          content: content || (mediaUrl ? `[${mediaType}]` : ''),
           platform: platform as any,
           status: 'SENT',
           messageTag: messageTag as any,
@@ -81,6 +139,10 @@ async function sendMessageDirect(data: {
           campaignId,
           isFromBusiness: true,
           sentAt: new Date(),
+          attachments: mediaUrl ? {
+            type: mediaType,
+            url: mediaUrl,
+          } : undefined,
         },
       });
 
@@ -109,7 +171,8 @@ async function sendMessageDirect(data: {
       const errorDetails = 'error' in result ? result.error : 'Failed to send message';
       const errorMessage = 'message' in result ? result.message : errorDetails;
       
-      // Log detailed error for debugging
+      // Log detailed error for debugging (server-side only)
+      // SECURITY: Do not log sensitive data like tokens
       console.error(`[Campaign Send] Message failed:`, {
         contactId,
         recipientId,
@@ -118,6 +181,9 @@ async function sendMessageDirect(data: {
         message: errorMessage,
         code: 'code' in result ? result.code : undefined,
       });
+      
+      // SECURITY: Sanitize error message before storing in database
+      const sanitizedErrorMessage = formatUserFriendlyError(errorMessage);
       
       await prisma.message.create({
         data: {
@@ -129,7 +195,7 @@ async function sendMessageDirect(data: {
           campaignId,
           isFromBusiness: true,
           failedAt: new Date(),
-          errorMessage: errorMessage,
+          errorMessage: sanitizedErrorMessage,
         },
       });
 
@@ -143,22 +209,26 @@ async function sendMessageDirect(data: {
         console.error(`Failed to update failedCount for campaign ${campaignId}:`, error);
       }
     
-      return { success: false, error: errorMessage };
+      // SECURITY: Return sanitized error message to client
+      return { success: false, error: sanitizedErrorMessage };
     }
   } catch (error: any) {
-    await prisma.message.create({
-      data: {
-        content,
-        platform: platform as any,
-        status: 'FAILED',
-        messageTag: messageTag as any,
-        contactId,
-        campaignId,
-        isFromBusiness: true,
-        failedAt: new Date(),
-        errorMessage: error.message,
-      },
-    });
+      // SECURITY: Sanitize error message before storing in database
+      const sanitizedErrorMessage = formatUserFriendlyError(error);
+      
+      await prisma.message.create({
+        data: {
+          content,
+          platform: platform as any,
+          status: 'FAILED',
+          messageTag: messageTag as any,
+          contactId,
+          campaignId,
+          isFromBusiness: true,
+          failedAt: new Date(),
+          errorMessage: sanitizedErrorMessage,
+        },
+      });
 
     // Update failedCount atomically
     try {
@@ -170,7 +240,9 @@ async function sendMessageDirect(data: {
       console.error(`Failed to update failedCount for campaign ${campaignId}:`, updateError);
     }
 
-    return { success: false, error: error.message };
+    // SECURITY: Sanitize error messages to prevent sensitive data exposure
+    const sanitizedError = formatUserFriendlyError(error);
+    return { success: false, error: sanitizedError };
   }
 }
 
@@ -187,6 +259,8 @@ async function sendMessagesInBackground(
     messageTag?: string | null;
     pageAccessToken: string;
     recipientId: string | null;
+    mediaUrl?: string | null;
+    mediaType?: 'image' | 'video' | null;
   }>
 ): Promise<void> {
   if (!messages || messages.length === 0) {
@@ -249,7 +323,7 @@ async function sendMessagesInBackground(
 
           // Track rate limit errors in this batch
           let rateLimitCount = 0;
-          let rateLimitCodes: number[] = [];
+          const rateLimitCodes: number[] = [];
 
           // Count successes and failures accurately
           results.forEach((result, index) => {
@@ -390,6 +464,12 @@ async function sendMessagesInBackground(
           // Always mark as COMPLETED if background process finished, regardless of counts
           // This prevents campaigns from getting stuck
           if (finalCampaign.status === 'SENDING') {
+            // Get campaign with media info before updating
+            const campaignWithMedia = await prisma.campaign.findUnique({
+              where: { id: campaignId },
+              select: { mediaUrl: true, mediaType: true },
+            });
+            
             const updateResult = await prisma.campaign.update({
               where: { id: campaignId },
               data: { 
@@ -397,6 +477,13 @@ async function sendMessagesInBackground(
                 completedAt: new Date(),
               },
             });
+            
+            // Delete media file after campaign completion
+            if (campaignWithMedia?.mediaUrl && campaignWithMedia?.mediaType) {
+              const { deleteCampaignMedia } = await import('./delete-media');
+              await deleteCampaignMedia(campaignWithMedia.mediaUrl, campaignWithMedia.mediaType);
+            }
+            
             console.log(`✅ Campaign ${campaignId} marked as COMPLETED`, {
               sentCount: updateResult.sentCount,
               failedCount: updateResult.failedCount,
@@ -410,6 +497,13 @@ async function sendMessagesInBackground(
             break; // Already completed, exit retry loop
           } else {
             console.warn(`⚠️ Campaign ${campaignId} status is ${finalCampaign.status}, attempting to mark as COMPLETED anyway`);
+            
+            // Get campaign with media info before updating
+            const campaignWithMedia = await prisma.campaign.findUnique({
+              where: { id: campaignId },
+              select: { mediaUrl: true, mediaType: true },
+            });
+            
             const updateResult = await prisma.campaign.update({
               where: { id: campaignId },
               data: { 
@@ -417,6 +511,13 @@ async function sendMessagesInBackground(
                 completedAt: new Date(),
               },
             });
+            
+            // Delete media file after campaign completion
+            if (campaignWithMedia?.mediaUrl && campaignWithMedia?.mediaType) {
+              const { deleteCampaignMedia } = await import('./delete-media');
+              await deleteCampaignMedia(campaignWithMedia.mediaUrl, campaignWithMedia.mediaType);
+            }
+            
             console.log(`✅ Campaign ${campaignId} marked as COMPLETED (forced)`, {
               sentCount: updateResult.sentCount,
               failedCount: updateResult.failedCount,
@@ -454,6 +555,12 @@ async function sendMessagesInBackground(
         });
 
         if (errorCampaign?.status === 'SENDING') {
+          // Get campaign with media info before updating
+          const campaignWithMedia = await prisma.campaign.findUnique({
+            where: { id: campaignId },
+            select: { mediaUrl: true, mediaType: true },
+          });
+          
           await prisma.campaign.update({
             where: { id: campaignId },
             data: { 
@@ -461,6 +568,13 @@ async function sendMessagesInBackground(
               completedAt: new Date(),
             },
           });
+          
+          // Delete media file after campaign completion
+          if (campaignWithMedia?.mediaUrl && campaignWithMedia?.mediaType) {
+            const { deleteCampaignMedia } = await import('./delete-media');
+            await deleteCampaignMedia(campaignWithMedia.mediaUrl, campaignWithMedia.mediaType);
+          }
+          
           console.log(`✅ Campaign ${campaignId} marked as COMPLETED after error`);
         }
       } catch (updateError) {
@@ -564,7 +678,17 @@ export async function startCampaign(campaignId: string) {
       facebookPage: true,
       template: true,
     },
-  });
+    // Explicitly select media fields to ensure they're included
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  }) as any;
+  
+  // Log media info for debugging
+  if (campaign?.mediaUrl || campaign?.mediaType) {
+    console.log(`📸 Campaign ${campaignId} has media:`, {
+      mediaUrl: campaign.mediaUrl,
+      mediaType: campaign.mediaType,
+    });
+  }
 
   if (!campaign) throw new Error('Campaign not found');
   console.log(`✅ Campaign found: ${campaign.name}`);
@@ -573,6 +697,12 @@ export async function startCampaign(campaignId: string) {
   console.log(`📊 Target contacts found: ${targetContacts.length}`);
 
   if (targetContacts.length === 0) {
+    // Get campaign with media info before updating
+    const campaignWithMedia = await prisma.campaign.findUnique({
+      where: { id: campaignId },
+      select: { mediaUrl: true, mediaType: true },
+    });
+    
     await prisma.campaign.update({
       where: { id: campaignId },
       data: {
@@ -581,6 +711,13 @@ export async function startCampaign(campaignId: string) {
         completedAt: new Date(),
       },
     });
+    
+    // Delete media file after campaign completion
+    if (campaignWithMedia?.mediaUrl && campaignWithMedia?.mediaType) {
+      const { deleteCampaignMedia } = await import('./delete-media');
+      await deleteCampaignMedia(campaignWithMedia.mediaUrl, campaignWithMedia.mediaType);
+    }
+    
     throw new Error('No target contacts found for this campaign. Make sure contacts have valid Messenger PSIDs or Instagram SIDs.');
   }
 
@@ -739,6 +876,8 @@ export async function startCampaign(campaignId: string) {
       content: messageContent,
       messageTag: campaign.messageTag as string | null,
       pageAccessToken: campaign.facebookPage.pageAccessToken,
+      mediaUrl: (campaign as any).mediaUrl || undefined,
+      mediaType: (campaign as any).mediaType || undefined,
       recipientId:
         campaign.platform === 'MESSENGER'
           ? contact.messengerPSID
@@ -759,6 +898,13 @@ export async function startCampaign(campaignId: string) {
   // Validate that we have messages to send
   if (messages.length === 0) {
     console.error(`❌ No messages prepared for campaign ${campaign.id}`);
+    
+    // Get campaign with media info before updating
+    const campaignWithMedia = await prisma.campaign.findUnique({
+      where: { id: campaign.id },
+      select: { mediaUrl: true, mediaType: true },
+    });
+    
     await prisma.campaign.update({
       where: { id: campaign.id },
       data: {
@@ -767,6 +913,13 @@ export async function startCampaign(campaignId: string) {
         completedAt: new Date(),
       },
     });
+    
+    // Delete media file after campaign completion
+    if (campaignWithMedia?.mediaUrl && campaignWithMedia?.mediaType) {
+      const { deleteCampaignMedia } = await import('./delete-media');
+      await deleteCampaignMedia(campaignWithMedia.mediaUrl, campaignWithMedia.mediaType);
+    }
+    
     throw new Error('No messages prepared for sending. Check that contacts have valid PSIDs/SIDs.');
   }
   
