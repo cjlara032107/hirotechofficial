@@ -81,8 +81,8 @@ export async function recordStageChangeFeedback(
       const recentMessages = await prisma.message.findMany({
         where: { 
           conversation: {
-            contacts: {
-              some: { id: contactId }
+            contact: {
+              id: contactId
             }
           }
         },
