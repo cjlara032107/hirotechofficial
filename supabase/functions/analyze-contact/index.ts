@@ -292,11 +292,11 @@ Deno.serve(async (req: Request) => {
       );
     }
 
-    // Convert timestamp strings to Date objects
-    const messages = requestData.messages.map(msg => ({
+    // Convert messages to match Message interface (timestamp as string)
+    const messages: Message[] = requestData.messages.map(msg => ({
       from: msg.from,
       text: msg.text,
-      timestamp: msg.timestamp ? new Date(msg.timestamp) : undefined,
+      timestamp: msg.timestamp ? (typeof msg.timestamp === 'string' ? msg.timestamp : new Date(msg.timestamp).toISOString()) : undefined
     }));
 
     const pipelineStages = requestData.pipelineStages;
@@ -308,13 +308,7 @@ Deno.serve(async (req: Request) => {
     let usedFallback = false;
 
     if (useFastAnalysis) {
-      // Convert messages to match Message interface (timestamp as string)
-      const convertedMessages: Message[] = messages.map(msg => ({
-        from: msg.from,
-        text: msg.text,
-        timestamp: msg.timestamp ? (typeof msg.timestamp === 'string' ? msg.timestamp : msg.timestamp.toISOString()) : undefined
-      }));
-      analysisResult = await analyzeFast(convertedMessages, pipelineStages, lastInteraction);
+      analysisResult = await analyzeFast(messages, pipelineStages, lastInteraction);
       if (!analysisResult || !analysisResult.summary || analysisResult.summary.length <= 200) {
         usedFallback = true;
       }
@@ -322,7 +316,7 @@ Deno.serve(async (req: Request) => {
 
     // If fast analysis failed, use fallback scoring
     if (!analysisResult) {
-      const fallback = calculateFallbackScore(convertedMessages, lastInteraction);
+      const fallback = calculateFallbackScore(messages, lastInteraction);
       analysisResult = {
         summary: `Contact analysis: ${fallback.reasoning}`,
         recommendedStage: pipelineStages?.[0]?.name || 'New Lead',
