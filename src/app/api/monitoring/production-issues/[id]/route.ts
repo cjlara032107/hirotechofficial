@@ -225,7 +225,7 @@ export async function PATCH(
       return NextResponse.json(
         {
           error: 'Validation error',
-          details: error.errors,
+          details: error.issues,
         },
         {
           status: 400,
