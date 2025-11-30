@@ -1,20 +1,63 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { auth } from '@/auth';
 import { prisma, connectPrisma } from '@/lib/db';
+import { logger } from '@/lib/utils/logger';
+import { logRequest, logResponse } from '@/lib/utils/request-logger';
+import { RateLimitPresets } from '@/lib/api/rate-limit';
+import { NumericPresets } from '@/lib/api/validate-numeric';
 
 export async function GET(request: NextRequest) {
+  const startTime = Date.now();
+  logRequest(request);
+  
+  let session: Awaited<ReturnType<typeof auth>> = null;
+
   try {
+    // Apply rate limiting
+    const rateLimitResponse = await RateLimitPresets.standard(request);
+    if (rateLimitResponse) {
+      logResponse(request, rateLimitResponse, startTime);
+      return rateLimitResponse;
+    }
+
     // Ensure Prisma is connected before queries
     await connectPrisma();
     
-    const session = await auth();
+    session = await auth();
     if (!session?.user) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+      const response = NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+      logResponse(request, response, startTime);
+      return response;
     }
 
+    logRequest(request, {
+      userId: session.user.id,
+      organizationId: session.user.organizationId,
+    });
+
     const searchParams = request.nextUrl.searchParams;
-    const page = parseInt(searchParams.get('page') || '1');
-    const limit = parseInt(searchParams.get('limit') || '50');
+    const pageParam = searchParams.get('page') || '1';
+    const limitParam = searchParams.get('limit') || '25';
+
+    // Validate numeric pagination parameters
+    const pageValidation = NumericPresets.pageNumber(pageParam, 'Page');
+    if (!pageValidation.valid) {
+      return NextResponse.json(
+        { error: pageValidation.errors.join(', ') },
+        { status: 400 }
+      );
+    }
+
+    const limitValidation = NumericPresets.limit(limitParam, 100, 'Limit');
+    if (!limitValidation.valid) {
+      return NextResponse.json(
+        { error: limitValidation.errors.join(', ') },
+        { status: 400 }
+      );
+    }
+
+    const page = pageValidation.value!;
+    const limit = limitValidation.value!;
     const search = searchParams.get('search');
     const tags = searchParams.get('tags');
     const stageId = searchParams.get('stageId');
@@ -99,7 +142,8 @@ export async function GET(request: NextRequest) {
     type OrderByClause = 
       | { createdAt: 'asc' | 'desc' }
       | { firstName: 'asc' | 'desc' }
-      | { leadScore: 'asc' | 'desc' };
+      | { leadScore: 'asc' | 'desc' }
+      | [{ conversionProbability?: 'desc' | null }, { leadScore: 'desc' }, { lastInteraction?: 'desc' | null }];
 
     let orderBy: OrderByClause = { createdAt: 'desc' as 'asc' | 'desc' };
     if (sortBy === 'name') {
@@ -108,14 +152,32 @@ export async function GET(request: NextRequest) {
       orderBy = { leadScore: sortOrder };
     } else if (sortBy === 'date') {
       orderBy = { createdAt: sortOrder };
+    } else if (sortBy === 'priority') {
+      // Auto-prioritization: Hot leads first, Urgent next, Waiting reply, Low intent last
+      // Priority order: conversion probability → lead score → last interaction
+      orderBy = [
+        { conversionProbability: 'desc' },
+        { leadScore: 'desc' },
+        { lastInteraction: 'desc' },
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      ] as any;
     }
 
+    // Optimize for large-scale queries (10,000+ contacts)
+    // Use cursor-based pagination hint for very large datasets
+    // For now, we'll use offset pagination but optimize the query
+    
+    // For large datasets, we can use a more efficient count strategy
+    // Only count if we're on the first page or if explicitly needed
+    const shouldCount = page === 1 || searchParams.get('includeCount') === 'true';
+    
     const [contacts, total] = await Promise.all([
       prisma.contact.findMany({
         where,
         skip,
         take: limit,
         orderBy,
+        // Optimize select to only fetch needed fields
         select: {
           id: true,
           firstName: true,
@@ -127,6 +189,10 @@ export async function GET(request: NextRequest) {
           tags: true,
           lastInteraction: true,
           createdAt: true,
+          conversionProbability: true,
+          buyerIntent: true,
+          sentiment: true,
+          nextBestAction: true,
           stage: {
             select: {
               id: true,
@@ -143,25 +209,71 @@ export async function GET(request: NextRequest) {
           },
         },
       }),
-      prisma.contact.count({ where }),
+      // For very large datasets, we can skip count on later pages
+      // This significantly improves performance for 10,000+ contacts
+      shouldCount 
+        ? prisma.contact.count({ where })
+        : Promise.resolve(0), // Return 0 if we skip count, frontend will handle
     ]);
 
-    return NextResponse.json({
+    // For large datasets where count was skipped, estimate pages
+    // This allows pagination to work even without exact count
+    const estimatedPages = total > 0 
+      ? Math.ceil(total / limit)
+      : (contacts.length === limit ? page + 1 : page); // If we got a full page, there might be more
+
+    const response = NextResponse.json({
       contacts,
       pagination: {
-        total,
+        total: total || (contacts.length > 0 ? (page - 1) * limit + contacts.length : 0),
         page,
         limit,
-        pages: Math.ceil(total / limit),
+        pages: estimatedPages,
+        // Indicate if count was estimated (for very large datasets)
+        countEstimated: !shouldCount && total === 0 && contacts.length === limit,
       },
     });
+
+    logResponse(request, response, startTime, {
+      userId: session.user.id,
+      organizationId: session.user.organizationId,
+    });
+
+    logger.info('Contacts fetched successfully', {
+      count: contacts.length,
+      total,
+      page,
+      limit,
+      organizationId: session.user.organizationId,
+    });
+
+    return response;
   } catch (error: unknown) {
-    console.error('Get contacts error:', error);
-    const errorMessage = error instanceof Error ? error.message : 'Failed to fetch contacts';
-    return NextResponse.json(
-      { error: errorMessage },
+    // Get session for error logging (may not be available if error occurred before auth)
+    let session = null;
+    try {
+      session = await auth();
+    } catch {
+      // Ignore auth errors in error handler
+    }
+
+    logger.error('Get contacts error', error instanceof Error ? error : new Error(String(error)), {
+      operation: 'get_contacts',
+      organizationId: session?.user?.organizationId,
+    });
+    
+    // SECURITY: Sanitize error messages to prevent sensitive data exposure
+    const errorResponse = NextResponse.json(
+      { error: 'Failed to fetch contacts. Please try again.' },
       { status: 500 }
     );
+    
+    logResponse(request, errorResponse, startTime, {
+      userId: session?.user?.id,
+      organizationId: session?.user?.organizationId,
+    });
+    
+    return errorResponse;
   }
 }
 
