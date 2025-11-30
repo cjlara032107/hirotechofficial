@@ -1,5 +1,5 @@
 import { prisma, connectPrisma } from '@/lib/db';
-import { Prisma } from '@prisma/client';
+import { Prisma, Platform, MessageStatus } from '@prisma/client';
 import { FacebookClient, FacebookApiError } from './client';
 import { startBackgroundAnalysis } from './background-analysis';
 import { startPipelineAnalysis } from './pipeline-analyzer';
@@ -532,7 +532,7 @@ async function executeInstantSync(jobId: string, facebookPageId: string, userId:
                 .then(async (messages) => {
                   if (messages && messages.length > 0) {
                     try {
-                      const conversationPlatform = platform === 'Messenger' ? 'MESSENGER' : 'INSTAGRAM';
+                      const conversationPlatform = platform === 'Messenger' ? Platform.MESSENGER : Platform.INSTAGRAM;
                       let conversation = await prisma.conversation.findFirst({
                         where: {
                           contactId: contact.id,
@@ -592,7 +592,7 @@ async function executeInstantSync(jobId: string, facebookPageId: string, userId:
                             platform: conversationPlatform,
                             facebookMessageId: msg.id || '',
                             isFromBusiness,
-                            status: 'DELIVERED' as const,
+                            status: MessageStatus.DELIVERED,
                             createdAt,
                             sentAt: createdAt,
                             deliveredAt: createdAt,
@@ -712,7 +712,7 @@ async function executeInstantSync(jobId: string, facebookPageId: string, userId:
                       if (messages && messages.length > 0) {
                         try {
                           // Find or create conversation
-                          const conversationPlatform = platform === 'Messenger' ? 'MESSENGER' : 'INSTAGRAM';
+                          const conversationPlatform = platform === 'Messenger' ? Platform.MESSENGER : Platform.INSTAGRAM;
                           let conversation = await prisma.conversation.findFirst({
                             where: {
                               contactId: savedContact.id,
@@ -772,7 +772,7 @@ async function executeInstantSync(jobId: string, facebookPageId: string, userId:
                                 platform: conversationPlatform,
                                 facebookMessageId: msg.id || '',
                                 isFromBusiness,
-                                status: 'DELIVERED' as const,
+                                status: MessageStatus.DELIVERED,
                                 createdAt,
                                 sentAt: createdAt,
                                 deliveredAt: createdAt,
