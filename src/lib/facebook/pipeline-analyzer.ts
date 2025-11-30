@@ -7,6 +7,7 @@ import { applyStageScoreRanges } from '@/lib/pipelines/stage-analyzer';
 import { withRetry } from '@/lib/db-retry';
 import { filterSystemMessages, hasUserMessages } from './message-filtering';
 import { progressBatcher } from './pipeline-analyzer/progress-batcher';
+import { memoryMonitor } from '@/lib/utils/memory-monitor';
 import {
   isJobActive,
   verifyPageExists,
