@@ -308,7 +308,13 @@ Deno.serve(async (req: Request) => {
     let usedFallback = false;
 
     if (useFastAnalysis) {
-      analysisResult = await analyzeFast(messages, pipelineStages, lastInteraction);
+      // Convert messages to match Message interface (timestamp as string)
+      const convertedMessages: Message[] = messages.map(msg => ({
+        from: msg.from,
+        text: msg.text,
+        timestamp: msg.timestamp ? (typeof msg.timestamp === 'string' ? msg.timestamp : msg.timestamp.toISOString()) : undefined
+      }));
+      analysisResult = await analyzeFast(convertedMessages, pipelineStages, lastInteraction);
       if (!analysisResult || !analysisResult.summary || analysisResult.summary.length <= 200) {
         usedFallback = true;
       }
