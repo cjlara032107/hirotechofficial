@@ -116,7 +116,7 @@ export class IntelligentPipelineUpdater {
       }
 
       // Calculate adaptive thresholds
-      const thresholds = calculateAdaptiveThresholds(pipeline as Parameters<typeof calculateAdaptiveThresholds>[0]);
+      const thresholds = calculateAdaptiveThresholds(pipeline as any);
       
       // Apply adaptive thresholds to activity score
       const adjusted = applyAdaptiveThresholds(activityScore, thresholds);
@@ -344,7 +344,7 @@ export class IntelligentPipelineUpdater {
     const activityScore = await calculateActivityScore(pipelineId);
     const costBenefit = await analyzeCostBenefit(pipelineId, activityScore);
     const prediction = await predictNextUpdate(pipelineId);
-    const thresholds = calculateAdaptiveThresholds(pipeline as Parameters<typeof calculateAdaptiveThresholds>[0]);
+    const thresholds = calculateAdaptiveThresholds(pipeline as any);
     const adjusted = applyAdaptiveThresholds(activityScore, thresholds);
 
     let recommendation: 'update' | 'skip' | 'schedule';
