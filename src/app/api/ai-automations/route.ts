@@ -6,6 +6,7 @@ import { NumericPresets, validateNumeric } from '@/lib/api/validate-numeric';
 import { RateLimitPresets } from '@/lib/api/rate-limit';
 import { sanitizeForStorage, sanitizeStringArray } from '@/lib/security/sanitize';
 import { logger } from '@/lib/utils/logger';
+import { MessageTag } from '@prisma/client';
 
 // GET /api/ai-automations - List all automation rules for current user
 export async function GET(request: NextRequest) {
