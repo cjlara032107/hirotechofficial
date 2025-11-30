@@ -881,7 +881,7 @@ async function executeInstantSync(jobId: string, facebookPageId: string, userId:
      * Process Messenger conversations in parallel
      */
     const processMessenger = async (): Promise<number> => {
-      const participantMap = new Map<string, { updatedTime: string; name?: string }>();
+      const participantMap = new Map<string, { updatedTime: string; name?: string; conversationId?: string }>();
       let conversationCount = 0;
       const PROCESS_BATCH_SIZE = 500;
       const MAX_STREAM_TIME = 30 * 60 * 1000;
