@@ -1,5 +1,5 @@
 import { prisma, connectPrisma } from '@/lib/db';
-import { Prisma } from '@prisma/client';
+import { Prisma, Platform } from '@prisma/client';
 import { FacebookClient, FacebookApiError } from './client';
 import { analyzeWithFallback } from '@/lib/ai/enhanced-analysis';
 import { autoAssignContactToPipeline } from '@/lib/pipelines/auto-assign';
@@ -712,7 +712,7 @@ async function executeBackgroundSync(jobId: string, facebookPageId: string): Pro
                 let conversation = await prisma.conversation.findFirst({
                   where: {
                     contactId: savedContact.id,
-                    platform: 'MESSENGER',
+                    platform: Platform.MESSENGER,
                   },
                 });
 
@@ -721,7 +721,7 @@ async function executeBackgroundSync(jobId: string, facebookPageId: string): Pro
                     data: {
                       contactId: savedContact.id,
                       facebookPageId: page.id,
-                      platform: 'MESSENGER',
+                      platform: Platform.MESSENGER,
                       status: 'OPEN',
                       lastMessageAt: new Date(task.updatedTime),
                     },
@@ -739,7 +739,7 @@ async function executeBackgroundSync(jobId: string, facebookPageId: string): Pro
                       contactId: savedContact.id,
                       conversationId: conversation.id,
                       content: msg.message || '[Media]',
-                      platform: 'MESSENGER',
+                      platform: Platform.MESSENGER,
                       facebookMessageId: msg.id,
                       isFromBusiness,
                       status: 'DELIVERED',
