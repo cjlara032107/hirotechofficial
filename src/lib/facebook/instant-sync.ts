@@ -655,6 +655,13 @@ async function executeInstantSync(jobId: string, facebookPageId: string, userId:
           participants.map(([participantId, info]) =>
             contactLimiter.execute(async () => {
               try {
+                // Normalize participant ID
+                const normalizedId = normalizeContactId(participantId);
+                if (!normalizedId) {
+                  console.warn(`[Instant Sync ${jobId}] Skipping invalid participant ID: ${participantId}`);
+                  return;
+                }
+
                 // OPTIMIZATION: Optimize name parsing - reduce string operations
                 let firstName: string;
                 let lastName: string | null = null;
