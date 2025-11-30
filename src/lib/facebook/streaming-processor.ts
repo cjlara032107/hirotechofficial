@@ -373,7 +373,7 @@ export async function processChunkWithErrorHandling(
                   // Check which messages already exist (by facebookMessageId) to avoid duplicates
                   const messageIds = messagesToSave
                     .map((m: { facebookMessageId?: string }) => m.facebookMessageId)
-                    .filter((id): id is string => !!id);
+                    .filter((id: string | undefined): id is string => !!id);
                   
                   const existingMessages = messageIds.length > 0
                     ? await prisma.message.findMany({
