@@ -6,7 +6,7 @@ import { autoAssignContactToPipeline } from '@/lib/pipelines/auto-assign';
 import { applyStageScoreRanges } from '@/lib/pipelines/stage-analyzer';
 import { logger } from '@/lib/utils/logger';
 import { autoAssignBestContactTimes } from '@/lib/contacts/compute-contact-times';
-import { logJobProgress } from '@/lib/logging/job-logger';
+import { logJobProgress, logJobFailure } from '@/lib/logging/job-logger';
 
 interface BackgroundSyncResult {
   success: boolean;
