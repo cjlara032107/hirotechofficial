@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/db';
 import { auth } from '@/auth';
+import { logger } from '@/lib/utils/logger';
 
 // GET /api/ai-automations/[id] - Get specific automation rule
 export async function GET(
@@ -59,7 +60,7 @@ export async function GET(
       },
     });
   } catch (error) {
-    console.error('[AI Automations] Get error:', error);
+    logger.error('AI Automations get error', error instanceof Error ? error : new Error(String(error)));
     return NextResponse.json(
       { error: 'Failed to fetch automation rule' },
       { status: 500 }
@@ -72,6 +73,7 @@ export async function PATCH(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
+  let id: string | undefined;
   try {
     const session = await auth();
     
@@ -82,7 +84,8 @@ export async function PATCH(
       );
     }
 
-    const { id } = await params;
+    const paramsData = await params;
+    id = paramsData.id;
     const body = await request.json();
 
     // Verify rule belongs to user
@@ -140,7 +143,7 @@ export async function PATCH(
       },
     });
 
-    console.log(`[AI Automations] Updated rule: ${id}`);
+    logger.info('AI Automation rule updated', { ruleId: id, userId: session.user.id });
 
     return NextResponse.json({
       rule: {
@@ -149,7 +152,7 @@ export async function PATCH(
       },
     });
   } catch (error) {
-    console.error('[AI Automations] Update error:', error);
+    logger.error('AI Automations update error', error instanceof Error ? error : new Error(String(error)), id ? { ruleId: id } : {});
     return NextResponse.json(
       { error: 'Failed to update automation rule' },
       { status: 500 }
@@ -162,6 +165,7 @@ export async function DELETE(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
+  let id: string | undefined;
   try {
     const session = await auth();
     
@@ -172,7 +176,8 @@ export async function DELETE(
       );
     }
 
-    const { id } = await params;
+    const paramsData = await params;
+    id = paramsData.id;
 
     // Verify rule belongs to user
     const existingRule = await prisma.aIAutomationRule.findFirst({
@@ -194,11 +199,11 @@ export async function DELETE(
       where: { id },
     });
 
-    console.log(`[AI Automations] Deleted rule: ${id}`);
+    logger.info('AI Automation rule deleted', { ruleId: id, userId: session.user.id });
 
     return NextResponse.json({ success: true });
   } catch (error) {
-    console.error('[AI Automations] Delete error:', error);
+    logger.error('AI Automations delete error', error instanceof Error ? error : new Error(String(error)), id ? { ruleId: id } : {});
     return NextResponse.json(
       { error: 'Failed to delete automation rule' },
       { status: 500 }
