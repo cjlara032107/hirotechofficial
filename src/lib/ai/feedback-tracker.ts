@@ -109,7 +109,7 @@ export async function recordStageChangeFeedback(
       oldStageId,
       oldStageName: oldStage?.name || null,
       newStageId,
-      newStageName: newStage?.name || null,
+      newStageName: newStage?.name || '',
       aiRecommendedStage,
       aiReason,
       conversationSnippet: conversationSnippetText,
@@ -124,7 +124,7 @@ export async function recordStageChangeFeedback(
     });
 
     const feedbackArray = Array.isArray(existingFeedback?.stageChangeFeedback) 
-      ? (existingFeedback.stageChangeFeedback as StageChangeFeedback[])
+      ? (existingFeedback.stageChangeFeedback as unknown as StageChangeFeedback[])
       : [];
 
     // Add new feedback
