@@ -583,7 +583,7 @@ async function executeInstantSync(jobId: string, facebookPageId: string, userId:
                         })
                         .map((msg: FacebookMessage) => {
                           const isFromBusiness = msg.from?.id === (platform === 'Messenger' ? page.pageId : page.instagramAccountId);
-                          const createdAt = new Date(msg.created_time);
+                          const createdAt = new Date(msg.created_time || Date.now());
                           
                           return {
                             contactId: contact.id,
@@ -763,7 +763,7 @@ async function executeInstantSync(jobId: string, facebookPageId: string, userId:
                             })
                             .map((msg: FacebookMessage) => {
                               const isFromBusiness = msg.from?.id === page.pageId;
-                              const createdAt = new Date(msg.created_time);
+                              const createdAt = new Date(msg.created_time || Date.now());
                               
                               return {
                                 contactId: savedContact.id,
