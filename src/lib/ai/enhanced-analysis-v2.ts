@@ -957,7 +957,7 @@ export async function analyzeConversationEnhanced(
     `${buyerStyle ? `Buyer style: ${buyerStyle.replace(/_/g, ' ').toLowerCase()}. ` : ''}` +
     `Conversion probability is estimated at ${conversionProbability}% based on conversation patterns, ` +
     `with a lead score of ${fallback.leadScore}/100. ` +
-    `${buyerReliability.followThroughProbability >= 70 ? 'High reliability - likely to follow through. ' : buyerReliability.followThroughProbability >= 50 ? 'Moderate reliability. ' : 'Lower reliability - may need more follow-up. '}` +
+    `${buyerReliability && buyerReliability.followThroughProbability >= 70 ? 'High reliability - likely to follow through. ' : buyerReliability && buyerReliability.followThroughProbability >= 50 ? 'Moderate reliability. ' : 'Lower reliability - may need more follow-up. '}` +
     `${leadRisk.level !== 'LOW' ? `Risk level: ${leadRisk.level} - ${leadRisk.reasons.join(', ')}. ` : ''}` +
     `Recommended next action: ${nextBestAction}.`;
   
