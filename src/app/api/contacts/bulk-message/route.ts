@@ -190,7 +190,7 @@ export async function POST(request: NextRequest) {
                     attachments: mediaUrl ? {
                       type: mediaType,
                       url: mediaUrl,
-                    } : null,
+                    } : undefined,
                   },
                 });
 
