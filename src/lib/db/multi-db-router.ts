@@ -112,26 +112,33 @@ export class MultiDatabaseRouter {
    * @returns PrismaClient instance
    */
   getClient(key?: string): PrismaClient {
-    const healthy = this.getHealthyDatabases();
+    // Use ALL databases for parallel routing, regardless of health status
+    // Health checks are advisory only - databases can still work even if health check fails
+    // This enables true parallel/simultaneous use of all databases
+    const allDatabases = this.getAllAvailableDatabases();
     
-    if (healthy.length === 0) {
-      console.error('[Multi-DB Router] ❌ No healthy databases available, using first database as fallback');
+    if (allDatabases.length === 0) {
+      console.error('[Multi-DB Router] ❌ No databases available, using first database as fallback');
       return this.databases[0]?.client || this.createFallbackClient();
     }
 
+    // Use all databases for parallel routing - health checks don't block usage
+    // This allows databases 1 & 2 to work simultaneously even if health checks fail
     switch (this.routingStrategy) {
       case 'round-robin':
-        return this.getClientRoundRobin(healthy);
+        return this.getClientRoundRobin(allDatabases);
       case 'hash':
         if (!key) {
           console.warn('[Multi-DB Router] ⚠️ Hash routing requires key, falling back to round-robin');
-          return this.getClientRoundRobin(healthy);
+          return this.getClientRoundRobin(allDatabases);
         }
-        return this.getClientHash(key, healthy);
+        return this.getClientHash(key, allDatabases);
       case 'load-aware':
-        return this.getClientLoadAware(healthy);
+        // For load-aware, prefer healthy databases but include all
+        const healthy = this.getHealthyDatabases();
+        return this.getClientLoadAware(healthy.length > 0 ? healthy : allDatabases);
       default:
-        return this.getClientRoundRobin(healthy);
+        return this.getClientRoundRobin(allDatabases);
     }
   }
 
@@ -164,6 +171,15 @@ export class MultiDatabaseRouter {
 
   private getHealthyDatabases(): DatabaseConfig[] {
     return this.databases.filter(db => db.health === 'healthy' || db.health === 'degraded');
+  }
+
+  /**
+   * Get all available databases for parallel routing
+   * Includes all databases regardless of health status (health checks are advisory)
+   */
+  private getAllAvailableDatabases(): DatabaseConfig[] {
+    // Return all initialized databases - allow parallel use even if health check fails
+    return this.databases;
   }
 
   private createFallbackClient(): PrismaClient {
@@ -207,15 +223,17 @@ export class MultiDatabaseRouter {
             error?.message?.includes('Health check timeout');
           
           if (attempt === retries) {
-            // Final attempt failed
+            // Final attempt failed - mark as degraded (not down) so it can still be used
             if (isConnectionError) {
               // Only log connection errors, not all errors (to reduce noise)
               console.warn(
-                `[Multi-DB Router] ⚠️ Database ${db.index} unavailable (connection issue). ` +
-                `Will retry on next health check. App will use available databases.`
+                `[Multi-DB Router] ⚠️ Database ${db.index} health check failed (connection issue). ` +
+                `Marking as degraded but will still be used for parallel routing. Will retry on next health check.`
               );
             }
-            db.health = 'down';
+            // Mark as 'degraded' instead of 'down' so it's still included in routing
+            // This allows parallel use even if health checks fail
+            db.health = 'degraded';
             db.lastHealthCheck = Date.now();
           } else {
             // Wait before retry (exponential backoff)
