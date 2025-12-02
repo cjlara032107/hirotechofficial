@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 import { Toaster } from "@/components/ui/sonner";
-import { NuqsAdapter } from 'nuqs/adapters/next/app';
+import { NuqsProvider } from "@/components/providers/nuqs-provider";
 import { QueryProvider } from "@/components/providers/query-provider";
 import NextTopLoader from 'nextjs-toploader';
 
@@ -34,6 +34,7 @@ export default function RootLayout({
     <html lang="en">
       <body
         className={`${geistSans.variable} ${geistMono.variable} antialiased`}
+        suppressHydrationWarning
       >
         <NextTopLoader
           color="#2563eb"
@@ -47,10 +48,10 @@ export default function RootLayout({
           shadow="0 0 10px #2563eb,0 0 5px #2563eb"
         />
         <QueryProvider>
-          <NuqsAdapter>
+          <NuqsProvider>
             {children}
             <Toaster />
-          </NuqsAdapter>
+          </NuqsProvider>
         </QueryProvider>
       </body>
     </html>
