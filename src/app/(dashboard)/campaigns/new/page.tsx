@@ -14,7 +14,7 @@ import { Checkbox } from '@/components/ui/checkbox';
 import { Switch } from '@/components/ui/switch';
 import { toast } from 'sonner';
 import { MESSAGE_TAGS } from '@/lib/facebook/message-tags';
-import { CalendarIcon, Clock, Search, X, Users, Loader2, RefreshCw, Sparkles, Eye } from 'lucide-react';
+import { CalendarIcon, Clock, Search, X, Users, Loader2, RefreshCw, Sparkles, Eye, Upload, Image, Video } from 'lucide-react';
 
 export default function NewCampaignPage() {
   const router = useRouter();
@@ -53,6 +53,11 @@ export default function NewCampaignPage() {
   const fetchingContactsRef = useRef(false);
   const preselectedContactsLoadedRef = useRef(false);
   const isSettingPreselectedRef = useRef(false);
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [mediaUrl, setMediaUrl] = useState<string | null>(null);
+  const [mediaType, setMediaType] = useState<'image' | 'video' | null>(null);
+  const [uploading, setUploading] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Fetch tags and pages on mount
   useEffect(() => {
@@ -217,8 +222,8 @@ export default function NewCampaignPage() {
           }
           
           // Determine platform from contacts
-          const hasMessenger = data.contacts.some((c: any) => c.hasMessenger);
-          const hasInstagram = data.contacts.some((c: any) => c.hasInstagram);
+          const hasMessenger = data.contacts.some((c: { hasMessenger?: boolean }) => c.hasMessenger);
+          const hasInstagram = data.contacts.some((c: { hasInstagram?: boolean }) => c.hasInstagram);
           if (hasMessenger && !hasInstagram) {
             setTimeout(() => {
               setPlatform('MESSENGER');
@@ -282,12 +287,18 @@ export default function NewCampaignPage() {
         }),
       });
 
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.error || 'Failed to fetch contacts');
+      // Check if response is JSON
+      const contentType = response.headers.get('content-type');
+      if (!contentType?.includes('application/json')) {
+        const text = await response.text();
+        throw new Error(text || 'Server returned non-JSON response');
       }
 
       const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || 'Failed to fetch contacts');
+      }
       setTargetContacts(data.contacts || []);
       // Reset excluded contacts when contacts list changes
       setExcludedContactIds(new Set());
@@ -386,9 +397,9 @@ export default function NewCampaignPage() {
       return;
     }
 
-    // Message content is only required if AI personalization is disabled
-    if (!useAiPersonalization && !messageContent) {
-      toast.error('Please enter a message or enable AI personalization');
+    // Message content is only required if AI personalization is disabled and no media is uploaded
+    if (!useAiPersonalization && !messageContent && !mediaUrl) {
+      toast.error('Please enter a message, upload media, or enable AI personalization');
       return;
     }
 
@@ -501,6 +512,8 @@ export default function NewCampaignPage() {
           useAiPersonalization: useAiPersonalization || undefined,
           aiCustomInstructions: useAiPersonalization && aiCustomInstructions ? aiCustomInstructions : undefined,
           templateContent: templateContent, // Pass template for background generation
+          mediaUrl: mediaUrl || undefined,
+          mediaType: mediaType || undefined,
         }),
       });
 
@@ -762,6 +775,124 @@ export default function NewCampaignPage() {
             )}
           </div>
 
+          {/* Media Upload Section */}
+          <div className="space-y-2.5">
+            <Label className="text-sm font-semibold">Media (Photo or Video)</Label>
+            <div className="flex items-center gap-2">
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept="image/*,video/*"
+                onChange={async (e) => {
+                  const file = e.target.files?.[0];
+                  if (!file) return;
+
+                  const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB (reduced for Vercel)
+                  if (file.size > MAX_FILE_SIZE) {
+                    toast.error(`File size must be less than 10MB. Current size: ${(file.size / 1024 / 1024).toFixed(2)}MB`);
+                    return;
+                  }
+
+                  const isImage = file.type.startsWith('image/');
+                  const isVideo = file.type.startsWith('video/');
+
+                  if (!isImage && !isVideo) {
+                    toast.error('File must be an image or video');
+                    return;
+                  }
+
+                  setSelectedFile(file);
+                  setMediaType(isImage ? 'image' : 'video');
+
+                  setUploading(true);
+                  try {
+                    const formData = new FormData();
+                    formData.append('file', file);
+
+                    const response = await fetch('/api/messages/upload-media', {
+                      method: 'POST',
+                      body: formData,
+                    });
+
+                    // Check if response is JSON
+                    const contentType = response.headers.get('content-type');
+                    if (!contentType?.includes('application/json')) {
+                      const text = await response.text();
+                      throw new Error(text || 'Server returned non-JSON response');
+                    }
+
+                    const data = await response.json();
+
+                    if (!response.ok) {
+                      throw new Error(data.error || 'Failed to upload file');
+                    }
+
+                    setMediaUrl(data.mediaUrl);
+                    toast.success('File uploaded successfully');
+                  } catch (error: unknown) {
+                    let errorMessage = 'Failed to upload file';
+                    if (error instanceof Error) {
+                      errorMessage = error.message;
+                    } else if (typeof error === 'string') {
+                      errorMessage = error;
+                    }
+                    toast.error(errorMessage);
+                    setSelectedFile(null);
+                    setMediaType(null);
+                    setMediaUrl(null);
+                  } finally {
+                    setUploading(false);
+                  }
+                }}
+                className="hidden"
+                id="media-upload"
+              />
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => fileInputRef.current?.click()}
+                disabled={uploading || creating}
+              >
+                <Upload className="h-4 w-4 mr-2" />
+                {uploading ? 'Uploading...' : 'Upload Media'}
+              </Button>
+              <span className="text-sm text-muted-foreground">Max 10MB</span>
+            </div>
+
+            {selectedFile && (
+              <div className="flex items-center gap-2 p-3 border rounded-md">
+                {mediaType === 'image' ? (
+                  <Image className="h-5 w-5 text-blue-500" aria-label="Image file" />
+                ) : (
+                  <Video className="h-5 w-5 text-purple-500" aria-label="Video file" />
+                )}
+                <span className="flex-1 text-sm truncate">{selectedFile.name}</span>
+                <span className="text-xs text-muted-foreground">
+                  {(selectedFile.size / 1024 / 1024).toFixed(2)}MB
+                </span>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => {
+                    setSelectedFile(null);
+                    setMediaUrl(null);
+                    setMediaType(null);
+                    if (fileInputRef.current) {
+                      fileInputRef.current.value = '';
+                    }
+                  }}
+                  disabled={uploading || creating}
+                >
+                  <X className="h-4 w-4" />
+                </Button>
+              </div>
+            )}
+            <p className="text-xs text-muted-foreground">
+              Optional: Attach a photo or video to your campaign messages
+            </p>
+          </div>
+
           {/* AI Personalization Section */}
           <div className="space-y-4 pt-2 border-t border-border/50">
             <div className="flex items-center space-x-3">
@@ -797,13 +928,13 @@ export default function NewCampaignPage() {
                   />
                   <p className="text-xs text-muted-foreground">
                     Provide additional instructions to customize how AI generates personalized messages. 
-                    The AI will use the contact's conversation history and context to create unique messages for each recipient.
+                    The AI will use the contact&apos;s conversation history and context to create unique messages for each recipient.
                   </p>
                 </div>
 
                 <div className="p-3 bg-blue-50/50 border border-blue-200/50 rounded-lg space-y-2">
                   <p className="text-xs text-blue-900">
-                    ✨ <strong>How it works:</strong> The AI will analyze each contact's conversation history, 
+                    ✨ <strong>How it works:</strong> The AI will analyze each contact&apos;s conversation history, 
                     AI context, and your template message to create a personalized version that feels natural and relevant.
                   </p>
                   {aiCustomInstructions && (
@@ -1043,8 +1174,8 @@ export default function NewCampaignPage() {
                   </p>
                   <ul className="text-xs text-amber-800 text-left space-y-1 max-w-md mx-auto mb-3">
                     <li>• No contacts have {platform === 'MESSENGER' ? 'Messenger' : 'Instagram'} enabled</li>
-                    <li>• Selected tags don't match any contacts</li>
-                    <li>• Contacts haven't been synced from Facebook yet</li>
+                    <li>• Selected tags don&apos;t match any contacts</li>
+                    <li>• Contacts haven&apos;t been synced from Facebook yet</li>
                   </ul>
                   <div className="flex gap-2 justify-center">
                     <Button
@@ -1202,7 +1333,7 @@ export default function NewCampaignPage() {
                   {targetContacts.length === 0 && !autoFetchEnabled && (
                     <p className="text-xs text-blue-900">
                       📋 <strong>Note:</strong> Recipients will be fetched automatically when the campaign is sent. 
-                      If you want to preview recipients now, make sure you've selected a Facebook page and the contacts are synced.
+                      If you want to preview recipients now, make sure you&apos;ve selected a Facebook page and the contacts are synced.
                     </p>
                   )}
                 </div>
