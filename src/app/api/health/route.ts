@@ -13,9 +13,9 @@ export async function GET(request: NextRequest) {
       timestamp: new Date().toISOString(),
       status: 'healthy',
       services: {
-        database: { status: 'unknown' as const, details: '' },
-        prisma: { status: 'unknown' as const, details: '' },
-        environment: { status: 'unknown' as const, details: '' },
+        database: { status: 'unknown' as 'unknown' | 'healthy' | 'degraded' | 'unhealthy', details: '' },
+        prisma: { status: 'unknown' as 'unknown' | 'healthy' | 'degraded' | 'unhealthy', details: '' },
+        environment: { status: 'unknown' as 'unknown' | 'healthy' | 'degraded' | 'unhealthy', details: '' },
       },
       environment: {
         nodeEnv: process.env.NODE_ENV || 'development',
@@ -29,10 +29,10 @@ export async function GET(request: NextRequest) {
       const { performHealthCheck } = await import('@/lib/health/comprehensive-health-check');
       const healthResult = await performHealthCheck();
       
-      checks.services.database.status = healthResult.services.database.status;
+      checks.services.database.status = healthResult.services.database.status as 'unknown' | 'healthy' | 'degraded' | 'unhealthy';
       checks.services.database.details = healthResult.services.database.message;
       
-      checks.services.prisma.status = healthResult.services.database.status;
+      checks.services.prisma.status = healthResult.services.database.status as 'unknown' | 'healthy' | 'degraded' | 'unhealthy';
       checks.services.prisma.details = `Database ${healthResult.services.database.status}`;
     } catch (healthError) {
       console.warn(`[Health Check ${requestId}] Comprehensive check failed, using fallback`, healthError);
