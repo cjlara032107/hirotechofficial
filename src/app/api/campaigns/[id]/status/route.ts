@@ -112,7 +112,7 @@ export async function GET(
       : 0;
 
     // Determine if campaign is still active
-    const isActive = campaign.status === 'SENDING' || campaign.status === 'PENDING';
+    const isActive = campaign.status === 'SCHEDULED';
 
     // Calculate estimated time remaining (if active)
     let estimatedTimeRemaining: number | null = null;
