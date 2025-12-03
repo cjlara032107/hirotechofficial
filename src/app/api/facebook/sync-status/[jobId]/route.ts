@@ -4,12 +4,87 @@ import { getPrismaForOrg } from '@/lib/db/get-prisma-for-org';
 import { requireAuth } from '@/lib/api/validate-session';
 import { validateUUID } from '@/lib/api/validate-uuid';
 
+// ============================================
+// IN-MEMORY JOB LOCATION CACHE
+// ============================================
+// Cache job locations (jobId → dbIndex) to avoid scanning all databases
+// This is per-instance and survives hot reloads in development
+interface JobLocationCache {
+  [jobId: string]: {
+    dbIndex: number;
+    dbHost: string;
+    timestamp: number;
+  };
+}
+
+declare global {
+  // eslint-disable-next-line no-var
+  var jobLocationCache: JobLocationCache | undefined;
+}
+
+if (!globalThis.jobLocationCache) {
+  globalThis.jobLocationCache = {};
+}
+
+const jobLocationCache = globalThis.jobLocationCache;
+
+// Cache configuration
+const JOB_CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes
+const JOB_CACHE_MAX_SIZE = 1000; // Prevent memory bloat
+
+/**
+ * Get cached job location
+ */
+function getCachedJobLocation(jobId: string): { dbIndex: number; dbHost: string } | null {
+  const cached = jobLocationCache[jobId];
+  if (!cached) return null;
+  
+  const age = Date.now() - cached.timestamp;
+  if (age > JOB_CACHE_TTL_MS) {
+    // Expired
+    delete jobLocationCache[jobId];
+    return null;
+  }
+  
+  console.log(`[Sync Status API] [Cache] ✅ Cache HIT for job ${jobId} (age: ${age}ms, dbIndex: ${cached.dbIndex})`);
+  return { dbIndex: cached.dbIndex, dbHost: cached.dbHost };
+}
+
+/**
+ * Store job location in cache
+ */
+function setCachedJobLocation(jobId: string, dbIndex: number, dbHost: string) {
+  // Simple eviction: if cache is full, clear oldest entries
+  const keys = Object.keys(jobLocationCache);
+  if (keys.length >= JOB_CACHE_MAX_SIZE) {
+    const sortedKeys = keys.sort((a, b) => {
+      return (jobLocationCache[a]?.timestamp || 0) - (jobLocationCache[b]?.timestamp || 0);
+    });
+    
+    // Remove oldest 20%
+    const toRemove = sortedKeys.slice(0, Math.floor(JOB_CACHE_MAX_SIZE * 0.2));
+    toRemove.forEach(key => delete jobLocationCache[key]);
+    
+    console.log(`[Sync Status API] [Cache] Evicted ${toRemove.length} old entries (cache size: ${keys.length})`);
+  }
+  
+  jobLocationCache[jobId] = {
+    dbIndex,
+    dbHost,
+    timestamp: Date.now(),
+  };
+  
+  console.log(`[Sync Status API] [Cache] Stored job ${jobId} → DB ${dbIndex} (${dbHost})`);
+}
+
 export async function GET(
   request: NextRequest,
   props: { params: Promise<{ jobId: string }> }
 ) {
-  const startTime = Date.now();
+  const requestStartTime = Date.now();
+  const timings: { [key: string]: number } = {};
   let jobIdForLog = 'unknown';
+  let strategyUsed = 'unknown';
   
   try {
     // Validate and extract jobId first
@@ -68,20 +143,154 @@ export async function GET(
     console.log('[Sync Status API] - Session Org ID:', validatedSession.user.organizationId);
     console.log('[Sync Status API] - Multi-DB Enabled:', multiDbEnabled);
     console.log('[Sync Status API] - Routing Strategy:', routingStrategy);
-    console.log('[Sync Status API] - Lookup Strategy: Default DB first, then routed, then all DBs');
+    console.log('[Sync Status API] - Lookup Strategy: Cache → Metadata → Default → Routed → Parallel Scan');
+    console.log('[Sync Status API] - Cache size:', Object.keys(jobLocationCache).length, 'entries');
     console.log('[Sync Status API] ============================================');
 
-    const queryStartTime = Date.now();
     let job = null;
     let queryTime = 0;
+    let foundDbIndex = 0;
+    let foundDbHost = 'unknown';
 
-    // Strategy: First try to find the job in the default database to get its organizationId
+    // ============================================
+    // STEP -1: CHECK CACHE FIRST (FASTEST)
+    // ============================================
+    const cachedLocation = getCachedJobLocation(jobId);
+    if (cachedLocation && multiDbEnabled) {
+      timings['cache_check'] = Date.now() - requestStartTime;
+      
+      console.log('[Sync Status API] ============================================');
+      console.log('[Sync Status API] STEP -1: USING CACHED JOB LOCATION');
+      console.log(`[Sync Status API]   - Job ID: ${jobId}`);
+      console.log(`[Sync Status API]   - Cached dbIndex: ${cachedLocation.dbIndex}`);
+      console.log(`[Sync Status API]   - Cached dbHost: ${cachedLocation.dbHost}`);
+      console.log('[Sync Status API] ============================================');
+      
+      try {
+        const { getDatabaseRouter } = await import('@/lib/db/multi-db-router');
+        const router = getDatabaseRouter();
+        const allConfigs = router.getAllDatabaseConfigs();
+        const targetConfig = allConfigs.find(cfg => cfg.index === cachedLocation.dbIndex);
+        
+        if (targetConfig) {
+          const cacheQueryStart = Date.now();
+          job = await targetConfig.client.syncJob.findUnique({
+            where: { id: jobId },
+            include: {
+              facebookPage: {
+                select: {
+                  organizationId: true,
+                },
+              },
+            },
+          });
+          const cacheQueryDuration = Date.now() - cacheQueryStart;
+          queryTime = cacheQueryDuration;
+          timings['cache_lookup'] = Date.now() - requestStartTime;
+          
+          if (job) {
+            foundDbIndex = cachedLocation.dbIndex;
+            foundDbHost = cachedLocation.dbHost;
+            strategyUsed = 'cache_hit';
+            
+            console.log(`[Sync Status API] ✅ Cache lookup succeeded - ${cacheQueryDuration}ms`);
+            console.log(`[Sync Status API]   - Strategy: CACHE HIT (fastest path)`);
+            console.log(`[Sync Status API]   - DB Index: ${foundDbIndex}`);
+          } else {
+            console.warn(`[Sync Status API] ⚠️  Cache pointed to DB ${cachedLocation.dbIndex} but job not found (may be deleted)`);
+            delete jobLocationCache[jobId]; // Invalidate cache
+          }
+        }
+      } catch (cacheError) {
+        console.error('[Sync Status API] Cache lookup error:', cacheError);
+        delete jobLocationCache[jobId]; // Invalidate cache on error
+      }
+    }
+
+    // ============================================
+    // STEP 0: CHECK METADATA ROUTING (FAST)
+    // ============================================
+    let jobDbIndexFromMetadata: number | null = null;
+    
+    if (!job) {
+      timings['metadata_check_start'] = Date.now() - requestStartTime;
+      
+      try {
+        // Quick check in default DB for metadata only
+        const jobMetadata = await defaultPrisma.syncJob.findUnique({
+          where: { id: jobId },
+          select: { dbIndex: true, facebookPage: { select: { organizationId: true } } },
+        });
+        
+        if (jobMetadata?.dbIndex !== null && jobMetadata?.dbIndex !== undefined && multiDbEnabled) {
+          jobDbIndexFromMetadata = jobMetadata.dbIndex;
+          
+          console.log('[Sync Status API] ============================================');
+          console.log('[Sync Status API] STEP 0: USING JOB ROUTING METADATA');
+          console.log(`[Sync Status API]   - Job ID: ${jobId}`);
+          console.log(`[Sync Status API]   - Metadata dbIndex: ${jobDbIndexFromMetadata}`);
+          console.log('[Sync Status API] ============================================');
+          
+          // Direct lookup in the metadata-specified database
+          const { getDatabaseRouter } = await import('@/lib/db/multi-db-router');
+          const router = getDatabaseRouter();
+          const allConfigs = router.getAllDatabaseConfigs();
+          const targetConfig = allConfigs.find(cfg => cfg.index === jobDbIndexFromMetadata);
+          
+          if (targetConfig) {
+            // Extract host for logging
+            try {
+              const urlMatch = targetConfig.url.match(/postgresql:\/\/[^@]*@([^\/]+)/);
+              foundDbHost = urlMatch ? urlMatch[1] : 'unknown';
+            } catch {}
+            
+            const metadataLookupStart = Date.now();
+            job = await targetConfig.client.syncJob.findUnique({
+              where: { id: jobId },
+              include: {
+                facebookPage: {
+                  select: {
+                    organizationId: true,
+                  },
+                },
+              },
+            });
+            const metadataLookupDuration = Date.now() - metadataLookupStart;
+            queryTime = metadataLookupDuration;
+            timings['metadata_lookup'] = Date.now() - requestStartTime;
+            
+            if (job) {
+              foundDbIndex = jobDbIndexFromMetadata;
+              strategyUsed = 'metadata_routing';
+              
+              console.log(`[Sync Status API] ✅ Job found using metadata routing - ${metadataLookupDuration}ms`);
+              console.log(`[Sync Status API]   - Strategy: METADATA ROUTING (direct lookup)`);
+              console.log(`[Sync Status API]   - DB Index: ${foundDbIndex}`);
+              console.log(`[Sync Status API]   - DB Host: ${foundDbHost}`);
+              
+              // Store in cache for future requests
+              setCachedJobLocation(jobId, foundDbIndex, foundDbHost);
+            } else {
+              console.warn(`[Sync Status API] ⚠️  Metadata pointed to DB ${jobDbIndexFromMetadata} but job not found there`);
+            }
+          }
+        }
+      } catch (metadataError) {
+        console.error('[Sync Status API] Error checking job metadata:', metadataError);
+        // Continue with normal lookup flow
+      }
+    }
+
+    // Strategy: Try to find the job in the default database to get its organizationId
     // This works because job IDs are unique and we need to know which database it's in
     let jobOrganizationId: string | null = null;
     
-    console.log('[Sync Status API] ============================================');
-    console.log('[Sync Status API] STEP 1: CHECKING DEFAULT DATABASE (DB 0)');
-    console.log('[Sync Status API] ============================================');
+    if (!job) {
+      timings['default_db_start'] = Date.now() - requestStartTime;
+      console.log('[Sync Status API] ============================================');
+      console.log('[Sync Status API] STEP 1: CHECKING DEFAULT DATABASE (DB 0)');
+      console.log('[Sync Status API] ============================================');
+    }
     
     try {
       const jobInDefault = await defaultPrisma.syncJob.findUnique({
@@ -96,8 +305,13 @@ export async function GET(
       });
       
       if (jobInDefault) {
+        const queryStartTime = timings['default_db_start'] || requestStartTime;
         queryTime = Date.now() - queryStartTime;
         jobOrganizationId = jobInDefault.facebookPage?.organizationId || null;
+        timings['default_db_lookup'] = Date.now() - requestStartTime;
+        foundDbIndex = 0;
+        foundDbHost = 'default';
+        strategyUsed = 'default_db';
         
         console.log('[Sync Status API] ✅ Job found in default DB:', {
           jobId,
@@ -146,17 +360,37 @@ export async function GET(
           
           if (fullJob) {
             job = fullJob;
+            foundDbIndex = routedDbIndex;
+            foundDbHost = routedDbHost;
+            strategyUsed = 'job_org_routed';
             console.log('[Sync Status API] ✅ Job verified in routed DB', routedDbIndex);
+            
+            // Store in cache
+            setCachedJobLocation(jobId, foundDbIndex, foundDbHost);
           } else {
             // Job exists in default but not in routed - use default
             job = jobInDefault;
+            foundDbIndex = 0;
+            foundDbHost = 'default';
+            strategyUsed = 'default_db';
             console.warn('[Sync Status API] ⚠️  Job in default DB but NOT in routed DB', routedDbIndex);
             console.warn('[Sync Status API] Using job from default DB');
+            
+            // Store in cache
+            setCachedJobLocation(jobId, 0, 'default');
           }
         } else {
           // Multi-DB not enabled or no organizationId - use default
           job = jobInDefault;
+          foundDbIndex = 0;
+          foundDbHost = 'default';
+          strategyUsed = 'default_db';
           console.log('[Sync Status API] Using job from default DB (multi-DB not enabled)');
+          
+          // Store in cache if multi-DB is enabled
+          if (multiDbEnabled) {
+            setCachedJobLocation(jobId, 0, 'default');
+          }
         }
       } else {
         console.log('[Sync Status API] ⚠️  Job NOT found in default DB');
@@ -167,6 +401,8 @@ export async function GET(
 
     // If not found in default database, try the routed database based on session organizationId
     if (!job) {
+      timings['session_routed_start'] = Date.now() - requestStartTime;
+      
       console.log('[Sync Status API] ============================================');
       console.log('[Sync Status API] STEP 2: CHECKING SESSION ORG ROUTED DB');
       console.log('[Sync Status API] - Session Org ID:', validatedSession.user.organizationId);
@@ -198,6 +434,7 @@ export async function GET(
       }
       
       try {
+        const sessionRoutedStart = Date.now();
         job = await prismaClient.syncJob.findUnique({
           where: { id: jobId },
           include: {
@@ -208,11 +445,19 @@ export async function GET(
             },
           },
         });
-        queryTime = Date.now() - queryStartTime;
+        queryTime = Date.now() - sessionRoutedStart;
+        timings['session_routed_lookup'] = Date.now() - requestStartTime;
         
         if (job) {
           jobOrganizationId = job.facebookPage?.organizationId || null;
+          foundDbIndex = routedDbIndex;
+          foundDbHost = routedDbHost;
+          strategyUsed = 'session_routed';
+          
           console.log('[Sync Status API] ✅ Job found in session org routed DB', routedDbIndex);
+          
+          // Store in cache
+          setCachedJobLocation(jobId, foundDbIndex, foundDbHost);
         } else {
           console.log('[Sync Status API] ⚠️  Job NOT found in session org routed DB', routedDbIndex);
         }
@@ -247,11 +492,13 @@ export async function GET(
       }
     }
     
-    // Last resort: If still not found and multi-DB is enabled, search all databases
+    // Last resort: If still not found and multi-DB is enabled, search all databases IN PARALLEL
     // This handles cases where the job is in a routed database but not in default or session's database
     if (!job && process.env.ENABLE_MULTI_DB === 'true') {
+      timings['parallel_scan_start'] = Date.now() - requestStartTime;
+      
       console.log('[Sync Status API] ============================================');
-      console.log('[Sync Status API] STEP 3: SEARCHING ALL DATABASES');
+      console.log('[Sync Status API] STEP 3: SEARCHING ALL DATABASES (PARALLEL)');
       console.log('[Sync Status API] ============================================');
       
       try {
@@ -259,58 +506,106 @@ export async function GET(
         const router = getDatabaseRouter();
         const allDatabases = router.getAllDatabaseConfigs();
         
-        console.log('[Sync Status API] Scanning all databases:', {
+        console.log('[Sync Status API] Scanning all databases in parallel:', {
           jobId,
           totalDatabases: allDatabases.length,
           sessionOrgId: validatedSession.user.organizationId,
         });
         
-        // Search each database sequentially using existing clients
-        for (const dbConfig of allDatabases) {
-          // Extract host from URL (mask credentials)
-          let dbHost = 'unknown';
-          try {
-            const urlMatch = dbConfig.url.match(/postgresql:\/\/[^@]*@([^\/]+)/);
-            dbHost = urlMatch ? urlMatch[1] : 'unknown';
-          } catch {
-            // Ignore
-          }
-          
-          console.log('[Sync Status API] - Searching DB', dbConfig.index, `(${dbHost})...`);
-          
-          try {
-            const foundJob = await dbConfig.client.syncJob.findUnique({
-              where: { id: jobId },
-              include: {
-                facebookPage: {
-                  select: {
-                    organizationId: true,
+        const searchStartTime = Date.now();
+        
+        // Search all databases IN PARALLEL using Promise.all
+        const results = await Promise.all(
+          allDatabases.map(async (dbConfig) => {
+            const dbSearchStart = Date.now();
+            try {
+              // Extract host for logging
+              let dbHost = 'unknown';
+              try {
+                const urlMatch = dbConfig.url.match(/postgresql:\/\/[^@]*@([^\/]+)/);
+                dbHost = urlMatch ? urlMatch[1] : 'unknown';
+              } catch {}
+              
+              const foundJob = await dbConfig.client.syncJob.findUnique({
+                where: { id: jobId },
+                include: {
+                  facebookPage: {
+                    select: {
+                      organizationId: true,
+                    },
                   },
                 },
-              },
-            });
-            
-            if (foundJob) {
-              job = foundJob;
-              jobOrganizationId = foundJob.facebookPage?.organizationId || null;
-              console.log('[Sync Status API] ============================================');
-              console.log('[Sync Status API] ✅ JOB FOUND IN DB', dbConfig.index);
-              console.log('[Sync Status API] - Job ID:', jobId);
-              console.log('[Sync Status API] - Job Org ID:', foundJob.facebookPage?.organizationId);
-              console.log('[Sync Status API] - DB Index:', dbConfig.index);
-              console.log('[Sync Status API] - DB Host:', dbHost);
-              console.log('[Sync Status API] ============================================');
-              break;
-            } else {
-              console.log('[Sync Status API]   ⚠️  Not in DB', dbConfig.index);
+              });
+              
+              const dbSearchDuration = Date.now() - dbSearchStart;
+              
+              if (foundJob) {
+                console.log(`[Sync Status API] [DB Search] ✅ Found in DB ${dbConfig.index} (${dbHost}) - ${dbSearchDuration}ms`);
+              } else {
+                console.log(`[Sync Status API] [DB Search]   ⚠️  Not in DB ${dbConfig.index} (${dbHost}) - ${dbSearchDuration}ms`);
+              }
+              
+              return { dbIndex: dbConfig.index, job: foundJob, host: dbHost, duration: dbSearchDuration, error: null };
+            } catch (error) {
+              const dbSearchDuration = Date.now() - dbSearchStart;
+              console.error(`[Sync Status API] [DB Search]   ❌ Error in DB ${dbConfig.index} - ${dbSearchDuration}ms:`, error);
+              return { dbIndex: dbConfig.index, job: null, host: 'error', duration: dbSearchDuration, error };
             }
-          } catch (dbSearchError) {
-            console.error('[Sync Status API]   ❌ Error searching DB', dbConfig.index, ':', dbSearchError);
-            // Continue to next database
-          }
+          })
+        );
+        
+        const searchTotalDuration = Date.now() - searchStartTime;
+        timings['parallel_scan_complete'] = Date.now() - requestStartTime;
+        queryTime = searchTotalDuration;
+        
+        // Find the first hit
+        const hit = results.find(r => r.job);
+        
+        if (hit) {
+          job = hit.job;
+          jobOrganizationId = hit.job?.facebookPage?.organizationId || null;
+          foundDbIndex = hit.dbIndex;
+          foundDbHost = hit.host;
+          strategyUsed = 'parallel_scan';
+          
+          const totalSequentialTime = results.reduce((sum, r) => sum + r.duration, 0);
+          
+          console.log('[Sync Status API] ============================================');
+          console.log('[Sync Status API] ✅ JOB FOUND IN PARALLEL SEARCH');
+          console.log(`[Sync Status API]   - Job ID: ${jobId}`);
+          console.log(`[Sync Status API]   - Job Org ID: ${jobOrganizationId}`);
+          console.log(`[Sync Status API]   - Found in DB: ${hit.dbIndex} (${hit.host})`);
+          console.log(`[Sync Status API]   - DB query time: ${hit.duration}ms`);
+          console.log(`[Sync Status API]   - Total parallel search time: ${searchTotalDuration}ms`);
+          console.log(`[Sync Status API]   - Databases searched: ${allDatabases.length}`);
+          console.log(`[Sync Status API]   - Performance gain: ${totalSequentialTime}ms sequential → ${searchTotalDuration}ms parallel (${((totalSequentialTime / searchTotalDuration) * 100).toFixed(0)}% faster)`);
+          console.log('[Sync Status API] ============================================');
+          
+          // Store in cache for future requests
+          setCachedJobLocation(jobId, foundDbIndex, foundDbHost);
+        } else {
+          // Log all search results for debugging
+          const successfulSearches = results.filter(r => !r.error).length;
+          const failedSearches = results.filter(r => r.error).length;
+          const totalSequentialTime = results.reduce((sum, r) => sum + r.duration, 0);
+          
+          console.log('[Sync Status API] ============================================');
+          console.log('[Sync Status API] ⚠️  JOB NOT FOUND IN ANY DATABASE');
+          console.log(`[Sync Status API]   - Job ID: ${jobId}`);
+          console.log(`[Sync Status API]   - Databases searched: ${allDatabases.length}`);
+          console.log(`[Sync Status API]   - Successful searches: ${successfulSearches}`);
+          console.log(`[Sync Status API]   - Failed searches: ${failedSearches}`);
+          console.log(`[Sync Status API]   - Total parallel search time: ${searchTotalDuration}ms`);
+          console.log(`[Sync Status API]   - Performance: ${totalSequentialTime}ms sequential → ${searchTotalDuration}ms parallel`);
+          console.log(`[Sync Status API]   - Per-DB results:`);
+          results.forEach(r => {
+            const status = r.error ? '❌ ERROR' : r.job ? '✅ FOUND' : '⚠️  NOT FOUND';
+            console.log(`[Sync Status API]     • DB ${r.dbIndex} (${r.host}): ${status} - ${r.duration}ms`);
+          });
+          console.log('[Sync Status API] ============================================');
         }
       } catch (allDbError) {
-        console.error('[Sync Status API] ❌ Error in all-database search:', allDbError);
+        console.error('[Sync Status API] ❌ Error in all-database parallel search:', allDbError);
       }
     }
 
@@ -322,22 +617,36 @@ export async function GET(
     }
 
     if (!job) {
+      const totalDuration = Date.now() - requestStartTime;
+      timings['not_found_total'] = totalDuration;
+      
       console.error('[Sync Status API] ============================================');
       console.error('[Sync Status API] ❌ JOB NOT FOUND AFTER ALL LOOKUPS');
       console.error('[Sync Status API] - Job ID:', jobId);
       console.error('[Sync Status API] - Session Org ID:', validatedSession.user.organizationId);
-      console.error('[Sync Status API] - Multi-DB Enabled:', process.env.ENABLE_MULTI_DB === 'true');
+      console.error('[Sync Status API] - Multi-DB Enabled:', multiDbEnabled);
       console.error('[Sync Status API] - Routing Strategy:', routingStrategy);
+      console.error('[Sync Status API] - Total search time:', `${totalDuration}ms`);
       console.error('[Sync Status API] - Lookups performed:');
+      if (timings['cache_check']) {
+        console.error('[Sync Status API]   -1. Cache check (no hit)');
+      }
+      if (timings['metadata_check_start']) {
+        console.error('[Sync Status API]   0. Metadata check (no metadata or not found)');
+      }
       console.error('[Sync Status API]   1. Default DB (DB 0)');
       console.error('[Sync Status API]   2. Session org routed DB');
       if (jobOrganizationId) {
         console.error('[Sync Status API]   3. Job org routed DB');
       }
-      if (process.env.ENABLE_MULTI_DB === 'true') {
-        console.error('[Sync Status API]   4. All databases scanned');
+      if (multiDbEnabled && timings['parallel_scan_start']) {
+        console.error('[Sync Status API]   4. All databases scanned in parallel');
       }
       console.error('[Sync Status API] - Result: Job does not exist in any database');
+      console.error('[Sync Status API] - Timing breakdown:');
+      Object.entries(timings).forEach(([step, duration]) => {
+        console.error(`[Sync Status API]     • ${step}: ${duration}ms`);
+      });
       console.error('[Sync Status API] - Possible causes:');
       console.error('[Sync Status API]   • Job ID is invalid or expired');
       console.error('[Sync Status API]   • Job was deleted');
@@ -412,14 +721,39 @@ export async function GET(
       }
     }
 
-    const totalTime = Date.now() - startTime;
-    if (totalTime > 500) {
-      console.log('[Sync Status API] Request completed:', {
-        jobId,
-        status: job.status,
-        totalTime: `${totalTime}ms`,
-        queryTime: `${queryTime}ms`,
-      });
+    const totalDuration = Date.now() - requestStartTime;
+    timings['total'] = totalDuration;
+    
+    // Log comprehensive timing information
+    console.log('[Sync Status API] ============================================');
+    console.log('[Sync Status API] REQUEST COMPLETE');
+    console.log(`[Sync Status API]   - Job ID: ${jobId}`);
+    console.log(`[Sync Status API]   - Job Status: ${job.status}`);
+    console.log(`[Sync Status API]   - Total time: ${totalDuration}ms`);
+    console.log(`[Sync Status API]   - Strategy used: ${strategyUsed}`);
+    console.log(`[Sync Status API]   - Found in DB: ${foundDbIndex} (${foundDbHost})`);
+    console.log(`[Sync Status API]   - Query time: ${queryTime}ms`);
+    console.log(`[Sync Status API]   - Timing breakdown:`);
+    
+    // Calculate relative timings
+    const timingKeys = Object.keys(timings).filter(k => k !== 'total').sort((a, b) => timings[a] - timings[b]);
+    let lastTime = 0;
+    timingKeys.forEach(step => {
+      const absoluteTime = timings[step];
+      const relativeTime = absoluteTime - lastTime;
+      console.log(`[Sync Status API]     • ${step}: +${relativeTime}ms (${absoluteTime}ms total)`);
+      lastTime = absoluteTime;
+    });
+    
+    console.log('[Sync Status API] ============================================');
+    
+    // Warn if slow (only log if > 500ms for normal requests or > 1000ms for any request)
+    if (totalDuration > 1000) {
+      console.warn(`[Sync Status API] ⚠️  SLOW REQUEST: ${totalDuration}ms`);
+      console.warn(`[Sync Status API]   - Strategy: ${strategyUsed}`);
+      console.warn(`[Sync Status API]   - Consider investigating if this is consistent`);
+    } else if (totalDuration > 500 && strategyUsed === 'parallel_scan') {
+      console.log(`[Sync Status API] ℹ️  Parallel scan took ${totalDuration}ms (acceptable for full DB scan)`);
     }
 
     return NextResponse.json({
@@ -436,7 +770,7 @@ export async function GET(
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : 'Failed to fetch sync status';
     const errorStack = error instanceof Error ? error.stack : undefined;
-    const totalTime = Date.now() - startTime;
+    const totalTime = Date.now() - requestStartTime;
     
     // Try to get jobId for logging, but don't fail if params access fails
     try {
@@ -446,13 +780,14 @@ export async function GET(
       // Ignore error accessing params
     }
     
-    console.error('[Sync Status API] Error fetching sync status:', {
-      error: errorMessage,
-      stack: errorStack,
-      jobId: jobIdForLog,
-      totalTime: `${totalTime}ms`,
-      errorName: error instanceof Error ? error.name : 'Unknown',
-    });
+    console.error('[Sync Status API] ============================================');
+    console.error('[Sync Status API] ❌ ERROR FETCHING SYNC STATUS');
+    console.error('[Sync Status API]   - Job ID:', jobIdForLog);
+    console.error('[Sync Status API]   - Error:', errorMessage);
+    console.error('[Sync Status API]   - Error Type:', error instanceof Error ? error.name : 'Unknown');
+    console.error('[Sync Status API]   - Total Time:', `${totalTime}ms`);
+    console.error('[Sync Status API]   - Stack:', errorStack);
+    console.error('[Sync Status API] ============================================');
     
     // Don't expose internal errors to client
     return NextResponse.json(

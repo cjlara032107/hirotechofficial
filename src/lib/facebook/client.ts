@@ -1093,15 +1093,39 @@ export class FacebookClient {
    * Automatically handles pagination to fetch ALL conversations
    * Uses caching and request deduplication to avoid duplicate API calls
    */
-  async getMessengerConversations(pageId: string, limit = 100, useCache = true) {
+  async getMessengerConversations(pageId: string, limit = 100, useCache = true, userId?: string) {
+    const startTime = Date.now();
+    const requestUserId = userId || pageId; // Use pageId as fallback for user tracking
+    
     // Check cache first
     if (useCache) {
-      const cached = this.getCachedConversations(pageId, 'messenger');
+      const cached = facebookRateLimiter.getCachedResponse<any[]>('getMessengerConversations', { pageId, limit });
       if (cached) {
+        facebookRateLimiter.logRequestStart({
+          endpoint: 'getMessengerConversations',
+          userId: requestUserId,
+          priority: 'low',
+          cacheHit: true,
+        });
         console.log(`[Facebook API] Using cached conversations for page ${pageId} (${cached.length} conversations)`);
         return cached;
       }
     }
+    
+    // Check rate limit before making API call
+    const rateLimitCheck = facebookRateLimiter.checkRateLimit(requestUserId, 'low');
+    if (!rateLimitCheck.allowed) {
+      console.warn(`[Facebook API] Rate limit check failed: ${rateLimitCheck.reason}`);
+      throw new Error(`Rate limit exceeded: ${rateLimitCheck.reason}`);
+    }
+    
+    // Log request start
+    facebookRateLimiter.logRequestStart({
+      endpoint: 'getMessengerConversations',
+      userId: requestUserId,
+      priority: 'low',
+      cacheHit: false,
+    });
 
     // Use deduplication to prevent duplicate requests
     const cacheKey = `getMessengerConversations:${pageId}:${limit}`;
@@ -1230,11 +1254,31 @@ export class FacebookClient {
 
         // Cache the results
         if (useCache) {
-          this.setCachedConversations(pageId, 'messenger', allConversations);
+          facebookRateLimiter.setCachedResponse('getMessengerConversations', { pageId, limit }, allConversations);
         }
+
+        // Log completion
+        const elapsedMs = Date.now() - startTime;
+        facebookRateLimiter.logRequestComplete({
+          endpoint: 'getMessengerConversations',
+          userId: requestUserId,
+          elapsedMs,
+          success: true,
+        });
 
         return allConversations;
       } catch (error: any) {
+        // Log failure
+        const elapsedMs = Date.now() - startTime;
+        const fbError = (error as any).response?.data?.error;
+        facebookRateLimiter.logRequestComplete({
+          endpoint: 'getMessengerConversations',
+          userId: requestUserId,
+          elapsedMs,
+          success: false,
+          errorCode: fbError?.code ? String(fbError.code) : undefined,
+        });
+        
         throw parseFacebookError(error, `Failed to fetch conversations for Page ID: ${pageId}`);
       }
     });
@@ -1853,11 +1897,31 @@ export class FacebookClient {
 
         // Cache the results
         if (useCache) {
-          this.setCachedConversations(igAccountId, 'instagram', allConversations);
+          facebookRateLimiter.setCachedResponse('getInstagramConversations', { igAccountId, limit }, allConversations);
         }
+
+        // Log completion
+        const elapsedMs = Date.now() - startTime;
+        facebookRateLimiter.logRequestComplete({
+          endpoint: 'getInstagramConversations',
+          userId: requestUserId,
+          elapsedMs,
+          success: true,
+        });
 
         return allConversations;
       } catch (error: any) {
+        // Log failure
+        const elapsedMs = Date.now() - startTime;
+        const fbError = (error as any).response?.data?.error;
+        facebookRateLimiter.logRequestComplete({
+          endpoint: 'getInstagramConversations',
+          userId: requestUserId,
+          elapsedMs,
+          success: false,
+          errorCode: fbError?.code ? String(fbError.code) : undefined,
+        });
+        
         throw parseFacebookError(error, `Failed to fetch Instagram conversations for Account ID: ${igAccountId}`);
       }
     });

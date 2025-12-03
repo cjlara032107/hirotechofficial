@@ -437,6 +437,8 @@ model SyncJob {
   // Performance metrics
   durationMs        Int? // Job completion time in milliseconds
   contactsPerSecond Float? // Contacts processed per second
+  // Multi-DB routing metadata
+  dbIndex           Int? // Track which database contains this job for fast routing
   createdAt         DateTime      @default(now())
   updatedAt         DateTime      @updatedAt
   facebookPage      FacebookPage  @relation(fields: [facebookPageId], references: [id], onDelete: Cascade)
@@ -445,6 +447,7 @@ model SyncJob {
   @@index([status, createdAt])
   @@index([lastProgressAt])
   @@index([status, lastProgressAt])
+  @@index([dbIndex])
 }
 
 model AnalysisJob {
