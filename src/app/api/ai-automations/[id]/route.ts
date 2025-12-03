@@ -134,7 +134,6 @@ export async function GET(
     const { id } = await params;
     logger.error('[Automation API] Get error', error instanceof Error ? error : new Error(String(error)), {
       ruleId: id,
-      userId: session?.user?.id,
       multiDbEnabled: process.env.ENABLE_MULTI_DB === 'true',
     });
     
@@ -278,7 +277,6 @@ export async function PATCH(
   } catch (error) {
     logger.error('[Automation API] Update error', error instanceof Error ? error : new Error(String(error)), {
       ruleId: id,
-      userId: session?.user?.id,
       multiDbEnabled: process.env.ENABLE_MULTI_DB === 'true',
     });
     
@@ -378,7 +376,6 @@ export async function DELETE(
   } catch (error) {
     logger.error('[Automation API] Delete error', error instanceof Error ? error : new Error(String(error)), {
       ruleId: id,
-      userId: session?.user?.id,
       multiDbEnabled: process.env.ENABLE_MULTI_DB === 'true',
     });
     

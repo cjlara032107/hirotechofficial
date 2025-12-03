@@ -143,7 +143,6 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ rules: transformedRules });
   } catch (error) {
     logger.error('AI Automations list error', error instanceof Error ? error : new Error(String(error)), {
-      userId: session?.user?.id,
       multiDbEnabled: process.env.ENABLE_MULTI_DB === 'true',
     });
     
@@ -393,7 +392,6 @@ export async function POST(request: NextRequest) {
     });
   } catch (error) {
     logger.error('[Automation API] Create error', error instanceof Error ? error : new Error(String(error)), {
-      userId: session?.user?.id,
       multiDbEnabled: process.env.ENABLE_MULTI_DB === 'true',
     });
     

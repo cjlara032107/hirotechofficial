@@ -8,7 +8,8 @@
     "vercel-build": "npx --yes prisma@6.19.0 generate && next build",
     "start": "next start",
     "lint": "next lint",
-    "postinstall": "npx prisma@6.19.0 generate || echo 'Prisma generate will run during build'"
+    "postinstall": "npx prisma@6.19.0 generate || echo 'Prisma generate will run during build'",
+    "verify-db-pool": "tsx scripts/verify-db-pool-config.ts"
   },
   "dependencies": {
     "@auth/prisma-adapter": "^2.11.1",
