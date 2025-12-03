@@ -1,4 +1,5 @@
 import axios from 'axios';
+import { facebookRateLimiter } from './rate-limiter';
 
 const FB_GRAPH_URL = 'https://graph.facebook.com/v19.0';
 

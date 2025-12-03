@@ -85,13 +85,17 @@ export default function AIAutomationsPage() {
   const fetchRules = async () => {
     try {
       setError(null);
+      console.log('[AI Automations UI] Fetching rules...');
+      const startTime = Date.now();
+      
       const response = await fetch('/api/ai-automations');
+      const duration = Date.now() - startTime;
       
       // Check if response is JSON before parsing
       const contentType = response.headers.get('content-type');
       if (!contentType || !contentType.includes('application/json')) {
         // Not JSON - likely redirected to login page (HTML)
-        console.log('[AI Automations] Not authenticated, redirecting to login');
+        console.log('[AI Automations UI] Not authenticated, redirecting to login');
         window.location.href = '/login';
         return;
       }
@@ -101,19 +105,47 @@ export default function AIAutomationsPage() {
       if (!response.ok) {
         // 401 is expected when not logged in - will redirect to login
         if (response.status === 401) {
-          console.log('[AI Automations] Not authenticated, redirecting to login');
+          console.log('[AI Automations UI] Not authenticated, redirecting to login');
           window.location.href = '/login';
           return;
         }
-        throw new Error(data.error || 'Failed to load automation rules');
+        
+        // Enhanced error context for DB issues
+        const errorMsg = data.error || 'Failed to load automation rules';
+        const isDbError = errorMsg.includes('database') || errorMsg.includes('DB') || errorMsg.includes('connectivity');
+        
+        console.error('[AI Automations UI] Fetch failed:', {
+          status: response.status,
+          error: errorMsg,
+          details: data.details,
+          duration,
+          isDbError,
+        });
+        
+        throw new Error(errorMsg);
       }
       
       setRules(data.rules || []);
+      console.log('[AI Automations UI] Fetch success:', {
+        rulesCount: data.rules?.length || 0,
+        duration,
+      });
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : 'Failed to load automation rules';
-      console.error('Error fetching rules:', err);
+      const isDbError = errorMessage.includes('database') || errorMessage.includes('DB') || errorMessage.includes('connectivity');
+      
+      console.error('[AI Automations UI] Error fetching rules:', err);
       setError(errorMessage);
-      toast.error(errorMessage);
+      
+      // Show more helpful toast for DB errors
+      if (isDbError) {
+        toast.error('Database connection issue. Please check your connection and try again.', {
+          duration: 5000,
+        });
+      } else {
+        toast.error(errorMessage);
+      }
+      
       setRules([]); // Ensure rules is always an array
     } finally {
       setLoading(false);
@@ -205,6 +237,9 @@ export default function AIAutomationsPage() {
 
   const testRule = async (id: string) => {
     setActionLoading(id);
+    console.log('[AI Automations UI] Executing test for rule:', id);
+    const startTime = Date.now();
+    
     try {
       const response = await fetch('/api/ai-automations/execute', {
         method: 'POST',
@@ -212,16 +247,51 @@ export default function AIAutomationsPage() {
         body: JSON.stringify({ ruleId: id })
       });
 
+      const duration = Date.now() - startTime;
       const data = await response.json();
 
       if (response.ok) {
-        toast.success(`Test complete: ${data.sent} sent, ${data.failed} failed`);
+        console.log('[AI Automations UI] Test complete:', {
+          ruleId: id,
+          sent: data.sent,
+          failed: data.failed,
+          skipped: data.skipped,
+          duration,
+        });
+        
+        const message = data.skipped && data.skipped > 0
+          ? `Test complete: ${data.sent} sent, ${data.failed} failed, ${data.skipped} skipped`
+          : `Test complete: ${data.sent} sent, ${data.failed} failed`;
+        
+        toast.success(message, { duration: 5000 });
+        
+        if (data.message) {
+          toast.info(data.message, { duration: 7000 });
+        }
+        
         fetchRules();
       } else {
-        toast.error(data.error || 'Test failed');
+        const errorMsg = data.error || 'Test failed';
+        const isDbError = errorMsg.includes('database') || errorMsg.includes('DB') || errorMsg.includes('connectivity');
+        
+        console.error('[AI Automations UI] Test failed:', {
+          ruleId: id,
+          error: errorMsg,
+          details: data.details,
+          duration,
+        });
+        
+        if (isDbError) {
+          toast.error('Database connection issue. Please check DB1/DB2 connectivity and try again.', {
+            duration: 6000,
+          });
+        } else {
+          toast.error(errorMsg);
+        }
       }
-    } catch {
-      toast.error('Failed to execute test');
+    } catch (error) {
+      console.error('[AI Automations UI] Test execution error:', error);
+      toast.error('Failed to execute test. Please try again.');
     } finally {
       setActionLoading(null);
     }
@@ -260,21 +330,47 @@ export default function AIAutomationsPage() {
     }
 
     setLoadingHistory(prev => new Set(prev).add(ruleId));
+    console.log('[AI Automations UI] Fetching execution history for rule:', ruleId);
+    const startTime = Date.now();
+    
     try {
       const response = await fetch(`/api/ai-automations/${ruleId}/executions?limit=50`);
+      const duration = Date.now() - startTime;
+      
       if (response.ok) {
         const data = await response.json();
+        console.log('[AI Automations UI] Execution history loaded:', {
+          ruleId,
+          executionsCount: data.executions?.length || 0,
+          duration,
+        });
+        
         setExecutionHistory(prev => ({
           ...prev,
           [ruleId]: data.executions || [],
         }));
         setViewingHistory(ruleId);
       } else {
-        toast.error('Failed to load execution history');
+        const data = await response.json();
+        const errorMsg = data.error || 'Failed to load execution history';
+        const isDbError = errorMsg.includes('database') || errorMsg.includes('DB') || errorMsg.includes('connectivity');
+        
+        console.error('[AI Automations UI] Failed to load execution history:', {
+          ruleId,
+          error: errorMsg,
+          details: data.details,
+          duration,
+        });
+        
+        if (isDbError) {
+          toast.error('Database connection issue. Please check DB1/DB2 connectivity.', { duration: 5000 });
+        } else {
+          toast.error(errorMsg);
+        }
       }
     } catch (error) {
-      console.error('Error fetching execution history:', error);
-      toast.error('Failed to load execution history');
+      console.error('[AI Automations UI] Error fetching execution history:', error);
+      toast.error('Failed to load execution history. Please try again.');
     } finally {
       setLoadingHistory(prev => {
         const newSet = new Set(prev);

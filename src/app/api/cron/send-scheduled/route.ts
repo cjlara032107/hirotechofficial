@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/db';
+import { getPrismaForOrg } from '@/lib/db/get-prisma-for-org';
 import { safePrismaOperation, handlePrismaError } from '@/lib/prisma-error-handler';
 import { acquireCronLock, getCronStaggerDelay } from '@/lib/cron-lock';
 import { startCampaign, getTargetContacts } from '@/lib/campaigns/send';
@@ -102,10 +103,32 @@ export async function GET(request: NextRequest) {
       const progress = Math.round((i / dueCampaigns.length) * 80) + 10; // 10-90% progress
       
       try {
-        console.log(`[Cron Send Scheduled] Processing campaign: ${campaign.id} - ${campaign.name}`);
-        await logJobProgress(jobType, campaign.id, `Processing campaign: ${campaign.name}`, progress, { campaignId: campaign.id, campaignName: campaign.name }).catch(() => {
+        console.log(`[Cron Send Scheduled] Processing campaign: ${campaign.id} - ${campaign.name} (Org: ${campaign.organizationId})`);
+        await logJobProgress(jobType, campaign.id, `Processing campaign: ${campaign.name}`, progress, { campaignId: campaign.id, campaignName: campaign.name, organizationId: campaign.organizationId }).catch(() => {
           // Silently fail - logging should not break the app
         });
+
+        // Use multi-DB routing for this campaign's organization
+        const db = getPrismaForOrg(campaign.organizationId);
+
+        // Log routed database details
+        if (process.env.ENABLE_MULTI_DB === 'true') {
+          try {
+            const { getDatabaseRouter } = await import('@/lib/db/multi-db-router');
+            const router = getDatabaseRouter();
+            const client = router.getClient(campaign.organizationId);
+            const dbConfig = router.getAllDatabaseConfigs().find(c => c.client === client);
+            console.log('[Cron Send Scheduled] Routed DB', {
+              campaignId: campaign.id,
+              organizationId: campaign.organizationId,
+              dbIndex: dbConfig?.index,
+              dbUrlHost: dbConfig ? new URL(dbConfig.url).hostname : 'unknown',
+              dbHealth: dbConfig?.health,
+            });
+          } catch (err) {
+            console.warn('[Cron Send Scheduled] Could not log DB routing details:', err);
+          }
+        }
 
         // STEP 1: Auto-fetch recipients if enabled (check if property exists for backward compatibility)
         if ('autoFetchEnabled' in campaign && campaign.autoFetchEnabled) {
@@ -120,12 +143,12 @@ export async function GET(request: NextRequest) {
         }
 
         // STEP 2: Get target contacts
-        const targetContacts = await getTargetContacts(campaign.id);
+        const targetContacts = await getTargetContacts(campaign.id, campaign.organizationId);
         console.log(`[Cron Send Scheduled] Target contacts: ${targetContacts.length}`);
 
         if (targetContacts.length === 0) {
           await safePrismaOperation(
-            () => prisma.campaign.update({
+            () => db.campaign.update({
               where: { id: campaign.id },
               data: {
                 status: 'COMPLETED',
@@ -158,7 +181,7 @@ export async function GET(request: NextRequest) {
             
             // Update campaign with AI messages map
             await safePrismaOperation(
-              () => prisma.campaign.update({
+              () => db.campaign.update({
                 where: { id: campaign.id },
                 data: {
                   aiMessagesMap: aiMessagesMap || undefined,
@@ -174,7 +197,7 @@ export async function GET(request: NextRequest) {
 
         // STEP 4: Update campaign total recipients
         await safePrismaOperation(
-          () => prisma.campaign.update({
+          () => db.campaign.update({
             where: { id: campaign.id },
             data: {
               totalRecipients: targetContacts.length,
@@ -189,7 +212,7 @@ export async function GET(request: NextRequest) {
 
         // STEP 5: Start campaign (this will handle the actual sending)
         console.log(`[Cron Send Scheduled] Starting campaign ${campaign.id}...`);
-        await startCampaign(campaign.id);
+        await startCampaign(campaign.id, campaign.organizationId);
         
         dispatched++;
         results.push({
@@ -206,8 +229,9 @@ export async function GET(request: NextRequest) {
         
         // Mark campaign as failed
         try {
+          const db = getPrismaForOrg(campaign.organizationId);
           await safePrismaOperation(
-            () => prisma.campaign.update({
+            () => db.campaign.update({
               where: { id: campaign.id },
               data: {
                 status: 'CANCELLED',
@@ -290,7 +314,10 @@ export async function GET(request: NextRequest) {
  */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 async function autoFetchRecipients(campaign: any) {
-  console.log(`[Auto-Fetch] Starting for campaign ${campaign.id}`);
+  console.log(`[Auto-Fetch] Starting for campaign ${campaign.id} (Org: ${campaign.organizationId})`);
+  
+  // Use multi-DB routing
+  const db = getPrismaForOrg(campaign.organizationId);
   
   const facebookPage = campaign.facebookPage;
   if (!facebookPage || !facebookPage.pageAccessToken) {
@@ -312,7 +339,7 @@ async function autoFetchRecipients(campaign: any) {
         if (participant.id === facebookPage.pageId) continue; // Skip page itself
 
         // Check if contact exists
-        const existingContact = await prisma.contact.findFirst({
+        const existingContact = await db.contact.findFirst({
           where: {
             messengerPSID: participant.id,
             facebookPageId: facebookPage.id,
@@ -321,7 +348,7 @@ async function autoFetchRecipients(campaign: any) {
 
         if (!existingContact) {
           // Create new contact
-          await prisma.contact.create({
+          await db.contact.create({
             data: {
               firstName: participant.name || 'Facebook User',
               messengerPSID: participant.id,
@@ -333,7 +360,7 @@ async function autoFetchRecipients(campaign: any) {
           });
         } else {
           // Update existing contact
-          await prisma.contact.update({
+          await db.contact.update({
             where: { id: existingContact.id },
             data: {
               lastInteraction: new Date(),
@@ -346,7 +373,7 @@ async function autoFetchRecipients(campaign: any) {
     console.log(`[Auto-Fetch] Synced conversations to database`);
 
     // Apply tag filters
-    let filteredContacts = await prisma.contact.findMany({
+    let filteredContacts = await db.contact.findMany({
       where: {
         organizationId: campaign.organizationId,
         facebookPageId: campaign.facebookPageId,
@@ -372,7 +399,7 @@ async function autoFetchRecipients(campaign: any) {
     console.log(`[Auto-Fetch] After filters: ${filteredContacts.length} contacts`);
 
     // Update campaign with new target contacts
-    await prisma.campaign.update({
+    await db.campaign.update({
       where: { id: campaign.id },
       data: {
         targetingType: 'SPECIFIC_CONTACTS',
@@ -391,7 +418,10 @@ async function autoFetchRecipients(campaign: any) {
  */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 async function generateAIMessages(campaign: any, contacts: any[]): Promise<Record<string, string>> {
-  console.log(`[AI Generation] Starting for ${contacts.length} contacts`);
+  console.log(`[AI Generation] Starting for ${contacts.length} contacts (Org: ${campaign.organizationId})`);
+  
+  // Use multi-DB routing
+  const db = getPrismaForOrg(campaign.organizationId);
   
   const aiMessagesMap: Record<string, string> = {};
   
@@ -433,7 +463,7 @@ async function generateAIMessages(campaign: any, contacts: any[]): Promise<Recor
         return messageGenerationLimiter.execute(async () => {
           try {
             // Fetch conversation history for context
-            const messages = await prisma.message.findMany({
+            const messages = await db.message.findMany({
               where: {
                 contactId: contact.id,
               },

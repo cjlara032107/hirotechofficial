@@ -601,7 +601,7 @@ export async function GET(request: NextRequest) {
                     // ⭐ STOP-ON-REPLY: If rule has stopOnReply enabled, create stop record
                     if (rule.stopOnReply) {
                       // Check if we've sent messages to this contact from this rule
-                      const hasExecutions = await prisma.aIAutomationExecution.findFirst({
+                      const hasExecutions = await db.aIAutomationExecution.findFirst({
                         where: {
                           contactId: contact.id,
                           ruleId: rule.id,
@@ -611,7 +611,7 @@ export async function GET(request: NextRequest) {
 
                       if (hasExecutions) {
                         // Check if stop record already exists
-                        const existingStop = await prisma.aIAutomationStop.findUnique({
+                        const existingStop = await db.aIAutomationStop.findUnique({
                           where: {
                             ruleId_contactId: {
                               ruleId: rule.id,
@@ -622,7 +622,7 @@ export async function GET(request: NextRequest) {
 
                         if (!existingStop) {
                           // Count follow-ups sent
-                          const executions = await prisma.aIAutomationExecution.findMany({
+                          const executions = await db.aIAutomationExecution.findMany({
                             where: {
                               contactId: contact.id,
                               ruleId: rule.id,
@@ -631,7 +631,7 @@ export async function GET(request: NextRequest) {
                           });
 
                           // Create stop record
-                          await prisma.aIAutomationStop.create({
+                          await db.aIAutomationStop.create({
                             data: {
                               id: `stop_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
                               ruleId: rule.id,
@@ -646,13 +646,13 @@ export async function GET(request: NextRequest) {
 
                           // Remove tag if configured
                           if (rule.removeTagOnReply) {
-                            const contactData = await prisma.contact.findUnique({
+                            const contactData = await db.contact.findUnique({
                               where: { id: contact.id },
                               select: { tags: true },
                             });
 
                             if (contactData && contactData.tags.includes(rule.removeTagOnReply)) {
-                              await prisma.contact.update({
+                              await db.contact.update({
                                 where: { id: contact.id },
                                 data: {
                                   tags: contactData.tags.filter(tag => tag !== rule.removeTagOnReply),
@@ -692,7 +692,7 @@ export async function GET(request: NextRequest) {
                   console.error(`[AI Automations Cron] Failed to generate message for contact: ${contact.id}`);
                   
                   // Log execution failure
-                  await prisma.aIAutomationExecution.create({
+                  await db.aIAutomationExecution.create({
                     data: {
                       id: `exec_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
                       ruleId: rule.id,
@@ -721,7 +721,7 @@ export async function GET(request: NextRequest) {
 
                 if (result.success) {
                   // Log successful execution
-                  await prisma.aIAutomationExecution.create({
+                  await db.aIAutomationExecution.create({
                     data: {
                       id: `exec_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
                       ruleId: rule.id,
@@ -742,7 +742,7 @@ export async function GET(request: NextRequest) {
                   });
 
                   // Save message to database
-                  await prisma.message.create({
+                  await db.message.create({
                     data: {
                       content: aiResult.message,
                       platform: 'MESSENGER',
@@ -760,7 +760,7 @@ export async function GET(request: NextRequest) {
                   return { success: true };
                 } else {
                   // Log execution failure
-                  await prisma.aIAutomationExecution.create({
+                  await db.aIAutomationExecution.create({
                     data: {
                       id: `exec_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
                       ruleId: rule.id,
@@ -800,7 +800,7 @@ export async function GET(request: NextRequest) {
 
         // Update rule statistics
         if (ruleSent > 0 || ruleFailed > 0) {
-          await prisma.aIAutomationRule.update({
+          await db.aIAutomationRule.update({
             where: { id: rule.id },
             data: {
               lastExecutedAt: now,

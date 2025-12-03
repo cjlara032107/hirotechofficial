@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { auth } from '@/auth';
 import { prisma } from '@/lib/db';
+import { getPrismaForOrg } from '@/lib/db/get-prisma-for-org';
 import { validateSession } from '@/lib/api/validate-session';
 import { GoogleAIService } from '@/lib/ai/google-ai-service';
 
@@ -16,6 +17,34 @@ export async function POST(request: NextRequest) {
       return validation.error;
     }
     const { session: validatedSession } = validation;
+
+    const multiDbEnabled = process.env.ENABLE_MULTI_DB === 'true';
+    console.log('[Campaign Create with Messages] Start', {
+      orgId: validatedSession.user.organizationId,
+      multiDb: multiDbEnabled,
+      strategy: process.env.DB_ROUTING_STRATEGY || 'hash',
+    });
+
+    // Use multi-DB routing
+    const db = getPrismaForOrg(validatedSession.user.organizationId);
+
+    // Log routed database details
+    if (multiDbEnabled) {
+      try {
+        const { getDatabaseRouter } = await import('@/lib/db/multi-db-router');
+        const router = getDatabaseRouter();
+        const client = router.getClient(validatedSession.user.organizationId);
+        const dbConfig = router.getAllDatabaseConfigs().find(c => c.client === client);
+        console.log('[Campaign Create with Messages] Routed DB', {
+          organizationId: validatedSession.user.organizationId,
+          dbIndex: dbConfig?.index,
+          dbUrlHost: dbConfig ? new URL(dbConfig.url).hostname : 'unknown',
+          dbHealth: dbConfig?.health,
+        });
+      } catch (err) {
+        console.warn('[Campaign Create with Messages] Could not log DB routing details:', err);
+      }
+    }
 
     let body;
     try {
@@ -62,8 +91,17 @@ export async function POST(request: NextRequest) {
       status = 'SCHEDULED';
     }
 
+    console.log('[Campaign Create with Messages] Creating campaign', {
+      name,
+      platform,
+      useAiPersonalization,
+      targetContactIds: targetContactIds?.length || 0,
+      scheduledAt: scheduledAt || 'immediate',
+      hasMedia: !!(mediaUrl && mediaType),
+    });
+
     // Create campaign first
-    const campaign = await prisma.campaign.create({
+    const campaign = await db.campaign.create({
       data: {
         name,
         description,
@@ -92,7 +130,7 @@ export async function POST(request: NextRequest) {
     // Update campaign with media if provided (after creation to avoid migration issues)
     if (mediaUrl || mediaType) {
       try {
-        await prisma.campaign.update({
+        await db.campaign.update({
           where: { id: campaign.id },
           data: {
             ...(mediaUrl && { mediaUrl }),
@@ -121,7 +159,8 @@ export async function POST(request: NextRequest) {
         campaign.id,
         targetContactIds,
         templateContent || 'Hello {firstName}! I wanted to reach out to you.',
-        aiCustomInstructions
+        aiCustomInstructions,
+        validatedSession.user.organizationId
       ).catch((error) => {
         console.error(`[Background AI Generation] Failed for campaign ${campaign.id}:`, error);
       });
@@ -146,13 +185,17 @@ async function generateAIMessagesInBackground(
   campaignId: string,
   contactIds: string[],
   templateMessage: string,
-  customInstructions?: string
+  customInstructions?: string,
+  organizationId?: string
 ) {
   try {
     console.log(`[Background AI Generation] Starting for campaign ${campaignId} with ${contactIds.length} contacts`);
     
+    // Use multi-DB routing if organizationId provided
+    const db = organizationId ? getPrismaForOrg(organizationId) : prisma;
+    
     // Fetch contacts
-    const contacts = await prisma.contact.findMany({
+    const contacts = await db.contact.findMany({
       where: {
         id: { in: contactIds },
       },
@@ -249,7 +292,7 @@ async function generateAIMessagesInBackground(
     );
 
     // Update campaign with generated messages
-    await prisma.campaign.update({
+    await db.campaign.update({
       where: { id: campaignId },
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       data: { aiMessagesMap: aiMessagesMap as any },

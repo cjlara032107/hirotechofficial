@@ -2,6 +2,7 @@ import OpenAI from 'openai';
 import apiKeyManager from './api-key-manager';
 import { executeAIRequest, getTimeoutForOperation, getPriorityForOperation } from './ai-request-wrapper';
 import { RequestPriority } from './request-queue';
+import { rateTracker } from './rate-tracker';
 
 const MAX_ATTEMPTS = 3;
 const BASE_RETRY_DELAY_MS = 500; // Base delay: 500ms (optimized for speed)
@@ -231,6 +232,20 @@ async function analyzeConversationWithKey(
   returnComprehensive = false // New parameter to return full comprehensive format
 ): Promise<string | AnalyzeConversationResult | null> {
   const modelToUse = modelOverride || MODEL;
+  const requestId = `req-${Date.now()}-${Math.random().toString(36).substring(7)}`;
+  const startTime = Date.now();
+  
+  // Log request start with rate tracking
+  const keyId = apiKey.substring(0, 16);
+  const estimatedTokens = Math.min(messages.length * 100, 8000); // Rough estimate
+  rateTracker.logRequestStart({
+    keyId,
+    operation: 'analyzeConversation',
+    priority: 'NORMAL',
+    tokens: estimatedTokens,
+    reqId: requestId,
+  });
+  
   try {
     const openai = createNvidiaClient(apiKey);
 
@@ -911,6 +926,16 @@ Remember: Start with {, end with }, nothing else. Extract ALL information - do n
     
     // Success will be recorded by caller with duration
     
+    // Log success with rate tracking
+    const elapsedMs = Date.now() - startTime;
+    rateTracker.logRequestComplete({
+      keyId,
+      operation: 'analyzeConversation',
+      elapsedMs,
+      success: true,
+      reqId: requestId,
+    });
+    
     console.log(`[NVIDIA] ✅ Generated comprehensive analysis summary (${summary.length} chars)`);
     
     // If returnComprehensive is true, return both summary and full comprehensive format
@@ -975,6 +1000,18 @@ Remember: Start with {, end with }, nothing else. Extract ALL information - do n
       stack: error.stack?.split('\n').slice(0, 3).join('\n'),
     } : { raw: String(error), status: errorStatus };
     
+    // Log failure with rate tracking
+    const elapsedMs = Date.now() - startTime;
+    rateTracker.logRequestComplete({
+      keyId,
+      operation: 'analyzeConversation',
+      elapsedMs,
+      success: false,
+      errorCode: errorStatus ? String(errorStatus) : undefined,
+      retryCount: keyAttempts,
+      reqId: requestId,
+    });
+    
     console.error('[NVIDIA] ❌ Analysis failed:', errorMessage);
     if (errorStatus) {
       console.error(`[NVIDIA] HTTP Status: ${errorStatus}`);
@@ -986,6 +1023,16 @@ Remember: Start with {, end with }, nothing else. Extract ALL information - do n
       const attemptNumber = keyAttempts + 1;
       if (attemptNumber < MAX_ATTEMPTS) {
         const backoffDelay = calculateExponentialBackoff(keyAttempts);
+        
+        // Log backoff with rate tracking
+        rateTracker.logBackoff({
+          keyId,
+          operation: 'analyzeConversation',
+          delayMs: backoffDelay,
+          attempt: attemptNumber,
+          reqId: requestId,
+        });
+        
         console.warn(
           `[NVIDIA] Rate limit hit, retrying (attempt ${attemptNumber + 1}/${MAX_ATTEMPTS}) after ${backoffDelay}ms (exponential backoff)...`
         );
@@ -1442,6 +1489,20 @@ async function analyzeConversationWithStageAndKey(
   retries: number,
   keyAttempts: number
 ): Promise<AIContactAnalysis | null> {
+  const requestId = `req-${Date.now()}-${Math.random().toString(36).substring(7)}`;
+  const startTime = Date.now();
+  
+  // Log request start with rate tracking
+  const keyId = apiKey.substring(0, 16);
+  const estimatedTokens = Math.min(messages.length * 100 + pipelineStages.length * 50, 8000);
+  rateTracker.logRequestStart({
+    keyId,
+    operation: 'analyzeConversationWithStageRecommendation',
+    priority: 'NORMAL',
+    tokens: estimatedTokens,
+    reqId: requestId,
+  });
+  
   try {
     const openai = createNvidiaClient(apiKey);
 
@@ -1734,6 +1795,16 @@ IMPORTANT:
     
     // Success will be recorded by caller with duration
     
+    // Log success with rate tracking
+    const elapsedMs = Date.now() - startTime;
+    rateTracker.logRequestComplete({
+      keyId,
+      operation: 'analyzeConversationWithStageRecommendation',
+      elapsedMs,
+      success: true,
+      reqId: requestId,
+    });
+    
     console.log(`[NVIDIA] ✅ Stage recommendation: ${analysis.recommendedStage} (confidence: ${analysis.confidence}%, score: ${analysis.leadScore})`);
     if (analysis.executiveSummary) {
       console.log(`[NVIDIA] ✅ Executive summary length: ${analysis.executiveSummary.length} characters`);
@@ -1743,11 +1814,26 @@ IMPORTANT:
   } catch (error: unknown) {
     // Enhanced error logging
     const errorMessage = error instanceof Error ? error.message : String(error);
+    const errorStatus = (error as any)?.status || (error as any)?.response?.status || 
+                       (errorMessage?.match(/(\d{3})\s+status/i)?.[1]);
     const errorDetails = error instanceof Error ? {
       name: error.name,
       message: error.message,
+      status: errorStatus,
       stack: error.stack?.split('\n').slice(0, 3).join('\n'),
-    } : { raw: String(error) };
+    } : { raw: String(error), status: errorStatus };
+    
+    // Log failure with rate tracking
+    const elapsedMs = Date.now() - startTime;
+    rateTracker.logRequestComplete({
+      keyId,
+      operation: 'analyzeConversationWithStageRecommendation',
+      elapsedMs,
+      success: false,
+      errorCode: errorStatus ? String(errorStatus) : undefined,
+      retryCount: keyAttempts,
+      reqId: requestId,
+    });
     
     console.error('[NVIDIA] ❌ Stage recommendation failed:', errorMessage);
     console.error('[NVIDIA] Error details:', JSON.stringify(errorDetails, null, 2));
@@ -1757,6 +1843,16 @@ IMPORTANT:
       const attemptNumber = keyAttempts + 1;
       if (attemptNumber < MAX_ATTEMPTS) {
         const backoffDelay = calculateExponentialBackoff(keyAttempts);
+        
+        // Log backoff with rate tracking
+        rateTracker.logBackoff({
+          keyId,
+          operation: 'analyzeConversationWithStageRecommendation',
+          delayMs: backoffDelay,
+          attempt: attemptNumber,
+          reqId: requestId,
+        });
+        
         console.warn(
           `[NVIDIA] Rate limit hit (stage recommendation), retrying (attempt ${attemptNumber + 1}/${MAX_ATTEMPTS}) after ${backoffDelay}ms (exponential backoff)...`
         );

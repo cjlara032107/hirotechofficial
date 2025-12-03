@@ -528,12 +528,12 @@ async function sendMessagesInBackground(
             console.warn(`⚠️ Campaign ${campaignId} status is ${finalCampaign.status}, attempting to mark as COMPLETED anyway`);
             
             // Get campaign with media info before updating
-            const campaignWithMedia = await prisma.campaign.findUnique({
+            const campaignWithMedia = await db.campaign.findUnique({
               where: { id: campaignId },
               select: { mediaUrl: true, mediaType: true },
             });
             
-            const updateResult = await prisma.campaign.update({
+            const updateResult = await db.campaign.update({
               where: { id: campaignId },
               data: { 
                 status: 'COMPLETED',
@@ -571,7 +571,7 @@ async function sendMessagesInBackground(
       console.error(`📍 Error stack:`, error instanceof Error ? error.stack : 'No stack trace');
       
       try {
-        const errorCampaign = await prisma.campaign.findUnique({
+        const errorCampaign = await db.campaign.findUnique({
           where: { id: campaignId },
           select: { status: true, sentCount: true, totalRecipients: true },
         });
@@ -585,12 +585,12 @@ async function sendMessagesInBackground(
 
         if (errorCampaign?.status === 'SENDING') {
           // Get campaign with media info before updating
-          const campaignWithMedia = await prisma.campaign.findUnique({
+          const campaignWithMedia = await db.campaign.findUnique({
             where: { id: campaignId },
             select: { mediaUrl: true, mediaType: true },
           });
           
-          await prisma.campaign.update({
+          await db.campaign.update({
             where: { id: campaignId },
             data: { 
               status: 'COMPLETED',
@@ -616,8 +616,11 @@ async function sendMessagesInBackground(
   });
 }
 
-export async function getTargetContacts(campaignId: string) {
-  const campaign = await prisma.campaign.findUnique({
+export async function getTargetContacts(campaignId: string, organizationId?: string) {
+  // Use multi-DB routing if organizationId is provided
+  const db = organizationId ? getPrismaForOrg(organizationId) : prisma;
+  
+  const campaign = await db.campaign.findUnique({
     where: { id: campaignId },
     include: {
       facebookPage: true,
@@ -637,7 +640,7 @@ export async function getTargetContacts(campaignId: string) {
       break;
 
     case 'TAGS':
-      contacts = await prisma.contact.findMany({
+      contacts = await db.contact.findMany({
         where: {
           organizationId: campaign.organizationId,
           facebookPageId: campaign.facebookPageId,
@@ -649,7 +652,7 @@ export async function getTargetContacts(campaignId: string) {
       break;
 
     case 'PIPELINE_STAGES':
-      contacts = await prisma.contact.findMany({
+      contacts = await db.contact.findMany({
         where: {
           organizationId: campaign.organizationId,
           facebookPageId: campaign.facebookPageId,
@@ -661,7 +664,7 @@ export async function getTargetContacts(campaignId: string) {
       break;
 
     case 'SPECIFIC_CONTACTS':
-      contacts = await prisma.contact.findMany({
+      contacts = await db.contact.findMany({
         where: {
           id: {
             in: campaign.targetContactIds,
@@ -671,7 +674,7 @@ export async function getTargetContacts(campaignId: string) {
       break;
 
     case 'ALL_CONTACTS':
-      contacts = await prisma.contact.findMany({
+      contacts = await db.contact.findMany({
         where: {
           organizationId: campaign.organizationId,
           facebookPageId: campaign.facebookPageId,
@@ -698,10 +701,13 @@ export async function getTargetContacts(campaignId: string) {
   return targetContacts;
 }
 
-export async function startCampaign(campaignId: string) {
-  console.log(`🚀 Starting campaign ${campaignId}...`);
+export async function startCampaign(campaignId: string, organizationId?: string) {
+  console.log(`[Campaign Start] Starting campaign ${campaignId}...`);
   
-  const campaign = await prisma.campaign.findUnique({
+  // Use multi-DB routing if organizationId is provided
+  const db = organizationId ? getPrismaForOrg(organizationId) : prisma;
+  
+  const campaign = await db.campaign.findUnique({
     where: { id: campaignId },
     include: {
       facebookPage: true,
@@ -720,19 +726,19 @@ export async function startCampaign(campaignId: string) {
   }
 
   if (!campaign) throw new Error('Campaign not found');
-  console.log(`✅ Campaign found: ${campaign.name}`);
+  console.log(`[Campaign Start] Campaign found: ${campaign.name}, Org: ${campaign.organizationId}`);
 
-  const targetContacts = await getTargetContacts(campaignId);
-  console.log(`📊 Target contacts found: ${targetContacts.length}`);
+  const targetContacts = await getTargetContacts(campaignId, campaign.organizationId);
+  console.log(`[Campaign Start] Target contacts found: ${targetContacts.length}`);
 
   if (targetContacts.length === 0) {
     // Get campaign with media info before updating
-    const campaignWithMedia = await prisma.campaign.findUnique({
+    const campaignWithMedia = await db.campaign.findUnique({
       where: { id: campaignId },
       select: { mediaUrl: true, mediaType: true },
     });
     
-    await prisma.campaign.update({
+    await db.campaign.update({
       where: { id: campaignId },
       data: {
         status: 'COMPLETED',
@@ -750,8 +756,8 @@ export async function startCampaign(campaignId: string) {
     throw new Error('No target contacts found for this campaign. Make sure contacts have valid Messenger PSIDs or Instagram SIDs.');
   }
 
-  console.log(`📝 Updating campaign status to SENDING...`);
-  await prisma.campaign.update({
+  console.log(`[Campaign Start] Updating campaign status to SENDING...`);
+  await db.campaign.update({
     where: { id: campaignId },
     data: {
       status: 'SENDING',
@@ -822,7 +828,7 @@ export async function startCampaign(campaignId: string) {
           return messageGenerationLimiter.execute(async () => {
             try {
               // Fetch conversation history
-              const messages = await prisma.message.findMany({
+              const messages = await db.message.findMany({
                 where: { contactId: contact.id },
                 orderBy: { createdAt: 'desc' },
                 take: 10,
@@ -860,7 +866,7 @@ export async function startCampaign(campaignId: string) {
       );
       
       // Save generated messages to campaign
-      await prisma.campaign.update({
+      await db.campaign.update({
         where: { id: campaignId },
         data: { aiMessagesMap: aiMessagesMap as any },
       });
@@ -911,6 +917,7 @@ export async function startCampaign(campaignId: string) {
         campaign.platform === 'MESSENGER'
           ? contact.messengerPSID
           : contact.instagramSID,
+      organizationId: campaign.organizationId,
     };
   });
 
@@ -926,15 +933,15 @@ export async function startCampaign(campaignId: string) {
   
   // Validate that we have messages to send
   if (messages.length === 0) {
-    console.error(`❌ No messages prepared for campaign ${campaign.id}`);
+    console.error(`[Campaign Start] No messages prepared for campaign ${campaign.id}`);
     
     // Get campaign with media info before updating
-    const campaignWithMedia = await prisma.campaign.findUnique({
+    const campaignWithMedia = await db.campaign.findUnique({
       where: { id: campaign.id },
       select: { mediaUrl: true, mediaType: true },
     });
     
-    await prisma.campaign.update({
+    await db.campaign.update({
       where: { id: campaign.id },
       data: {
         status: 'COMPLETED',
@@ -955,12 +962,13 @@ export async function startCampaign(campaignId: string) {
   // Send messages in background without rate limiting
   sendMessagesInBackground(messages);
 
-  console.log(`⚡ Campaign started! Messages are being sent in parallel batches.`);
+  console.log(`[Campaign Start] Campaign started! Messages are being sent in parallel batches.`);
   return { 
     success: true, 
     queued: targetContacts.length,
     mode: 'direct-fast',
-    message: 'Messages are being sent as fast as possible in parallel batches!'
+    message: 'Messages are being sent as fast as possible in parallel batches!',
+    organizationId: campaign.organizationId,
   };
 }
 
