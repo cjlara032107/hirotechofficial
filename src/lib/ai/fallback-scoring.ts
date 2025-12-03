@@ -136,7 +136,123 @@ export function calculateFallbackScore(
     leadStatus = 'NEW';
   }
 
-  const reasoning = `Fallback scoring (AI unavailable): ${factors.join(', ')}. Score: ${score}`;
+  // Create user-friendly reasoning without technical details
+  const userFriendlyFactors: string[] = [];
+  
+  // Convert technical factors to natural language
+  if (messageCount >= 20) {
+    userFriendlyFactors.push('extensive conversation');
+  } else if (messageCount >= 10) {
+    userFriendlyFactors.push('active conversation');
+  } else if (messageCount >= 5) {
+    userFriendlyFactors.push('moderate conversation');
+  } else {
+    userFriendlyFactors.push('brief conversation');
+  }
+  
+  if (avgMessageLength > 100) {
+    userFriendlyFactors.push('detailed messages');
+  } else if (avgMessageLength > 50) {
+    userFriendlyFactors.push('moderate message length');
+  }
+  
+  if (keywordMatches >= 5) {
+    userFriendlyFactors.push('strong buying interest');
+  } else if (keywordMatches >= 3) {
+    userFriendlyFactors.push('shows interest');
+  } else if (keywordMatches >= 1) {
+    userFriendlyFactors.push('some interest');
+  }
+  
+  if (responseRate > 0.7) {
+    userFriendlyFactors.push('highly engaged');
+  } else if (responseRate > 0.4) {
+    userFriendlyFactors.push('responsive');
+  }
+  
+  if (conversationAge) {
+    const daysSinceLastMessage = Math.floor(
+      (Date.now() - conversationAge.getTime()) / (1000 * 60 * 60 * 24)
+    );
+    if (daysSinceLastMessage <= 1) {
+      userFriendlyFactors.push('very recent activity');
+    } else if (daysSinceLastMessage <= 7) {
+      userFriendlyFactors.push('recent activity');
+    } else if (daysSinceLastMessage > 30) {
+      userFriendlyFactors.push('inactive');
+    }
+  }
+
+  // Create detailed natural language summary (much more comprehensive)
+  let reasoning: string;
+  
+  if (userFriendlyFactors.length > 0) {
+    // Build a detailed narrative instead of just joining factors
+    const parts: string[] = [];
+    
+    // Conversation overview
+    if (messageCount >= 20) {
+      parts.push(`This contact has engaged in an extensive conversation with ${messageCount} messages`);
+    } else if (messageCount >= 10) {
+      parts.push(`This contact has engaged in an active conversation with ${messageCount} messages`);
+    } else if (messageCount >= 5) {
+      parts.push(`This contact has engaged in a moderate conversation with ${messageCount} messages`);
+    } else {
+      parts.push(`This contact has engaged in a brief conversation with ${messageCount} messages`);
+    }
+    
+    // Message quality
+    if (avgMessageLength > 100) {
+      parts.push(`with detailed, thoughtful messages averaging ${Math.round(avgMessageLength)} characters`);
+    } else if (avgMessageLength > 50) {
+      parts.push(`with moderate-length messages averaging ${Math.round(avgMessageLength)} characters`);
+    } else {
+      parts.push(`with concise messages averaging ${Math.round(avgMessageLength)} characters`);
+    }
+    
+    // Buying signals
+    if (keywordMatches >= 5) {
+      parts.push(`showing strong buying interest with multiple purchase-related keywords mentioned`);
+    } else if (keywordMatches >= 3) {
+      parts.push(`showing clear interest with several purchase-related keywords mentioned`);
+    } else if (keywordMatches >= 1) {
+      parts.push(`showing some interest with purchase-related keywords mentioned`);
+    }
+    
+    // Engagement pattern
+    if (responseRate > 0.7) {
+      parts.push(`demonstrating high engagement with active back-and-forth communication`);
+    } else if (responseRate > 0.4) {
+      parts.push(`demonstrating moderate engagement with some back-and-forth communication`);
+    }
+    
+    // Recency
+    if (conversationAge) {
+      const daysSinceLastMessage = Math.floor(
+        (Date.now() - conversationAge.getTime()) / (1000 * 60 * 60 * 24)
+      );
+      if (daysSinceLastMessage <= 1) {
+        parts.push(`with very recent activity (within the last day)`);
+      } else if (daysSinceLastMessage <= 7) {
+        parts.push(`with recent activity (within the last week)`);
+      } else if (daysSinceLastMessage > 30) {
+        parts.push(`though the conversation is older (${daysSinceLastMessage} days ago)`);
+      }
+    }
+    
+    // Lead score context
+    if (score >= 60) {
+      parts.push(`indicating a qualified lead with strong potential`);
+    } else if (score >= 40) {
+      parts.push(`indicating a contacted lead with moderate potential`);
+    } else {
+      parts.push(`indicating a new lead requiring further engagement`);
+    }
+    
+    reasoning = parts.join(', ') + '.';
+  } else {
+    reasoning = 'Limited conversation data available. This contact has minimal interaction history, requiring further engagement to assess their interest and potential.';
+  }
 
   return {
     leadScore: score,

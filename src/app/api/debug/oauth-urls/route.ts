@@ -1,10 +1,16 @@
 import { NextResponse } from 'next/server';
+import { auth } from '@/auth';
 
 /**
  * Debug endpoint to show exactly what OAuth URLs are being used
  * Visit this to copy the exact URLs to add to Facebook
  */
 export async function GET() {
+  // Require authentication for security
+  const session = await auth();
+  if (!session?.user) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  }
   const appUrl = process.env.NEXT_PUBLIC_APP_URL;
   const appId = process.env.FACEBOOK_APP_ID;
   

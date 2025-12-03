@@ -5,15 +5,11 @@ import { getPrismaForOrg } from '@/lib/db/get-prisma-for-org';
 import { validateSession } from '@/lib/api/validate-session';
 import { validateUUID } from '@/lib/api/validate-uuid';
 
-const PREVIEW_TIMEOUT = 10000; // 10 seconds (reduced to prevent 504)
-
 /**
  * Preview target contacts for a campaign before creation
  * This helps users see who will receive the message
  */
 export async function POST(request: NextRequest) {
-  const previewStartTime = Date.now();
-  
   try {
     const session = await auth();
     const validation = validateSession(session);
@@ -66,18 +62,9 @@ export async function POST(request: NextRequest) {
 
     // Get routed prisma client for multi-DB support
     const prisma = getPrismaForOrg(validatedSession.user.organizationId);
-    
-    // Set up timeout for the entire operation
-    const timeoutPromise = new Promise<never>((_, reject) => {
-      setTimeout(() => {
-        reject(new Error('Preview contacts timeout - request took too long'));
-      }, PREVIEW_TIMEOUT);
-    });
 
-    // Wrap the main logic in a promise for timeout handling
-    const previewPromise = (async () => {
-      // Helper function to find page with fallback
-      const findPageWithFallback = async (pageId: string) => {
+    // Helper function to find page with fallback
+    const findPageWithFallback = async (pageId: string) => {
       // First try routed database
       let page = await prisma.facebookPage.findFirst({
         where: {
@@ -105,11 +92,11 @@ export async function POST(request: NextRequest) {
         }
       }
 
-        return page;
-      };
+      return page;
+    };
 
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      let contacts: any[] = [];
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    let contacts: any[] = [];
 
     // Get contacts based on targeting type
     switch (targetingType) {
@@ -252,73 +239,33 @@ export async function POST(request: NextRequest) {
       });
     }
 
-      // Return contact preview data
-      const previewContacts = targetContacts.map((contact) => ({
-        id: contact.id,
-        firstName: contact.firstName || 'Unknown',
-        lastName: contact.lastName || '',
-        email: contact.email || null,
-        phone: contact.phone || null,
-        tags: contact.tags || [],
-        hasMessenger: contact.hasMessenger,
-        hasInstagram: contact.hasInstagram,
-        aiContext: contact.aiContext || null,
-        lastInteraction: contact.lastInteraction || null,
-        facebookPageId: contact.facebookPageId || (contact.facebookPage?.id || null),
-        facebookPage: contact.facebookPage || null,
-      }));
+    // Return contact preview data
+    const previewContacts = targetContacts.map((contact) => ({
+      id: contact.id,
+      firstName: contact.firstName || 'Unknown',
+      lastName: contact.lastName || '',
+      email: contact.email || null,
+      phone: contact.phone || null,
+      tags: contact.tags || [],
+      hasMessenger: contact.hasMessenger,
+      hasInstagram: contact.hasInstagram,
+      aiContext: contact.aiContext || null,
+      lastInteraction: contact.lastInteraction || null,
+      facebookPageId: contact.facebookPageId || (contact.facebookPage?.id || null),
+      facebookPage: contact.facebookPage || null,
+    }));
 
-      return NextResponse.json({
-        contacts: previewContacts,
-        total: previewContacts.length,
-      });
-    })();
-
-    // Race between preview and timeout
-    return await Promise.race([previewPromise, timeoutPromise]);
+    return NextResponse.json({
+      contacts: previewContacts,
+      total: previewContacts.length,
+    });
   } catch (error) {
-    const elapsed = Date.now() - previewStartTime;
     const err = error as Error;
-    const errorMessage = err.message || 'Failed to preview contacts';
-    
-    console.error('Preview contacts error:', errorMessage, { elapsed });
-    
-    // Always return JSON, even on timeout
-    try {
-      // Check for timeout
-      if (errorMessage.includes('timeout') || elapsed >= PREVIEW_TIMEOUT) {
-        return NextResponse.json(
-          { error: 'Request timed out. Please try again or reduce the number of contacts.' },
-          { status: 408 }
-        );
-      }
-      
-      // Check for database connection errors
-      if (errorMessage.includes('PrismaClientInitializationError') || 
-          errorMessage.includes('Can\'t reach database server') ||
-          errorMessage.includes('Connection') ||
-          errorMessage.includes('Unable to check out process from the pool')) {
-        return NextResponse.json(
-          { error: 'Database connection error. Please try again in a moment.' },
-          { status: 503 }
-        );
-      }
-      
-      return NextResponse.json(
-        { error: errorMessage },
-        { status: 500 }
-      );
-    } catch (jsonError) {
-      // Fallback if JSON creation fails
-      console.error('Failed to create error response:', jsonError);
-      return new NextResponse(
-        JSON.stringify({ error: 'An unexpected error occurred' }),
-        { 
-          status: 500,
-          headers: { 'Content-Type': 'application/json' }
-        }
-      );
-    }
+    console.error('Preview contacts error:', err);
+    return NextResponse.json(
+      { error: 'Failed to preview contacts' },
+      { status: 500 }
+    );
   }
 }
 

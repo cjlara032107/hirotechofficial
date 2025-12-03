@@ -108,9 +108,44 @@ export async function analyzeExistingContacts(options: {
               text: msg.message || '',
             }));
 
-          const aiContext = await analyzeConversation(messagesToAnalyze);
+          // Request comprehensive format to get full JSON structure
+          const aiContextResult = await analyzeConversation(messagesToAnalyze, 2, { contactId: contact.id }, true);
 
-          if (aiContext) {
+          if (aiContextResult) {
+            let aiContext: string;
+            
+            if (typeof aiContextResult === 'string') {
+              // If it's a string, check if it's valid JSON
+              try {
+                const parsed = JSON.parse(aiContextResult);
+                // If it parses and has expected structure, use it
+                if (parsed && typeof parsed === 'object' && (parsed.executiveSummary || parsed.summary)) {
+                  aiContext = aiContextResult;
+                } else {
+                  // Invalid JSON structure, build comprehensive format from string
+                  aiContext = JSON.stringify({
+                    executiveSummary: aiContextResult,
+                    summary: aiContextResult,
+                  });
+                }
+              } catch {
+                // Not JSON, wrap in comprehensive format
+                aiContext = JSON.stringify({
+                  executiveSummary: aiContextResult,
+                  summary: aiContextResult,
+                });
+              }
+            } else if (aiContextResult.comprehensiveAnalysis) {
+              // Use comprehensive analysis if available
+              aiContext = JSON.stringify(aiContextResult.comprehensiveAnalysis);
+            } else {
+              // Fallback: build comprehensive format from summary
+              aiContext = JSON.stringify({
+                executiveSummary: aiContextResult.summary || '',
+                summary: aiContextResult.summary || '',
+              });
+            }
+            
             await prisma.contact.update({
               where: { id: contact.id },
               data: {

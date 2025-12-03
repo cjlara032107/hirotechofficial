@@ -94,7 +94,7 @@ export function EnhancedTeamMembers({ teamId, currentUserId, isAdmin }: Enhanced
 
   // Filtered and sorted members
   const filteredMembers = useMemo(() => {
-    let filtered = members.filter(member => {
+    const filtered = members.filter(member => {
       // Search filter
       const matchesSearch = searchQuery.trim() === '' || 
         member.user.name?.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -162,8 +162,8 @@ export function EnhancedTeamMembers({ teamId, currentUserId, isAdmin }: Enhanced
 
     setProcessing(true)
     try {
-      let endpoint = `/api/teams/${teamId}/members/bulk-update`
-      let body: any = {
+      const endpoint = `/api/teams/${teamId}/members/bulk-update`
+      const body: Record<string, unknown> = {
         memberIds: Array.from(selectedMembers),
         action: bulkAction
       }

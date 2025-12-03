@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { auth } from '@/auth';
 import { syncContacts } from '@/lib/facebook/sync-contacts';
+import { validateUUID } from '@/lib/api/validate-uuid';
 
 export async function POST(request: NextRequest) {
   try {
@@ -19,14 +20,37 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const result = await syncContacts(facebookPageId);
+    // Validate facebookPageId is valid UUID format
+    if (typeof facebookPageId !== 'string') {
+      return NextResponse.json(
+        { error: 'facebookPageId must be a string' },
+        { status: 400 }
+      );
+    }
+
+    const trimmedFacebookPageId = facebookPageId.trim();
+    if (trimmedFacebookPageId.length === 0) {
+      return NextResponse.json(
+        { error: 'facebookPageId cannot be empty' },
+        { status: 400 }
+      );
+    }
+    const uuidValidation = validateUUID(trimmedFacebookPageId);
+    if (uuidValidation?.error) {
+      return NextResponse.json(
+        { error: uuidValidation.error.message },
+        { status: uuidValidation.error.status }
+      );
+    }
+
+    const result = await syncContacts(trimmedFacebookPageId);
 
     return NextResponse.json(result);
   } catch (error: unknown) {
     console.error('Sync error:', error);
-    const errorMessage = error instanceof Error ? error.message : 'Failed to sync contacts';
+    // SECURITY: Sanitize error messages to prevent sensitive data exposure
     return NextResponse.json(
-      { error: errorMessage },
+      { error: 'Failed to sync contacts. Please try again.' },
       { status: 500 }
     );
   }

@@ -25,7 +25,8 @@ export async function GET(
     
     const query = searchParams.get('q') || ''
     const threadId = searchParams.get('threadId')
-    const limit = parseInt(searchParams.get('limit') || '50')
+    // Reduced default page size for better performance
+    const limit = parseInt(searchParams.get('limit') || '25')
     const offset = parseInt(searchParams.get('offset') || '0')
 
     if (!query || query.length < 2) {

@@ -100,8 +100,7 @@ export default function CampaignsPage() {
     }, 2000); // Poll every 2 seconds for faster updates
 
     return () => clearInterval(interval);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []); // Empty dependency array - only run once on mount, fetchCampaigns is stable
+  }, []); // Empty dependency array - only run once on mount
   
   // Force refresh when any campaign completes
   useEffect(() => {

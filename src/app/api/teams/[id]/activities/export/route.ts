@@ -48,7 +48,8 @@ export async function GET(
     }
 
     // Build query
-    const where: any = { teamId: id }
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const where: Record<string, any> = { teamId: id }
     
     if (memberId && memberId !== 'all') {
       where.memberId = memberId

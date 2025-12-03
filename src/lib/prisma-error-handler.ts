@@ -1,6 +1,8 @@
 import { Prisma } from '@prisma/client';
 import { connectPrisma } from './db';
 import { withRetry } from './db-retry';
+import { systemMonitor } from './monitoring/system-monitor';
+import { logger } from './utils/logger';
 
 /**
  * Prisma error types that should be retried
@@ -10,16 +12,29 @@ const RETRYABLE_ERRORS = [
   'connection pool',
   'P2024', // Prisma connection pool timeout
   'P1001', // Can't reach database
+  'P2034', // Database deadlock detected
   'timeout',
   'Connection closed',
   'ECONNREFUSED',
   'ETIMEDOUT',
   'Engine is not yet connected', // Prisma engine not ready
   'Response from the Engine was empty', // Prisma engine error
+  'deadlock', // Deadlock errors (case-insensitive matching)
+  'Deadlock',
 ];
 
 /**
- * Checks if an error is a Prisma connection/pool error that should be retried
+ * Determines if a Prisma error is retryable (connection/pool errors)
+ * 
+ * Checks for common retryable error patterns including:
+ * - Connection pool exhaustion (P2024)
+ * - Database unreachable (P1001)
+ * - Deadlocks (P2034)
+ * - Connection timeouts
+ * - Engine not ready errors
+ * 
+ * @param error - The error to check (can be Error, Prisma error, or unknown)
+ * @returns True if the error is retryable, false otherwise
  */
 export function isRetryablePrismaError(error: unknown): boolean {
   if (!error) return false;
@@ -35,7 +50,18 @@ export function isRetryablePrismaError(error: unknown): boolean {
 }
 
 /**
- * Gets a user-friendly error message from a Prisma error
+ * Converts a Prisma error into a user-friendly error message
+ * 
+ * Maps Prisma error codes and messages to human-readable messages:
+ * - P2024: Connection pool busy
+ * - P1001: Database unreachable
+ * - P2002: Unique constraint violation
+ * - P2025: Record not found
+ * - P2003: Invalid foreign key
+ * - P2034: Deadlock
+ * 
+ * @param error - The error to convert (can be Error, Prisma error, or unknown)
+ * @returns User-friendly error message string
  */
 export function getPrismaErrorMessage(error: unknown): string {
   if (!error) return 'An unexpected error occurred';
@@ -68,6 +94,11 @@ export function getPrismaErrorMessage(error: unknown): string {
     return 'Database connection was lost. Please try again.';
   }
   
+  // Deadlock errors
+  if (errorCode === 'P2034' || errorMessage.toLowerCase().includes('deadlock')) {
+    return 'A database conflict occurred. The operation will be retried automatically.';
+  }
+  
   // Generic Prisma errors
   if (error instanceof Prisma.PrismaClientKnownRequestError) {
     switch (error.code) {
@@ -77,6 +108,8 @@ export function getPrismaErrorMessage(error: unknown): string {
         return 'The record you are looking for does not exist.';
       case 'P2003':
         return 'Invalid reference to a related record.';
+      case 'P2034':
+        return 'A database conflict occurred. The operation will be retried automatically.';
       default:
         return 'A database error occurred. Please try again.';
     }
@@ -88,7 +121,31 @@ export function getPrismaErrorMessage(error: unknown): string {
 
 /**
  * Executes a Prisma operation with automatic retry and connection management
- * This is the recommended way to call Prisma in API routes
+ * 
+ * This is the recommended way to call Prisma in API routes. It provides:
+ * - Automatic retry for transient errors (connection pool, deadlocks, timeouts)
+ * - Connection management (ensures connection before operation, reconnects on failure)
+ * - Deadlock handling with shorter backoff
+ * - Error logging with context
+ * - User-friendly error messages
+ * 
+ * @template T - The return type of the operation
+ * @param operation - The Prisma operation to execute (async function)
+ * @param options - Retry and operation configuration
+ * @param options.maxRetries - Maximum number of retry attempts (default: 3)
+ * @param options.initialDelay - Initial delay between retries in ms (default: 1000)
+ * @param options.maxDelay - Maximum delay between retries in ms (default: 10000)
+ * @param options.operationName - Name of the operation for logging (default: 'database operation')
+ * @returns Promise resolving to the operation result
+ * @throws Error with user-friendly message if all retries fail
+ * 
+ * @example
+ * ```typescript
+ * const user = await safePrismaOperation(
+ *   () => prisma.user.findUnique({ where: { id } }),
+ *   { operationName: 'findUser', maxRetries: 5 }
+ * );
+ * ```
  */
 export async function safePrismaOperation<T>(
   operation: () => Promise<T>,
@@ -97,6 +154,7 @@ export async function safePrismaOperation<T>(
     initialDelay?: number;
     maxDelay?: number;
     operationName?: string;
+    skipLogging?: boolean;
   } = {}
 ): Promise<T> {
   const {
@@ -104,6 +162,7 @@ export async function safePrismaOperation<T>(
     initialDelay = 1000,
     maxDelay = 10000,
     operationName = 'database operation',
+    skipLogging = false,
   } = options;
 
   try {
@@ -116,6 +175,17 @@ export async function safePrismaOperation<T>(
         try {
           return await operation();
         } catch (error) {
+          // Check if it's a deadlock - use shorter backoff for deadlocks
+          const prismaError = error as any;
+          const isDeadlock = prismaError?.code === 'P2034' || 
+                            prismaError?.message?.toLowerCase().includes('deadlock');
+          
+          if (isDeadlock) {
+            // For deadlocks, use shorter initial delay with jitter
+            const jitter = Math.random() * 100;
+            await new Promise(resolve => setTimeout(resolve, 50 + jitter));
+          }
+          
           // If it's a connection error, try to reconnect
           if (isRetryablePrismaError(error)) {
             // Reset connection state to force reconnection
@@ -141,8 +211,48 @@ export async function safePrismaOperation<T>(
       }
     );
   } catch (error) {
-    // Log the error with context
-    console.error(`[Safe Prisma] ${operationName} failed after ${maxRetries} retries:`, error);
+    // Log the error with context and stack trace
+    logger.error(`Safe Prisma operation failed after ${maxRetries} retries`, error as Error, { operationName, maxRetries });
+    
+    // Track error in system monitor
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const errorObj = error as any;
+    const errorType = errorObj?.code ? `Prisma.${errorObj.code}` : 'Prisma.Unknown';
+    const errorCode = errorObj?.code || 'UNKNOWN';
+    const errorMessage = errorObj?.message || String(error);
+    
+    systemMonitor.recordError({
+      errorType,
+      errorCode,
+      errorMessage,
+      stack: error instanceof Error ? error.stack : undefined,
+      context: {
+        operationName,
+        maxRetries,
+        initialDelay: options.initialDelay,
+        maxDelay: options.maxDelay,
+      },
+      timestamp: Date.now(),
+    });
+    
+    // Log to database with full stack trace (non-blocking)
+    // Skip if skipLogging is true to prevent circular dependency
+    if (!skipLogging) {
+      // Use dynamic import to avoid circular dependency (error-logger uses safePrismaOperation)
+      import('@/lib/logging/error-logger').then(({ logErrorWithContext }) => {
+        return logErrorWithContext(error, {
+          operation: operationName,
+          metadata: {
+            maxRetries,
+            initialDelay: options.initialDelay,
+            maxDelay: options.maxDelay,
+          },
+        });
+      }).catch(() => {
+        // Silently fail - error logging should not break the app
+        // This catch handles both the import and the logErrorWithContext call
+      });
+    }
     
     // Re-throw with user-friendly message
     const friendlyMessage = getPrismaErrorMessage(error);
@@ -154,8 +264,26 @@ export async function safePrismaOperation<T>(
 }
 
 /**
- * Wrapper for API routes that handles Prisma errors gracefully
- * Returns a NextResponse with appropriate error message
+ * Handles Prisma errors for API routes and returns appropriate HTTP response details
+ * 
+ * Analyzes the error and returns:
+ * - User-friendly error message
+ * - Appropriate HTTP status code (503 for retryable, 500 for permanent)
+ * - Whether the client should retry the request
+ * 
+ * @param error - The error to handle (can be Error, Prisma error, or unknown)
+ * @param defaultMessage - Default message if error cannot be categorized (default: generic message)
+ * @returns Object with message, HTTP status code, and retry recommendation
+ * 
+ * @example
+ * ```typescript
+ * try {
+ *   await prisma.user.create({ data });
+ * } catch (error) {
+ *   const { message, status, shouldRetry } = handlePrismaError(error);
+ *   return NextResponse.json({ error: message }, { status });
+ * }
+ * ```
  */
 export function handlePrismaError(error: unknown, defaultMessage = 'An error occurred while processing your request.'): {
   message: string;

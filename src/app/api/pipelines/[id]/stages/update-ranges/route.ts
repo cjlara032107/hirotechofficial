@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from 'next/server';
 import { auth } from '@/auth';
 import { prisma } from '@/lib/db';
 import { validateScoreRange, detectScoreRangeOverlaps } from '@/lib/pipelines/validation';
+import { validateBodySize, BodySizeLimits } from '@/lib/api/validate-body-size';
+import { RateLimitPresets } from '@/lib/api/rate-limit';
 
 interface StageRange {
   stageId: string;
@@ -18,6 +20,20 @@ export async function POST(
   props: { params: Promise<{ id: string }> }
 ) {
   try {
+    // Apply rate limiting
+    const rateLimitResponse = await RateLimitPresets.standard(request);
+    if (rateLimitResponse) {
+      return rateLimitResponse;
+    }
+
+    // Validate body size
+    const bodySizeResponse = await validateBodySize(request, {
+      maxSizeBytes: BodySizeLimits.MEDIUM,
+    });
+    if (bodySizeResponse) {
+      return bodySizeResponse;
+    }
+
     const { id } = await props.params;
     const session = await auth();
 

@@ -63,29 +63,32 @@ export async function POST(
         if (targetStageId !== contact.stageId) {
           const oldStageId = contact.stageId;
 
-          await prisma.contact.update({
-            where: { id: contact.id },
-            data: {
-              stageId: targetStageId,
-              stageEnteredAt: new Date(),
-            },
-          });
-
-          // Log activity for audit trail
-          await prisma.contactActivity.create({
-            data: {
-              contactId: contact.id,
-              type: 'STAGE_CHANGED',
-              title: 'Bulk re-assigned based on lead score',
-              description: `Automatically moved to match lead score range. Score: ${contact.leadScore}, Status: ${contact.leadStatus}`,
-              fromStageId: oldStageId,
-              toStageId: targetStageId,
-              metadata: {
-                bulkReassignment: true,
-                leadScore: contact.leadScore,
-                leadStatus: contact.leadStatus,
+          // Use transaction to ensure atomicity: contact update and activity log must both succeed or both fail
+          await prisma.$transaction(async (tx) => {
+            await tx.contact.update({
+              where: { id: contact.id },
+              data: {
+                stageId: targetStageId,
+                stageEnteredAt: new Date(),
               },
-            },
+            });
+
+            // Log activity for audit trail within the same transaction
+            await tx.contactActivity.create({
+              data: {
+                contactId: contact.id,
+                type: 'STAGE_CHANGED',
+                title: 'Bulk re-assigned based on lead score',
+                description: `Automatically moved to match lead score range. Score: ${contact.leadScore}, Status: ${contact.leadStatus}`,
+                fromStageId: oldStageId,
+                toStageId: targetStageId,
+                metadata: {
+                  bulkReassignment: true,
+                  leadScore: contact.leadScore,
+                  leadStatus: contact.leadStatus,
+                },
+              },
+            });
           });
 
           reassigned++;

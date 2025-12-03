@@ -91,10 +91,12 @@ interface PipelineState {
     showAddContacts: boolean;
     showBulkTag: boolean;
     showRemoveContacts: boolean;
+    showRemoveAllContacts: boolean;
   };
   selectedStageForTag: string | null;
   selectedStageForRemove: string | null;
   isDeleting: boolean;
+  isRemovingAllContacts: boolean;
 }
 
 type PipelineAction =
@@ -111,6 +113,7 @@ type PipelineAction =
   | { type: 'SET_SELECTED_STAGE_FOR_TAG'; payload: string | null }
   | { type: 'SET_SELECTED_STAGE_FOR_REMOVE'; payload: string | null }
   | { type: 'SET_IS_DELETING'; payload: boolean }
+  | { type: 'SET_IS_REMOVING_ALL_CONTACTS'; payload: boolean }
   | { type: 'UPDATE_REALTIME_COUNTS'; payload: Array<{ id: string; _count: { contacts: number } }> };
 
 function pipelineReducer(state: PipelineState, action: PipelineAction): PipelineState {
@@ -185,6 +188,8 @@ function pipelineReducer(state: PipelineState, action: PipelineAction): Pipeline
       return { ...state, selectedStageForRemove: action.payload };
     case 'SET_IS_DELETING':
       return { ...state, isDeleting: action.payload };
+    case 'SET_IS_REMOVING_ALL_CONTACTS':
+      return { ...state, isRemovingAllContacts: action.payload };
     case 'UPDATE_REALTIME_COUNTS':
       if (!state.pipeline) return state;
       return {
@@ -220,10 +225,12 @@ const initialState: PipelineState = {
     showAddContacts: false,
     showBulkTag: false,
     showRemoveContacts: false,
+    showRemoveAllContacts: false,
   },
   selectedStageForTag: null,
   selectedStageForRemove: null,
   isDeleting: false,
+  isRemovingAllContacts: false,
 };
 
 export default function PipelinePage() {
@@ -570,6 +577,51 @@ export default function PipelinePage() {
     }
   };
 
+  const handleRemoveAllContacts = () => {
+    // Calculate total contacts in pipeline
+    const totalContacts = state.pipeline?.stages.reduce(
+      (sum, stage) => sum + stage._count.contacts,
+      0
+    ) || 0;
+
+    if (totalContacts === 0) {
+      toast.info('No contacts to remove');
+      return;
+    }
+
+    // Show confirmation dialog
+    dispatch({ type: 'TOGGLE_DIALOG', payload: { dialog: 'showRemoveAllContacts', value: true } });
+  };
+
+  const confirmRemoveAllContacts = async () => {
+    dispatch({ type: 'SET_IS_REMOVING_ALL_CONTACTS', payload: true });
+    
+    try {
+      const response = await fetch(
+        `/api/pipelines/${params.id}/remove-all-contacts`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+        }
+      );
+
+      const data = await response.json();
+
+      if (response.ok) {
+        toast.success(data.message || `Successfully removed ${data.removedCount} contact(s) from pipeline`);
+        await fetchPipeline();
+      } else {
+        toast.error(data.error || 'Failed to remove contacts');
+      }
+    } catch (error) {
+      console.error('Error removing all contacts:', error);
+      toast.error('An error occurred');
+    } finally {
+      dispatch({ type: 'SET_IS_REMOVING_ALL_CONTACTS', payload: false });
+      dispatch({ type: 'TOGGLE_DIALOG', payload: { dialog: 'showRemoveAllContacts', value: false } });
+    }
+  };
+
   if (state.loading) {
     return (
       <div className="flex items-center justify-center min-h-[400px]">
@@ -648,6 +700,15 @@ export default function PipelinePage() {
             >
               <Edit2 className="h-4 w-4 mr-2" />
               Edit
+            </Button>
+            <Button
+              variant="destructive"
+              size="sm"
+              onClick={handleRemoveAllContacts}
+              disabled={state.isRemovingAllContacts || !state.pipeline || state.pipeline.stages.reduce((sum, stage) => sum + stage._count.contacts, 0) === 0}
+            >
+              <Trash2 className="h-4 w-4 mr-2" />
+              {state.isRemovingAllContacts ? 'Removing...' : 'Remove All Contacts'}
             </Button>
           </div>
         </div>
@@ -771,6 +832,31 @@ export default function PipelinePage() {
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
             >
               {state.isDeleting ? 'Deleting...' : 'Delete'}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog open={state.dialogs.showRemoveAllContacts} onOpenChange={(value) => dispatch({ type: 'TOGGLE_DIALOG', payload: { dialog: 'showRemoveAllContacts', value } })}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Remove All Contacts from Pipeline?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This will remove all contacts from the pipeline &quot;{state.pipeline?.name}&quot;. 
+              Contacts will be unassigned from this pipeline and all its stages, but they will not be deleted. 
+              This action cannot be undone.
+              <br /><br />
+              <strong>Total contacts to remove: {state.pipeline?.stages.reduce((sum, stage) => sum + stage._count.contacts, 0) || 0}</strong>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={state.isRemovingAllContacts}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={confirmRemoveAllContacts}
+              disabled={state.isRemovingAllContacts}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+            >
+              {state.isRemovingAllContacts ? 'Removing...' : 'Remove All Contacts'}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

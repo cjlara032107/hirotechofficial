@@ -23,17 +23,24 @@ interface AnalysisProviderProps {
 }
 
 export function AnalysisProvider({ children }: AnalysisProviderProps) {
+  // Initialize state from sessionStorage if available (client-side only)
   const [activeJobId, setActiveJobId] = useState<string | null>(null);
+  const [isMounted, setIsMounted] = useState(false);
 
+  // Load from sessionStorage after mount to avoid SSR issues
   useEffect(() => {
-    // Check for active job in session storage on mount
+    setIsMounted(true);
     if (typeof window !== 'undefined') {
       const storedJobId = sessionStorage.getItem('activeAnalysisJobId');
       if (storedJobId) {
         setActiveJobId(storedJobId);
       }
+    }
+  }, []);
 
-      // Listen for new analysis jobs
+  useEffect(() => {
+    // Listen for new analysis jobs
+    if (typeof window !== 'undefined') {
       const handleAnalysisStarted = (event: CustomEvent) => {
         const { jobId } = event.detail;
         setActiveJobId(jobId);
@@ -65,7 +72,7 @@ export function AnalysisProvider({ children }: AnalysisProviderProps) {
   return (
     <AnalysisContext.Provider value={{ activeJobId, setActiveJobId }}>
       {children}
-      {activeJobId && (
+      {isMounted && activeJobId && (
         <AnalysisIndicator
           jobId={activeJobId}
           onComplete={handleJobComplete}

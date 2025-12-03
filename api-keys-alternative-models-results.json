@@ -1,0 +1,929 @@
+{
+  "testedAt": "2025-11-30T16:23:30.615Z",
+  "originalModel": "openai/gpt-oss-120b",
+  "alternativeModels": [
+    "meta/llama-3.1-70b-instruct",
+    "meta/llama-3.3-70b-instruct",
+    "meta/llama-3.1-405b-instruct",
+    "meta/llama-3-70b-instruct",
+    "mistralai/mixtral-8x22b-instruct",
+    "mistralai/mixtral-8x7b-instruct"
+  ],
+  "totalKeys": 19,
+  "workingCombinations": 0,
+  "byModel": {},
+  "allResults": [
+    {
+      "model": "meta/llama-3.1-70b-instruct",
+      "keyIndex": 1,
+      "status": "no-access",
+      "latency": 264,
+      "error": "No access to model (403)",
+      "keyPrefix": "nvapi-GBkLnxfL9B16e9MdIl8bvRVj..."
+    },
+    {
+      "model": "meta/llama-3.3-70b-instruct",
+      "keyIndex": 1,
+      "status": "no-access",
+      "latency": 87,
+      "error": "No access to model (403)",
+      "keyPrefix": "nvapi-GBkLnxfL9B16e9MdIl8bvRVj..."
+    },
+    {
+      "model": "meta/llama-3.1-405b-instruct",
+      "keyIndex": 1,
+      "status": "no-access",
+      "latency": 84,
+      "error": "No access to model (403)",
+      "keyPrefix": "nvapi-GBkLnxfL9B16e9MdIl8bvRVj..."
+    },
+    {
+      "model": "meta/llama-3-70b-instruct",
+      "keyIndex": 1,
+      "status": "no-access",
+      "latency": 60,
+      "error": "Model not found (404)",
+      "keyPrefix": "nvapi-GBkLnxfL9B16e9MdIl8bvRVj..."
+    },
+    {
+      "model": "mistralai/mixtral-8x22b-instruct",
+      "keyIndex": 1,
+      "status": "no-access",
+      "latency": 63,
+      "error": "Model not found (404)",
+      "keyPrefix": "nvapi-GBkLnxfL9B16e9MdIl8bvRVj..."
+    },
+    {
+      "model": "mistralai/mixtral-8x7b-instruct",
+      "keyIndex": 1,
+      "status": "no-access",
+      "latency": 63,
+      "error": "Model not found (404)",
+      "keyPrefix": "nvapi-GBkLnxfL9B16e9MdIl8bvRVj..."
+    },
+    {
+      "model": "meta/llama-3.1-70b-instruct",
+      "keyIndex": 2,
+      "status": "no-access",
+      "latency": 84,
+      "error": "No access to model (403)",
+      "keyPrefix": "nvapi-RvbqNfT40pDprhxA7Qs1jTNb..."
+    },
+    {
+      "model": "meta/llama-3.3-70b-instruct",
+      "keyIndex": 2,
+      "status": "no-access",
+      "latency": 82,
+      "error": "No access to model (403)",
+      "keyPrefix": "nvapi-RvbqNfT40pDprhxA7Qs1jTNb..."
+    },
+    {
+      "model": "meta/llama-3.1-405b-instruct",
+      "keyIndex": 2,
+      "status": "no-access",
+      "latency": 79,
+      "error": "No access to model (403)",
+      "keyPrefix": "nvapi-RvbqNfT40pDprhxA7Qs1jTNb..."
+    },
+    {
+      "model": "meta/llama-3-70b-instruct",
+      "keyIndex": 2,
+      "status": "no-access",
+      "latency": 64,
+      "error": "Model not found (404)",
+      "keyPrefix": "nvapi-RvbqNfT40pDprhxA7Qs1jTNb..."
+    },
+    {
+      "model": "mistralai/mixtral-8x22b-instruct",
+      "keyIndex": 2,
+      "status": "no-access",
+      "latency": 61,
+      "error": "Model not found (404)",
+      "keyPrefix": "nvapi-RvbqNfT40pDprhxA7Qs1jTNb..."
+    },
+    {
+      "model": "mistralai/mixtral-8x7b-instruct",
+      "keyIndex": 2,
+      "status": "no-access",
+      "latency": 60,
+      "error": "Model not found (404)",
+      "keyPrefix": "nvapi-RvbqNfT40pDprhxA7Qs1jTNb..."
+    },
+    {
+      "model": "meta/llama-3.1-70b-instruct",
+      "keyIndex": 3,
+      "status": "no-access",
+      "latency": 82,
+      "error": "No access to model (403)",
+      "keyPrefix": "nvapi-itF6GmzDjJlGH903q2Kn2a3h..."
+    },
+    {
+      "model": "meta/llama-3.3-70b-instruct",
+      "keyIndex": 3,
+      "status": "no-access",
+      "latency": 83,
+      "error": "No access to model (403)",
+      "keyPrefix": "nvapi-itF6GmzDjJlGH903q2Kn2a3h..."
+    },
+    {
+      "model": "meta/llama-3.1-405b-instruct",
+      "keyIndex": 3,
+      "status": "no-access",
+      "latency": 82,
+      "error": "No access to model (403)",
+      "keyPrefix": "nvapi-itF6GmzDjJlGH903q2Kn2a3h..."
+    },
+    {
+      "model": "meta/llama-3-70b-instruct",
+      "keyIndex": 3,
+      "status": "no-access",
+      "latency": 60,
+      "error": "Model not found (404)",
+      "keyPrefix": "nvapi-itF6GmzDjJlGH903q2Kn2a3h..."
+    },
+    {
+      "model": "mistralai/mixtral-8x22b-instruct",
+      "keyIndex": 3,
+      "status": "no-access",
+      "latency": 61,
+      "error": "Model not found (404)",
+      "keyPrefix": "nvapi-itF6GmzDjJlGH903q2Kn2a3h..."
+    },
+    {
+      "model": "mistralai/mixtral-8x7b-instruct",
+      "keyIndex": 3,
+      "status": "no-access",
+      "latency": 62,
+      "error": "Model not found (404)",
+      "keyPrefix": "nvapi-itF6GmzDjJlGH903q2Kn2a3h..."
+    },
+    {
+      "model": "meta/llama-3.1-70b-instruct",
+      "keyIndex": 4,
+      "status": "no-access",
+      "latency": 86,
+      "error": "No access to model (403)",
+      "keyPrefix": "nvapi-pPtJFAdUIqosSyDxV1xjuKoc..."
+    },
+    {
+      "model": "meta/llama-3.3-70b-instruct",
+      "keyIndex": 4,
+      "status": "no-access",
+      "latency": 87,
+      "error": "No access to model (403)",
+      "keyPrefix": "nvapi-pPtJFAdUIqosSyDxV1xjuKoc..."
+    },
+    {
+      "model": "meta/llama-3.1-405b-instruct",
+      "keyIndex": 4,
+      "status": "no-access",
+      "latency": 83,
+      "error": "No access to model (403)",
+      "keyPrefix": "nvapi-pPtJFAdUIqosSyDxV1xjuKoc..."
+    },
+    {
+      "model": "meta/llama-3-70b-instruct",
+      "keyIndex": 4,
+      "status": "no-access",
+      "latency": 61,
+      "error": "Model not found (404)",
+      "keyPrefix": "nvapi-pPtJFAdUIqosSyDxV1xjuKoc..."
+    },
+    {
+      "model": "mistralai/mixtral-8x22b-instruct",
+      "keyIndex": 4,
+      "status": "no-access",
+      "latency": 62,
+      "error": "Model not found (404)",
+      "keyPrefix": "nvapi-pPtJFAdUIqosSyDxV1xjuKoc..."
+    },
+    {
+      "model": "mistralai/mixtral-8x7b-instruct",
+      "keyIndex": 4,
+      "status": "no-access",
+      "latency": 60,
+      "error": "Model not found (404)",
+      "keyPrefix": "nvapi-pPtJFAdUIqosSyDxV1xjuKoc..."
+    },
+    {
+      "model": "meta/llama-3.1-70b-instruct",
+      "keyIndex": 5,
+      "status": "no-access",
+      "latency": 84,
+      "error": "No access to model (403)",
+      "keyPrefix": "nvapi-Vyl33hUgZD8xvIaSx0VQ0TAo..."
+    },
+    {
+      "model": "meta/llama-3.3-70b-instruct",
+      "keyIndex": 5,
+      "status": "no-access",
+      "latency": 88,
+      "error": "No access to model (403)",
+      "keyPrefix": "nvapi-Vyl33hUgZD8xvIaSx0VQ0TAo..."
+    },
+    {
+      "model": "meta/llama-3.1-405b-instruct",
+      "keyIndex": 5,
+      "status": "no-access",
+      "latency": 84,
+      "error": "No access to model (403)",
+      "keyPrefix": "nvapi-Vyl33hUgZD8xvIaSx0VQ0TAo..."
+    },
+    {
+      "model": "meta/llama-3-70b-instruct",
+      "keyIndex": 5,
+      "status": "no-access",
+      "latency": 60,
+      "error": "Model not found (404)",
+      "keyPrefix": "nvapi-Vyl33hUgZD8xvIaSx0VQ0TAo..."
+    },
+    {
+      "model": "mistralai/mixtral-8x22b-instruct",
+      "keyIndex": 5,
+      "status": "no-access",
+      "latency": 63,
+      "error": "Model not found (404)",
+      "keyPrefix": "nvapi-Vyl33hUgZD8xvIaSx0VQ0TAo..."
+    },
+    {
+      "model": "mistralai/mixtral-8x7b-instruct",
+      "keyIndex": 5,
+      "status": "no-access",
+      "latency": 62,
+      "error": "Model not found (404)",
+      "keyPrefix": "nvapi-Vyl33hUgZD8xvIaSx0VQ0TAo..."
+    },
+    {
+      "model": "meta/llama-3.1-70b-instruct",
+      "keyIndex": 6,
+      "status": "no-access",
+      "latency": 85,
+      "error": "No access to model (403)",
+      "keyPrefix": "nvapi-pDKgSNs0CfxVlmPs3UgtHd75..."
+    },
+    {
+      "model": "meta/llama-3.3-70b-instruct",
+      "keyIndex": 6,
+      "status": "no-access",
+      "latency": 82,
+      "error": "No access to model (403)",
+      "keyPrefix": "nvapi-pDKgSNs0CfxVlmPs3UgtHd75..."
+    },
+    {
+      "model": "meta/llama-3.1-405b-instruct",
+      "keyIndex": 6,
+      "status": "no-access",
+      "latency": 84,
+      "error": "No access to model (403)",
+      "keyPrefix": "nvapi-pDKgSNs0CfxVlmPs3UgtHd75..."
+    },
+    {
+      "model": "meta/llama-3-70b-instruct",
+      "keyIndex": 6,
+      "status": "no-access",
+      "latency": 62,
+      "error": "Model not found (404)",
+      "keyPrefix": "nvapi-pDKgSNs0CfxVlmPs3UgtHd75..."
+    },
+    {
+      "model": "mistralai/mixtral-8x22b-instruct",
+      "keyIndex": 6,
+      "status": "no-access",
+      "latency": 58,
+      "error": "Model not found (404)",
+      "keyPrefix": "nvapi-pDKgSNs0CfxVlmPs3UgtHd75..."
+    },
+    {
+      "model": "mistralai/mixtral-8x7b-instruct",
+      "keyIndex": 6,
+      "status": "no-access",
+      "latency": 60,
+      "error": "Model not found (404)",
+      "keyPrefix": "nvapi-pDKgSNs0CfxVlmPs3UgtHd75..."
+    },
+    {
+      "model": "meta/llama-3.1-70b-instruct",
+      "keyIndex": 7,
+      "status": "no-access",
+      "latency": 86,
+      "error": "No access to model (403)",
+      "keyPrefix": "nvapi-s03ng8yo1NfMi_GKPBMN0Ay9..."
+    },
+    {
+      "model": "meta/llama-3.3-70b-instruct",
+      "keyIndex": 7,
+      "status": "no-access",
+      "latency": 86,
+      "error": "No access to model (403)",
+      "keyPrefix": "nvapi-s03ng8yo1NfMi_GKPBMN0Ay9..."
+    },
+    {
+      "model": "meta/llama-3.1-405b-instruct",
+      "keyIndex": 7,
+      "status": "no-access",
+      "latency": 82,
+      "error": "No access to model (403)",
+      "keyPrefix": "nvapi-s03ng8yo1NfMi_GKPBMN0Ay9..."
+    },
+    {
+      "model": "meta/llama-3-70b-instruct",
+      "keyIndex": 7,
+      "status": "no-access",
+      "latency": 62,
+      "error": "Model not found (404)",
+      "keyPrefix": "nvapi-s03ng8yo1NfMi_GKPBMN0Ay9..."
+    },
+    {
+      "model": "mistralai/mixtral-8x22b-instruct",
+      "keyIndex": 7,
+      "status": "no-access",
+      "latency": 60,
+      "error": "Model not found (404)",
+      "keyPrefix": "nvapi-s03ng8yo1NfMi_GKPBMN0Ay9..."
+    },
+    {
+      "model": "mistralai/mixtral-8x7b-instruct",
+      "keyIndex": 7,
+      "status": "no-access",
+      "latency": 60,
+      "error": "Model not found (404)",
+      "keyPrefix": "nvapi-s03ng8yo1NfMi_GKPBMN0Ay9..."
+    },
+    {
+      "model": "meta/llama-3.1-70b-instruct",
+      "keyIndex": 8,
+      "status": "no-access",
+      "latency": 94,
+      "error": "No access to model (403)",
+      "keyPrefix": "nvapi-QUh8eXxu_Rwzofrc8t9jazCh..."
+    },
+    {
+      "model": "meta/llama-3.3-70b-instruct",
+      "keyIndex": 8,
+      "status": "no-access",
+      "latency": 84,
+      "error": "No access to model (403)",
+      "keyPrefix": "nvapi-QUh8eXxu_Rwzofrc8t9jazCh..."
+    },
+    {
+      "model": "meta/llama-3.1-405b-instruct",
+      "keyIndex": 8,
+      "status": "no-access",
+      "latency": 81,
+      "error": "No access to model (403)",
+      "keyPrefix": "nvapi-QUh8eXxu_Rwzofrc8t9jazCh..."
+    },
+    {
+      "model": "meta/llama-3-70b-instruct",
+      "keyIndex": 8,
+      "status": "no-access",
+      "latency": 60,
+      "error": "Model not found (404)",
+      "keyPrefix": "nvapi-QUh8eXxu_Rwzofrc8t9jazCh..."
+    },
+    {
+      "model": "mistralai/mixtral-8x22b-instruct",
+      "keyIndex": 8,
+      "status": "no-access",
+      "latency": 59,
+      "error": "Model not found (404)",
+      "keyPrefix": "nvapi-QUh8eXxu_Rwzofrc8t9jazCh..."
+    },
+    {
+      "model": "mistralai/mixtral-8x7b-instruct",
+      "keyIndex": 8,
+      "status": "no-access",
+      "latency": 64,
+      "error": "Model not found (404)",
+      "keyPrefix": "nvapi-QUh8eXxu_Rwzofrc8t9jazCh..."
+    },
+    {
+      "model": "meta/llama-3.1-70b-instruct",
+      "keyIndex": 9,
+      "status": "no-access",
+      "latency": 80,
+      "error": "No access to model (403)",
+      "keyPrefix": "nvapi-o13opxzHcF1QltL4m1bOvpsy..."
+    },
+    {
+      "model": "meta/llama-3.3-70b-instruct",
+      "keyIndex": 9,
+      "status": "no-access",
+      "latency": 80,
+      "error": "No access to model (403)",
+      "keyPrefix": "nvapi-o13opxzHcF1QltL4m1bOvpsy..."
+    },
+    {
+      "model": "meta/llama-3.1-405b-instruct",
+      "keyIndex": 9,
+      "status": "no-access",
+      "latency": 84,
+      "error": "No access to model (403)",
+      "keyPrefix": "nvapi-o13opxzHcF1QltL4m1bOvpsy..."
+    },
+    {
+      "model": "meta/llama-3-70b-instruct",
+      "keyIndex": 9,
+      "status": "no-access",
+      "latency": 62,
+      "error": "Model not found (404)",
+      "keyPrefix": "nvapi-o13opxzHcF1QltL4m1bOvpsy..."
+    },
+    {
+      "model": "mistralai/mixtral-8x22b-instruct",
+      "keyIndex": 9,
+      "status": "no-access",
+      "latency": 62,
+      "error": "Model not found (404)",
+      "keyPrefix": "nvapi-o13opxzHcF1QltL4m1bOvpsy..."
+    },
+    {
+      "model": "mistralai/mixtral-8x7b-instruct",
+      "keyIndex": 9,
+      "status": "no-access",
+      "latency": 60,
+      "error": "Model not found (404)",
+      "keyPrefix": "nvapi-o13opxzHcF1QltL4m1bOvpsy..."
+    },
+    {
+      "model": "meta/llama-3.1-70b-instruct",
+      "keyIndex": 10,
+      "status": "no-access",
+      "latency": 92,
+      "error": "No access to model (403)",
+      "keyPrefix": "nvapi-Xh6Q-zUyeOcqIai7oAu-McpU..."
+    },
+    {
+      "model": "meta/llama-3.3-70b-instruct",
+      "keyIndex": 10,
+      "status": "no-access",
+      "latency": 81,
+      "error": "No access to model (403)",
+      "keyPrefix": "nvapi-Xh6Q-zUyeOcqIai7oAu-McpU..."
+    },
+    {
+      "model": "meta/llama-3.1-405b-instruct",
+      "keyIndex": 10,
+      "status": "no-access",
+      "latency": 80,
+      "error": "No access to model (403)",
+      "keyPrefix": "nvapi-Xh6Q-zUyeOcqIai7oAu-McpU..."
+    },
+    {
+      "model": "meta/llama-3-70b-instruct",
+      "keyIndex": 10,
+      "status": "no-access",
+      "latency": 62,
+      "error": "Model not found (404)",
+      "keyPrefix": "nvapi-Xh6Q-zUyeOcqIai7oAu-McpU..."
+    },
+    {
+      "model": "mistralai/mixtral-8x22b-instruct",
+      "keyIndex": 10,
+      "status": "no-access",
+      "latency": 59,
+      "error": "Model not found (404)",
+      "keyPrefix": "nvapi-Xh6Q-zUyeOcqIai7oAu-McpU..."
+    },
+    {
+      "model": "mistralai/mixtral-8x7b-instruct",
+      "keyIndex": 10,
+      "status": "no-access",
+      "latency": 60,
+      "error": "Model not found (404)",
+      "keyPrefix": "nvapi-Xh6Q-zUyeOcqIai7oAu-McpU..."
+    },
+    {
+      "model": "meta/llama-3.1-70b-instruct",
+      "keyIndex": 11,
+      "status": "no-access",
+      "latency": 81,
+      "error": "No access to model (403)",
+      "keyPrefix": "nvapi-FqvohHM0dkjCv-6KI10qN6z1..."
+    },
+    {
+      "model": "meta/llama-3.3-70b-instruct",
+      "keyIndex": 11,
+      "status": "no-access",
+      "latency": 90,
+      "error": "No access to model (403)",
+      "keyPrefix": "nvapi-FqvohHM0dkjCv-6KI10qN6z1..."
+    },
+    {
+      "model": "meta/llama-3.1-405b-instruct",
+      "keyIndex": 11,
+      "status": "no-access",
+      "latency": 82,
+      "error": "No access to model (403)",
+      "keyPrefix": "nvapi-FqvohHM0dkjCv-6KI10qN6z1..."
+    },
+    {
+      "model": "meta/llama-3-70b-instruct",
+      "keyIndex": 11,
+      "status": "no-access",
+      "latency": 59,
+      "error": "Model not found (404)",
+      "keyPrefix": "nvapi-FqvohHM0dkjCv-6KI10qN6z1..."
+    },
+    {
+      "model": "mistralai/mixtral-8x22b-instruct",
+      "keyIndex": 11,
+      "status": "no-access",
+      "latency": 60,
+      "error": "Model not found (404)",
+      "keyPrefix": "nvapi-FqvohHM0dkjCv-6KI10qN6z1..."
+    },
+    {
+      "model": "mistralai/mixtral-8x7b-instruct",
+      "keyIndex": 11,
+      "status": "no-access",
+      "latency": 63,
+      "error": "Model not found (404)",
+      "keyPrefix": "nvapi-FqvohHM0dkjCv-6KI10qN6z1..."
+    },
+    {
+      "model": "meta/llama-3.1-70b-instruct",
+      "keyIndex": 12,
+      "status": "no-access",
+      "latency": 86,
+      "error": "No access to model (403)",
+      "keyPrefix": "nvapi-Euq-7XbGwPh88cJaIYiiNOFF..."
+    },
+    {
+      "model": "meta/llama-3.3-70b-instruct",
+      "keyIndex": 12,
+      "status": "no-access",
+      "latency": 84,
+      "error": "No access to model (403)",
+      "keyPrefix": "nvapi-Euq-7XbGwPh88cJaIYiiNOFF..."
+    },
+    {
+      "model": "meta/llama-3.1-405b-instruct",
+      "keyIndex": 12,
+      "status": "no-access",
+      "latency": 81,
+      "error": "No access to model (403)",
+      "keyPrefix": "nvapi-Euq-7XbGwPh88cJaIYiiNOFF..."
+    },
+    {
+      "model": "meta/llama-3-70b-instruct",
+      "keyIndex": 12,
+      "status": "no-access",
+      "latency": 62,
+      "error": "Model not found (404)",
+      "keyPrefix": "nvapi-Euq-7XbGwPh88cJaIYiiNOFF..."
+    },
+    {
+      "model": "mistralai/mixtral-8x22b-instruct",
+      "keyIndex": 12,
+      "status": "no-access",
+      "latency": 61,
+      "error": "Model not found (404)",
+      "keyPrefix": "nvapi-Euq-7XbGwPh88cJaIYiiNOFF..."
+    },
+    {
+      "model": "mistralai/mixtral-8x7b-instruct",
+      "keyIndex": 12,
+      "status": "no-access",
+      "latency": 63,
+      "error": "Model not found (404)",
+      "keyPrefix": "nvapi-Euq-7XbGwPh88cJaIYiiNOFF..."
+    },
+    {
+      "model": "meta/llama-3.1-70b-instruct",
+      "keyIndex": 13,
+      "status": "no-access",
+      "latency": 78,
+      "error": "No access to model (403)",
+      "keyPrefix": "nvapi-WRFFlVBchZVfsQ7C2ZVqUJ1M..."
+    },
+    {
+      "model": "meta/llama-3.3-70b-instruct",
+      "keyIndex": 13,
+      "status": "no-access",
+      "latency": 82,
+      "error": "No access to model (403)",
+      "keyPrefix": "nvapi-WRFFlVBchZVfsQ7C2ZVqUJ1M..."
+    },
+    {
+      "model": "meta/llama-3.1-405b-instruct",
+      "keyIndex": 13,
+      "status": "no-access",
+      "latency": 76,
+      "error": "No access to model (403)",
+      "keyPrefix": "nvapi-WRFFlVBchZVfsQ7C2ZVqUJ1M..."
+    },
+    {
+      "model": "meta/llama-3-70b-instruct",
+      "keyIndex": 13,
+      "status": "no-access",
+      "latency": 62,
+      "error": "Model not found (404)",
+      "keyPrefix": "nvapi-WRFFlVBchZVfsQ7C2ZVqUJ1M..."
+    },
+    {
+      "model": "mistralai/mixtral-8x22b-instruct",
+      "keyIndex": 13,
+      "status": "no-access",
+      "latency": 60,
+      "error": "Model not found (404)",
+      "keyPrefix": "nvapi-WRFFlVBchZVfsQ7C2ZVqUJ1M..."
+    },
+    {
+      "model": "mistralai/mixtral-8x7b-instruct",
+      "keyIndex": 13,
+      "status": "no-access",
+      "latency": 62,
+      "error": "Model not found (404)",
+      "keyPrefix": "nvapi-WRFFlVBchZVfsQ7C2ZVqUJ1M..."
+    },
+    {
+      "model": "meta/llama-3.1-70b-instruct",
+      "keyIndex": 14,
+      "status": "no-access",
+      "latency": 83,
+      "error": "No access to model (403)",
+      "keyPrefix": "nvapi-Ajqkns2BcA_EN3w7BpVSYalU..."
+    },
+    {
+      "model": "meta/llama-3.3-70b-instruct",
+      "keyIndex": 14,
+      "status": "no-access",
+      "latency": 84,
+      "error": "No access to model (403)",
+      "keyPrefix": "nvapi-Ajqkns2BcA_EN3w7BpVSYalU..."
+    },
+    {
+      "model": "meta/llama-3.1-405b-instruct",
+      "keyIndex": 14,
+      "status": "no-access",
+      "latency": 77,
+      "error": "No access to model (403)",
+      "keyPrefix": "nvapi-Ajqkns2BcA_EN3w7BpVSYalU..."
+    },
+    {
+      "model": "meta/llama-3-70b-instruct",
+      "keyIndex": 14,
+      "status": "no-access",
+      "latency": 61,
+      "error": "Model not found (404)",
+      "keyPrefix": "nvapi-Ajqkns2BcA_EN3w7BpVSYalU..."
+    },
+    {
+      "model": "mistralai/mixtral-8x22b-instruct",
+      "keyIndex": 14,
+      "status": "no-access",
+      "latency": 62,
+      "error": "Model not found (404)",
+      "keyPrefix": "nvapi-Ajqkns2BcA_EN3w7BpVSYalU..."
+    },
+    {
+      "model": "mistralai/mixtral-8x7b-instruct",
+      "keyIndex": 14,
+      "status": "no-access",
+      "latency": 62,
+      "error": "Model not found (404)",
+      "keyPrefix": "nvapi-Ajqkns2BcA_EN3w7BpVSYalU..."
+    },
+    {
+      "model": "meta/llama-3.1-70b-instruct",
+      "keyIndex": 15,
+      "status": "no-access",
+      "latency": 89,
+      "error": "No access to model (403)",
+      "keyPrefix": "nvapi-HbMVTXgspilNmNyw-jrXfWtb..."
+    },
+    {
+      "model": "meta/llama-3.3-70b-instruct",
+      "keyIndex": 15,
+      "status": "no-access",
+      "latency": 82,
+      "error": "No access to model (403)",
+      "keyPrefix": "nvapi-HbMVTXgspilNmNyw-jrXfWtb..."
+    },
+    {
+      "model": "meta/llama-3.1-405b-instruct",
+      "keyIndex": 15,
+      "status": "no-access",
+      "latency": 79,
+      "error": "No access to model (403)",
+      "keyPrefix": "nvapi-HbMVTXgspilNmNyw-jrXfWtb..."
+    },
+    {
+      "model": "meta/llama-3-70b-instruct",
+      "keyIndex": 15,
+      "status": "no-access",
+      "latency": 59,
+      "error": "Model not found (404)",
+      "keyPrefix": "nvapi-HbMVTXgspilNmNyw-jrXfWtb..."
+    },
+    {
+      "model": "mistralai/mixtral-8x22b-instruct",
+      "keyIndex": 15,
+      "status": "no-access",
+      "latency": 59,
+      "error": "Model not found (404)",
+      "keyPrefix": "nvapi-HbMVTXgspilNmNyw-jrXfWtb..."
+    },
+    {
+      "model": "mistralai/mixtral-8x7b-instruct",
+      "keyIndex": 15,
+      "status": "no-access",
+      "latency": 61,
+      "error": "Model not found (404)",
+      "keyPrefix": "nvapi-HbMVTXgspilNmNyw-jrXfWtb..."
+    },
+    {
+      "model": "meta/llama-3.1-70b-instruct",
+      "keyIndex": 16,
+      "status": "no-access",
+      "latency": 85,
+      "error": "No access to model (403)",
+      "keyPrefix": "nvapi-cZSgWspRHaN-Mz2o6Gz6tc_H..."
+    },
+    {
+      "model": "meta/llama-3.3-70b-instruct",
+      "keyIndex": 16,
+      "status": "no-access",
+      "latency": 86,
+      "error": "No access to model (403)",
+      "keyPrefix": "nvapi-cZSgWspRHaN-Mz2o6Gz6tc_H..."
+    },
+    {
+      "model": "meta/llama-3.1-405b-instruct",
+      "keyIndex": 16,
+      "status": "no-access",
+      "latency": 88,
+      "error": "No access to model (403)",
+      "keyPrefix": "nvapi-cZSgWspRHaN-Mz2o6Gz6tc_H..."
+    },
+    {
+      "model": "meta/llama-3-70b-instruct",
+      "keyIndex": 16,
+      "status": "no-access",
+      "latency": 62,
+      "error": "Model not found (404)",
+      "keyPrefix": "nvapi-cZSgWspRHaN-Mz2o6Gz6tc_H..."
+    },
+    {
+      "model": "mistralai/mixtral-8x22b-instruct",
+      "keyIndex": 16,
+      "status": "no-access",
+      "latency": 62,
+      "error": "Model not found (404)",
+      "keyPrefix": "nvapi-cZSgWspRHaN-Mz2o6Gz6tc_H..."
+    },
+    {
+      "model": "mistralai/mixtral-8x7b-instruct",
+      "keyIndex": 16,
+      "status": "no-access",
+      "latency": 61,
+      "error": "Model not found (404)",
+      "keyPrefix": "nvapi-cZSgWspRHaN-Mz2o6Gz6tc_H..."
+    },
+    {
+      "model": "meta/llama-3.1-70b-instruct",
+      "keyIndex": 17,
+      "status": "no-access",
+      "latency": 87,
+      "error": "No access to model (403)",
+      "keyPrefix": "nvapi-BCoeuCwDtd3UbQgH1RdDXdM9..."
+    },
+    {
+      "model": "meta/llama-3.3-70b-instruct",
+      "keyIndex": 17,
+      "status": "no-access",
+      "latency": 77,
+      "error": "No access to model (403)",
+      "keyPrefix": "nvapi-BCoeuCwDtd3UbQgH1RdDXdM9..."
+    },
+    {
+      "model": "meta/llama-3.1-405b-instruct",
+      "keyIndex": 17,
+      "status": "no-access",
+      "latency": 88,
+      "error": "No access to model (403)",
+      "keyPrefix": "nvapi-BCoeuCwDtd3UbQgH1RdDXdM9..."
+    },
+    {
+      "model": "meta/llama-3-70b-instruct",
+      "keyIndex": 17,
+      "status": "no-access",
+      "latency": 62,
+      "error": "Model not found (404)",
+      "keyPrefix": "nvapi-BCoeuCwDtd3UbQgH1RdDXdM9..."
+    },
+    {
+      "model": "mistralai/mixtral-8x22b-instruct",
+      "keyIndex": 17,
+      "status": "no-access",
+      "latency": 60,
+      "error": "Model not found (404)",
+      "keyPrefix": "nvapi-BCoeuCwDtd3UbQgH1RdDXdM9..."
+    },
+    {
+      "model": "mistralai/mixtral-8x7b-instruct",
+      "keyIndex": 17,
+      "status": "no-access",
+      "latency": 62,
+      "error": "Model not found (404)",
+      "keyPrefix": "nvapi-BCoeuCwDtd3UbQgH1RdDXdM9..."
+    },
+    {
+      "model": "meta/llama-3.1-70b-instruct",
+      "keyIndex": 18,
+      "status": "no-access",
+      "latency": 83,
+      "error": "No access to model (403)",
+      "keyPrefix": "nvapi-1jyMLQ7aRQr8viGY26S3c_9v..."
+    },
+    {
+      "model": "meta/llama-3.3-70b-instruct",
+      "keyIndex": 18,
+      "status": "no-access",
+      "latency": 86,
+      "error": "No access to model (403)",
+      "keyPrefix": "nvapi-1jyMLQ7aRQr8viGY26S3c_9v..."
+    },
+    {
+      "model": "meta/llama-3.1-405b-instruct",
+      "keyIndex": 18,
+      "status": "no-access",
+      "latency": 85,
+      "error": "No access to model (403)",
+      "keyPrefix": "nvapi-1jyMLQ7aRQr8viGY26S3c_9v..."
+    },
+    {
+      "model": "meta/llama-3-70b-instruct",
+      "keyIndex": 18,
+      "status": "no-access",
+      "latency": 62,
+      "error": "Model not found (404)",
+      "keyPrefix": "nvapi-1jyMLQ7aRQr8viGY26S3c_9v..."
+    },
+    {
+      "model": "mistralai/mixtral-8x22b-instruct",
+      "keyIndex": 18,
+      "status": "no-access",
+      "latency": 63,
+      "error": "Model not found (404)",
+      "keyPrefix": "nvapi-1jyMLQ7aRQr8viGY26S3c_9v..."
+    },
+    {
+      "model": "mistralai/mixtral-8x7b-instruct",
+      "keyIndex": 18,
+      "status": "no-access",
+      "latency": 62,
+      "error": "Model not found (404)",
+      "keyPrefix": "nvapi-1jyMLQ7aRQr8viGY26S3c_9v..."
+    },
+    {
+      "model": "meta/llama-3.1-70b-instruct",
+      "keyIndex": 19,
+      "status": "no-access",
+      "latency": 81,
+      "error": "No access to model (403)",
+      "keyPrefix": "nvapi-oYbtTMN4bWNJjNmSdAwcw0Pa..."
+    },
+    {
+      "model": "meta/llama-3.3-70b-instruct",
+      "keyIndex": 19,
+      "status": "no-access",
+      "latency": 82,
+      "error": "No access to model (403)",
+      "keyPrefix": "nvapi-oYbtTMN4bWNJjNmSdAwcw0Pa..."
+    },
+    {
+      "model": "meta/llama-3.1-405b-instruct",
+      "keyIndex": 19,
+      "status": "no-access",
+      "latency": 85,
+      "error": "No access to model (403)",
+      "keyPrefix": "nvapi-oYbtTMN4bWNJjNmSdAwcw0Pa..."
+    },
+    {
+      "model": "meta/llama-3-70b-instruct",
+      "keyIndex": 19,
+      "status": "no-access",
+      "latency": 62,
+      "error": "Model not found (404)",
+      "keyPrefix": "nvapi-oYbtTMN4bWNJjNmSdAwcw0Pa..."
+    },
+    {
+      "model": "mistralai/mixtral-8x22b-instruct",
+      "keyIndex": 19,
+      "status": "no-access",
+      "latency": 60,
+      "error": "Model not found (404)",
+      "keyPrefix": "nvapi-oYbtTMN4bWNJjNmSdAwcw0Pa..."
+    },
+    {
+      "model": "mistralai/mixtral-8x7b-instruct",
+      "keyIndex": 19,
+      "status": "no-access",
+      "latency": 61,
+      "error": "Model not found (404)",
+      "keyPrefix": "nvapi-oYbtTMN4bWNJjNmSdAwcw0Pa..."
+    }
+  ]
+}

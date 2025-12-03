@@ -35,6 +35,10 @@ export async function POST(
 
     console.log(`🛑 Cancelling campaign ${id}...`);
 
+    // Get media info before updating
+    const mediaUrl = (campaign as any).mediaUrl;
+    const mediaType = (campaign as any).mediaType;
+    
     // Update campaign status to CANCELLED
     const updatedCampaign = await prisma.campaign.update({
       where: { id },
@@ -43,6 +47,12 @@ export async function POST(
         completedAt: new Date(),
       },
     });
+    
+    // Delete media file after campaign cancellation
+    if (mediaUrl && mediaType) {
+      const { deleteCampaignMedia } = await import('@/lib/campaigns/delete-media');
+      await deleteCampaignMedia(mediaUrl, mediaType);
+    }
 
     console.log(`✅ Campaign ${id} cancelled successfully`);
 

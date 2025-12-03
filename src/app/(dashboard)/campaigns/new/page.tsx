@@ -287,18 +287,12 @@ export default function NewCampaignPage() {
         }),
       });
 
-      // Check if response is JSON
-      const contentType = response.headers.get('content-type');
-      if (!contentType?.includes('application/json')) {
-        const text = await response.text();
-        throw new Error(text || 'Server returned non-JSON response');
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || 'Failed to fetch contacts');
       }
 
       const data = await response.json();
-
-      if (!response.ok) {
-        throw new Error(data.error || 'Failed to fetch contacts');
-      }
       setTargetContacts(data.contacts || []);
       // Reset excluded contacts when contacts list changes
       setExcludedContactIds(new Set());
@@ -787,9 +781,9 @@ export default function NewCampaignPage() {
                   const file = e.target.files?.[0];
                   if (!file) return;
 
-                  const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB (reduced for Vercel)
+                  const MAX_FILE_SIZE = 25 * 1024 * 1024; // 25MB
                   if (file.size > MAX_FILE_SIZE) {
-                    toast.error(`File size must be less than 10MB. Current size: ${(file.size / 1024 / 1024).toFixed(2)}MB`);
+                    toast.error(`File size must be less than 25MB. Current size: ${(file.size / 1024 / 1024).toFixed(2)}MB`);
                     return;
                   }
 
@@ -814,13 +808,6 @@ export default function NewCampaignPage() {
                       body: formData,
                     });
 
-                    // Check if response is JSON
-                    const contentType = response.headers.get('content-type');
-                    if (!contentType?.includes('application/json')) {
-                      const text = await response.text();
-                      throw new Error(text || 'Server returned non-JSON response');
-                    }
-
                     const data = await response.json();
 
                     if (!response.ok) {
@@ -830,16 +817,10 @@ export default function NewCampaignPage() {
                     setMediaUrl(data.mediaUrl);
                     toast.success('File uploaded successfully');
                   } catch (error: unknown) {
-                    let errorMessage = 'Failed to upload file';
-                    if (error instanceof Error) {
-                      errorMessage = error.message;
-                    } else if (typeof error === 'string') {
-                      errorMessage = error;
-                    }
+                    const errorMessage = error instanceof Error ? error.message : 'Failed to upload file';
                     toast.error(errorMessage);
                     setSelectedFile(null);
                     setMediaType(null);
-                    setMediaUrl(null);
                   } finally {
                     setUploading(false);
                   }
@@ -856,7 +837,7 @@ export default function NewCampaignPage() {
                 <Upload className="h-4 w-4 mr-2" />
                 {uploading ? 'Uploading...' : 'Upload Media'}
               </Button>
-              <span className="text-sm text-muted-foreground">Max 10MB</span>
+              <span className="text-sm text-muted-foreground">Max 25MB</span>
             </div>
 
             {selectedFile && (

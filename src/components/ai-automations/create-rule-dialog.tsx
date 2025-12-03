@@ -51,6 +51,7 @@ export function CreateRuleDialog({ open, onOpenChange, onSuccess }: CreateRuleDi
     activeHoursEnd: '21',
     run24_7: false,
     stopOnReply: true,
+    respectBestContactTime: false,
     removeTagOnReply: '',
     messageTag: 'ACCOUNT_UPDATE',
     enabled: true
@@ -128,6 +129,7 @@ export function CreateRuleDialog({ open, onOpenChange, onSuccess }: CreateRuleDi
           activeHoursEnd: parseInt(formData.activeHoursEnd),
           run24_7: formData.run24_7,
           stopOnReply: formData.stopOnReply,
+          respectBestContactTime: formData.respectBestContactTime,
           removeTagOnReply: formData.removeTagOnReply || null,
           messageTag: formData.messageTag || null,
           enabled: formData.enabled,
@@ -169,6 +171,7 @@ export function CreateRuleDialog({ open, onOpenChange, onSuccess }: CreateRuleDi
       activeHoursEnd: '21',
       run24_7: false,
       stopOnReply: true,
+      respectBestContactTime: false,
       removeTagOnReply: '',
       messageTag: 'ACCOUNT_UPDATE',
       enabled: true
@@ -469,6 +472,19 @@ export function CreateRuleDialog({ open, onOpenChange, onSuccess }: CreateRuleDi
               <Switch
                 checked={formData.stopOnReply}
                 onCheckedChange={(checked) => setFormData({ ...formData, stopOnReply: checked })}
+              />
+            </div>
+
+            <div className="flex items-center justify-between">
+              <div className="space-y-0.5">
+                <Label>Respect Best Contact Time</Label>
+                <p className="text-xs text-muted-foreground">
+                  Only send messages during each contact's best contact time window
+                </p>
+              </div>
+              <Switch
+                checked={formData.respectBestContactTime}
+                onCheckedChange={(checked) => setFormData({ ...formData, respectBestContactTime: checked })}
               />
             </div>
 

@@ -67,28 +67,101 @@ type FacebookPagesApiResponse = {
  */
 export async function getUserPages(userAccessToken: string): Promise<FacebookPageResponse[]> {
   const allPages: FacebookPageResponse[] = [];
-  let currentUrl: string | null = `https://graph.facebook.com/${FB_GRAPH_VERSION}/me/accounts`;
+  const pageIds = new Set<string>(); // Track unique page IDs to avoid duplicates
   
   try {
+    // Step 1: Fetch pages from /me/accounts (personal pages and pages user manages)
+    let currentUrl: string | null = `https://graph.facebook.com/${FB_GRAPH_VERSION}/me/accounts`;
+    
     while (currentUrl) {
-      const response = await axios.get<FacebookPagesApiResponse>(currentUrl, {
-        params: {
-          access_token: userAccessToken,
-          limit: 100, // Fetch 100 pages per request (max allowed)
-        },
-      });
+      try {
+        const response = await axios.get<FacebookPagesApiResponse>(currentUrl, {
+          params: {
+            access_token: userAccessToken,
+            limit: 100, // Fetch 100 pages per request (max allowed)
+            fields: 'id,name,access_token', // Request only needed fields
+          },
+        });
 
-      const responseData: FacebookPagesApiResponse = response.data;
+        const responseData: FacebookPagesApiResponse = response.data;
 
-      // Add pages from current batch
-      if (responseData.data && responseData.data.length > 0) {
-        allPages.push(...responseData.data);
+        // Add pages from current batch (avoid duplicates)
+        if (responseData.data && responseData.data.length > 0) {
+          for (const page of responseData.data) {
+            if (!pageIds.has(page.id)) {
+              allPages.push(page);
+              pageIds.add(page.id);
+            }
+          }
+        }
+
+        // Check if there are more pages to fetch
+        currentUrl = responseData.paging?.next || null;
+      } catch (error) {
+        // If error fetching from /me/accounts, log but continue to try business accounts
+        console.warn('[getUserPages] Error fetching from /me/accounts:', error);
+        break;
       }
-
-      // Check if there are more pages to fetch
-      currentUrl = responseData.paging?.next || null;
     }
 
+    // Step 2: Fetch pages from business accounts (if user has business_management permission)
+    try {
+      // First, get user's business accounts
+      const businessAccountsResponse = await axios.get(
+        `https://graph.facebook.com/${FB_GRAPH_VERSION}/me/businesses`,
+        {
+          params: {
+            access_token: userAccessToken,
+            fields: 'id,name',
+          },
+        }
+      );
+
+      if (businessAccountsResponse.data?.data && businessAccountsResponse.data.data.length > 0) {
+        console.log(`[getUserPages] Found ${businessAccountsResponse.data.data.length} business account(s)`);
+        
+        // For each business account, fetch its pages
+        for (const business of businessAccountsResponse.data.data) {
+          try {
+            let businessPagesUrl: string | null = `https://graph.facebook.com/${FB_GRAPH_VERSION}/${business.id}/owned_pages`;
+            
+            while (businessPagesUrl) {
+              const pagesResponse = await axios.get<FacebookPagesApiResponse>(businessPagesUrl, {
+                params: {
+                  access_token: userAccessToken,
+                  limit: 100,
+                  fields: 'id,name,access_token',
+                },
+              });
+
+              const pagesData: FacebookPagesApiResponse = pagesResponse.data;
+
+              // Add pages from business account (avoid duplicates)
+              if (pagesData.data && pagesData.data.length > 0) {
+                for (const page of pagesData.data) {
+                  if (!pageIds.has(page.id)) {
+                    allPages.push(page);
+                    pageIds.add(page.id);
+                    console.log(`[getUserPages] Added business profile page: ${page.name} (${page.id})`);
+                  }
+                }
+              }
+
+              businessPagesUrl = pagesData.paging?.next || null;
+            }
+          } catch (businessError) {
+            // Log but continue with other business accounts
+            console.warn(`[getUserPages] Error fetching pages for business ${business.id}:`, businessError);
+          }
+        }
+      }
+    } catch (businessAccountsError) {
+      // If business_management permission is not granted, this is expected
+      // Log at debug level, not error, as it's optional
+      console.log('[getUserPages] Business accounts not accessible (this is OK if business_management permission not granted)');
+    }
+
+    console.log(`[getUserPages] Total pages found: ${allPages.length} (${pageIds.size} unique)`);
     return allPages;
   } catch (error: unknown) {
     if (axios.isAxiosError(error) && error.response?.data?.error) {
@@ -212,6 +285,7 @@ export function generateOAuthUrl(state?: string, isPopup?: boolean): string {
       'pages_messaging',
       'pages_read_engagement',
       'pages_manage_metadata',
+      'business_management', // Allow access to business profile pages
     ].join(','),
     response_type: 'code',
     display: isPopup ? 'popup' : 'page', // Facebook will optimize UI for popup

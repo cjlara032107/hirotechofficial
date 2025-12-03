@@ -1,0 +1,242 @@
+{
+  "testedAt": "2025-11-30T16:13:47.808Z",
+  "model": "openai/gpt-oss-120b",
+  "total": 21,
+  "working": 2,
+  "failed": 19,
+  "workingKeys": [
+    {
+      "key": "nvapi-ZlXT0BkEE1wx_781MWnIEFeD...",
+      "fullKey": "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"
+    },
+    {
+      "key": "nvapi-gxEhgdph4UkOc9RmVn3UGrlC...",
+      "fullKey": "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"
+    }
+  ],
+  "failedKeys": [
+    {
+      "key": "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",
+      "reason": "no-access: No access to model (403 Forbidden)"
+    },
+    {
+      "key": "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",
+      "reason": "no-access: No access to model (403 Forbidden)"
+    },
+    {
+      "key": "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",
+      "reason": "no-access: No access to model (403 Forbidden)"
+    },
+    {
+      "key": "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",
+      "reason": "no-access: No access to model (403 Forbidden)"
+    },
+    {
+      "key": "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",
+      "reason": "no-access: No access to model (403 Forbidden)"
+    },
+    {
+      "key": "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",
+      "reason": "no-access: No access to model (403 Forbidden)"
+    },
+    {
+      "key": "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",
+      "reason": "no-access: No access to model (403 Forbidden)"
+    },
+    {
+      "key": "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",
+      "reason": "no-access: No access to model (403 Forbidden)"
+    },
+    {
+      "key": "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",
+      "reason": "no-access: No access to model (403 Forbidden)"
+    },
+    {
+      "key": "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",
+      "reason": "no-access: No access to model (403 Forbidden)"
+    },
+    {
+      "key": "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",
+      "reason": "no-access: No access to model (403 Forbidden)"
+    },
+    {
+      "key": "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",
+      "reason": "no-access: No access to model (403 Forbidden)"
+    },
+    {
+      "key": "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",
+      "reason": "no-access: No access to model (403 Forbidden)"
+    },
+    {
+      "key": "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",
+      "reason": "no-access: No access to model (403 Forbidden)"
+    },
+    {
+      "key": "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",
+      "reason": "no-access: No access to model (403 Forbidden)"
+    },
+    {
+      "key": "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",
+      "reason": "no-access: No access to model (403 Forbidden)"
+    },
+    {
+      "key": "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",
+      "reason": "no-access: No access to model (403 Forbidden)"
+    },
+    {
+      "key": "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",
+      "reason": "no-access: No access to model (403 Forbidden)"
+    },
+    {
+      "key": "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",
+      "reason": "no-access: No access to model (403 Forbidden)"
+    }
+  ],
+  "allResults": [
+    {
+      "index": 1,
+      "status": "working",
+      "latency": 330,
+      "keyPrefix": "nvapi-ZlXT0BkEE1wx_781MWnIEFeD..."
+    },
+    {
+      "index": 2,
+      "status": "working",
+      "latency": 136,
+      "keyPrefix": "nvapi-gxEhgdph4UkOc9RmVn3UGrlC..."
+    },
+    {
+      "index": 3,
+      "status": "no-access",
+      "latency": 85,
+      "error": "No access to model (403 Forbidden)",
+      "keyPrefix": "nvapi-GBkLnxfL9B16e9MdIl8bvRVj..."
+    },
+    {
+      "index": 4,
+      "status": "no-access",
+      "latency": 96,
+      "error": "No access to model (403 Forbidden)",
+      "keyPrefix": "nvapi-RvbqNfT40pDprhxA7Qs1jTNb..."
+    },
+    {
+      "index": 5,
+      "status": "no-access",
+      "latency": 88,
+      "error": "No access to model (403 Forbidden)",
+      "keyPrefix": "nvapi-itF6GmzDjJlGH903q2Kn2a3h..."
+    },
+    {
+      "index": 6,
+      "status": "no-access",
+      "latency": 83,
+      "error": "No access to model (403 Forbidden)",
+      "keyPrefix": "nvapi-pPtJFAdUIqosSyDxV1xjuKoc..."
+    },
+    {
+      "index": 7,
+      "status": "no-access",
+      "latency": 84,
+      "error": "No access to model (403 Forbidden)",
+      "keyPrefix": "nvapi-Vyl33hUgZD8xvIaSx0VQ0TAo..."
+    },
+    {
+      "index": 8,
+      "status": "no-access",
+      "latency": 86,
+      "error": "No access to model (403 Forbidden)",
+      "keyPrefix": "nvapi-pDKgSNs0CfxVlmPs3UgtHd75..."
+    },
+    {
+      "index": 9,
+      "status": "no-access",
+      "latency": 88,
+      "error": "No access to model (403 Forbidden)",
+      "keyPrefix": "nvapi-s03ng8yo1NfMi_GKPBMN0Ay9..."
+    },
+    {
+      "index": 10,
+      "status": "no-access",
+      "latency": 88,
+      "error": "No access to model (403 Forbidden)",
+      "keyPrefix": "nvapi-QUh8eXxu_Rwzofrc8t9jazCh..."
+    },
+    {
+      "index": 11,
+      "status": "no-access",
+      "latency": 83,
+      "error": "No access to model (403 Forbidden)",
+      "keyPrefix": "nvapi-o13opxzHcF1QltL4m1bOvpsy..."
+    },
+    {
+      "index": 12,
+      "status": "no-access",
+      "latency": 86,
+      "error": "No access to model (403 Forbidden)",
+      "keyPrefix": "nvapi-Xh6Q-zUyeOcqIai7oAu-McpU..."
+    },
+    {
+      "index": 13,
+      "status": "no-access",
+      "latency": 80,
+      "error": "No access to model (403 Forbidden)",
+      "keyPrefix": "nvapi-FqvohHM0dkjCv-6KI10qN6z1..."
+    },
+    {
+      "index": 14,
+      "status": "no-access",
+      "latency": 84,
+      "error": "No access to model (403 Forbidden)",
+      "keyPrefix": "nvapi-Euq-7XbGwPh88cJaIYiiNOFF..."
+    },
+    {
+      "index": 15,
+      "status": "no-access",
+      "latency": 85,
+      "error": "No access to model (403 Forbidden)",
+      "keyPrefix": "nvapi-WRFFlVBchZVfsQ7C2ZVqUJ1M..."
+    },
+    {
+      "index": 16,
+      "status": "no-access",
+      "latency": 83,
+      "error": "No access to model (403 Forbidden)",
+      "keyPrefix": "nvapi-Ajqkns2BcA_EN3w7BpVSYalU..."
+    },
+    {
+      "index": 17,
+      "status": "no-access",
+      "latency": 87,
+      "error": "No access to model (403 Forbidden)",
+      "keyPrefix": "nvapi-HbMVTXgspilNmNyw-jrXfWtb..."
+    },
+    {
+      "index": 18,
+      "status": "no-access",
+      "latency": 82,
+      "error": "No access to model (403 Forbidden)",
+      "keyPrefix": "nvapi-cZSgWspRHaN-Mz2o6Gz6tc_H..."
+    },
+    {
+      "index": 19,
+      "status": "no-access",
+      "latency": 82,
+      "error": "No access to model (403 Forbidden)",
+      "keyPrefix": "nvapi-BCoeuCwDtd3UbQgH1RdDXdM9..."
+    },
+    {
+      "index": 20,
+      "status": "no-access",
+      "latency": 83,
+      "error": "No access to model (403 Forbidden)",
+      "keyPrefix": "nvapi-1jyMLQ7aRQr8viGY26S3c_9v..."
+    },
+    {
+      "index": 21,
+      "status": "no-access",
+      "latency": 86,
+      "error": "No access to model (403 Forbidden)",
+      "keyPrefix": "nvapi-oYbtTMN4bWNJjNmSdAwcw0Pa..."
+    }
+  ]
+}

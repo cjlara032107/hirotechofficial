@@ -7,9 +7,19 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
 import { Button } from '@/components/ui/button';
 import { Progress } from '@/components/ui/progress';
+import { Switch } from '@/components/ui/switch';
+import { Input } from '@/components/ui/input';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
 import { toast } from 'sonner';
 import Link from 'next/link';
-import { ArrowLeft, RefreshCw, CheckCircle2, XCircle } from 'lucide-react';
+import { ArrowLeft, RefreshCw, CheckCircle2, XCircle, Sparkles, Loader2 } from 'lucide-react';
 
 interface Pipeline {
   id: string;
@@ -49,6 +59,15 @@ export function FacebookPageSettingsForm({
   const [loading, setLoading] = useState(false);
   const [syncJob, setSyncJob] = useState<SyncJobStatus | null>(null);
   const [isPolling, setIsPolling] = useState(false);
+  
+  // AI Pipeline Generation state
+  const [showAIGenerator, setShowAIGenerator] = useState(false);
+  const [aiGenerating, setAiGenerating] = useState(false);
+  const [aiStageCount, setAiStageCount] = useState<string>('');
+  const [useCustomStageCount, setUseCustomStageCount] = useState(false);
+  const [aiDecideStages, setAiDecideStages] = useState(true);
+  const [pipelineDetailLevel, setPipelineDetailLevel] = useState(5); // 1-10 scale, default 5
+  const [aiSuggestion, setAiSuggestion] = useState<any>(null);
 
   // Fetch latest sync job status
   const fetchSyncStatus = useCallback(async () => {
@@ -115,6 +134,8 @@ export function FacebookPageSettingsForm({
       
       if (res.ok) {
         toast.success('Settings saved successfully! Auto-assignment will apply on next sync.');
+        // Refresh the page to get updated pipelines list
+        window.location.reload();
       } else {
         const errorData = await res.json();
         toast.error(errorData.error || 'Failed to save settings');
@@ -144,6 +165,103 @@ export function FacebookPageSettingsForm({
     if (minutes < 60) return `${minutes}m ${seconds % 60}s`;
     const hours = Math.floor(minutes / 60);
     return `${hours}h ${minutes % 60}m`;
+  };
+
+  // Handle pipeline selection change
+  const handlePipelineChange = (value: string) => {
+    if (value === 'generate-ai') {
+      setShowAIGenerator(true);
+      // Don't change the settings value, keep current selection
+    } else {
+      setSettings({ ...settings, autoPipelineId: value });
+    }
+  };
+
+  // Generate AI pipeline
+  const handleGenerateAI = async () => {
+    setAiGenerating(true);
+    try {
+      const response = await fetch('/api/pipelines/generate-ai', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          facebookPageId: pageId,
+          stageCount: (!aiDecideStages && useCustomStageCount) ? parseInt(aiStageCount) || undefined : undefined,
+          detailLevel: aiDecideStages ? pipelineDetailLevel : undefined,
+        }),
+      });
+
+      if (response.ok) {
+        const suggestion = await response.json();
+        setAiSuggestion(suggestion);
+        toast.success('AI pipeline generated successfully');
+      } else {
+        const error = await response.json();
+        toast.error(error.error || 'Failed to generate AI pipeline');
+      }
+    } catch (error) {
+      console.error('Generate AI pipeline error:', error);
+      toast.error('An error occurred while generating pipeline');
+    } finally {
+      setAiGenerating(false);
+    }
+  };
+
+  // Create AI pipeline and assign to page
+  const handleCreateAIPipeline = async () => {
+    if (!aiSuggestion) return;
+
+    setAiGenerating(true);
+    try {
+      // Create the pipeline
+      const createResponse = await fetch('/api/pipelines', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: aiSuggestion.name,
+          description: aiSuggestion.description,
+          color: '#3b82f6',
+          stages: aiSuggestion.stages.map((stage: any) => ({
+            name: stage.name,
+            description: stage.description,
+            color: stage.color,
+            type: stage.type,
+          })),
+        }),
+      });
+
+      if (!createResponse.ok) {
+        throw new Error('Failed to create pipeline');
+      }
+
+      const pipelineData = await createResponse.json();
+
+      // Assign pipeline to the Facebook page
+      const assignResponse = await fetch(`/api/facebook/pages/${pageId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          autoPipelineId: pipelineData.id,
+          autoPipelineMode: settings.autoPipelineMode,
+        }),
+      });
+
+      if (!assignResponse.ok) {
+        throw new Error('Failed to assign pipeline to page');
+      }
+
+      toast.success('AI pipeline created and assigned successfully');
+      setShowAIGenerator(false);
+      setAiSuggestion(null);
+      
+      // Refresh the page to show the new pipeline in the dropdown
+      window.location.reload();
+    } catch (error) {
+      console.error('Create AI pipeline error:', error);
+      toast.error('An error occurred while creating pipeline');
+    } finally {
+      setAiGenerating(false);
+    }
   };
 
   return (
@@ -260,7 +378,7 @@ export function FacebookPageSettingsForm({
                 <Label>Target Pipeline</Label>
                 <Select
                   value={settings.autoPipelineId}
-                  onValueChange={(value) => setSettings({ ...settings, autoPipelineId: value })}
+                  onValueChange={handlePipelineChange}
                 >
                   <SelectTrigger>
                     <SelectValue placeholder="Select pipeline (optional)" />
@@ -272,6 +390,12 @@ export function FacebookPageSettingsForm({
                         {p.name}
                       </SelectItem>
                     ))}
+                    <SelectItem value="generate-ai" className="text-primary font-medium">
+                      <div className="flex items-center gap-2">
+                        <Sparkles className="h-4 w-4" />
+                        Generate with AI...
+                      </div>
+                    </SelectItem>
                   </SelectContent>
                 </Select>
                 <p className="text-sm text-muted-foreground">
@@ -309,6 +433,213 @@ export function FacebookPageSettingsForm({
           )}
         </CardContent>
       </Card>
+
+      {/* AI Pipeline Generator Dialog */}
+      <Dialog open={showAIGenerator} onOpenChange={setShowAIGenerator}>
+        <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Sparkles className="h-5 w-5" />
+              AI Pipeline Generator
+            </DialogTitle>
+            <DialogDescription>
+              AI will analyze contacts from this Facebook page to create an optimal pipeline structure
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-4 py-4">
+            <div className="flex items-center justify-between">
+              <Label htmlFor="ai-decide-stages">Let AI Decide Number of Stages</Label>
+              <Switch
+                id="ai-decide-stages"
+                checked={aiDecideStages}
+                onCheckedChange={(checked) => {
+                  setAiDecideStages(checked);
+                  if (checked) {
+                    setUseCustomStageCount(false);
+                  }
+                }}
+              />
+            </div>
+
+            {!aiDecideStages && (
+              <div className="flex items-center justify-between">
+                <Label htmlFor="custom-stage-count">Custom Stage Count</Label>
+                <Switch
+                  id="custom-stage-count"
+                  checked={useCustomStageCount}
+                  onCheckedChange={setUseCustomStageCount}
+                />
+              </div>
+            )}
+
+            {!aiDecideStages && useCustomStageCount && (
+              <div>
+                <Label htmlFor="stage-count">Number of Stages (minimum 3)</Label>
+                <Input
+                  id="stage-count"
+                  type="text"
+                  inputMode="numeric"
+                  value={aiStageCount}
+                  onChange={(e) => {
+                    const value = e.target.value;
+                    // Allow typing any number, including starting with 1
+                    if (value === '' || /^\d+$/.test(value)) {
+                      setAiStageCount(value);
+                    }
+                  }}
+                  onBlur={(e) => {
+                    // Validate on blur - ensure minimum 3
+                    const numValue = parseInt(e.target.value);
+                    if (isNaN(numValue) || numValue < 3) {
+                      setAiStageCount('');
+                    } else {
+                      setAiStageCount(numValue.toString());
+                    }
+                  }}
+                  className="mt-2"
+                  placeholder="e.g., 3, 5, 7, 12..."
+                />
+                <p className="text-xs text-muted-foreground mt-1">
+                  Specify the exact number of stages you want (minimum 3)
+                </p>
+              </div>
+            )}
+
+            {aiDecideStages && (
+              <div className="space-y-2">
+                <Label htmlFor="detail-level">Pipeline Detail Level (1 = Simple, 10 = Very Detailed)</Label>
+                <div className="flex items-center gap-4">
+                  <span className="text-xs text-muted-foreground min-w-[60px]">Simple</span>
+                  <input
+                    id="detail-level"
+                    type="range"
+                    min="1"
+                    max="10"
+                    value={pipelineDetailLevel}
+                    onChange={(e) => setPipelineDetailLevel(parseInt(e.target.value))}
+                    className="flex-1 h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-primary"
+                  />
+                  <span className="text-xs text-muted-foreground min-w-[80px]">Very Detailed</span>
+                </div>
+                <div className="flex items-center justify-between text-xs text-muted-foreground">
+                  <span>Current: {pipelineDetailLevel}/10</span>
+                  <span>
+                    {pipelineDetailLevel <= 3 && 'Simple (3-5 stages)'}
+                    {pipelineDetailLevel > 3 && pipelineDetailLevel <= 6 && 'Moderate (5-8 stages)'}
+                    {pipelineDetailLevel > 6 && pipelineDetailLevel <= 8 && 'Detailed (8-12 stages)'}
+                    {pipelineDetailLevel > 8 && 'Very Detailed (12-15+ stages)'}
+                  </span>
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  AI will create {pipelineDetailLevel <= 3 ? '3-5' : pipelineDetailLevel <= 6 ? '5-8' : pipelineDetailLevel <= 8 ? '8-12' : '12-15+'} stages based on your contact data
+                </p>
+              </div>
+            )}
+
+            {!aiDecideStages && !useCustomStageCount && (
+              <p className="text-sm text-muted-foreground">
+                Enable "Custom Stage Count" to specify an exact number, or enable "Let AI Decide" for automatic optimization
+              </p>
+            )}
+
+            {aiSuggestion && (
+              <div className="space-y-4 pt-4 border-t">
+                <div>
+                  <h3 className="font-semibold mb-2">{aiSuggestion.name}</h3>
+                  <p className="text-sm text-muted-foreground mb-4">{aiSuggestion.description}</p>
+                  {aiSuggestion.confidence > 0 && (
+                    <p className="text-xs text-muted-foreground">
+                      Confidence: {aiSuggestion.confidence}% • Based on {aiSuggestion.totalContacts} contacts
+                    </p>
+                  )}
+                </div>
+
+                {aiSuggestion.stages && aiSuggestion.stages.length > 0 ? (
+                  <div className="space-y-2">
+                    <h4 className="font-medium text-sm">Suggested Stages:</h4>
+                    {aiSuggestion.stages.map((stage: any, index: number) => (
+                    <Card key={index} className="p-3">
+                      <div className="flex items-start justify-between">
+                        <div className="flex-1">
+                          <div className="flex items-center gap-2 mb-1">
+                            <div
+                              className="w-3 h-3 rounded-full"
+                              style={{ backgroundColor: stage.color }}
+                            />
+                            <span className="font-medium">{stage.name}</span>
+                            <span className="text-xs text-muted-foreground">
+                              ({stage.leadScoreMin}-{stage.leadScoreMax})
+                            </span>
+                          </div>
+                          <p className="text-xs text-muted-foreground mb-2">{stage.description}</p>
+                          {stage.expectedContacts > 0 && (
+                            <p className="text-xs text-muted-foreground">
+                              Expected: ~{stage.expectedContacts} contacts
+                            </p>
+                          )}
+                        </div>
+                      </div>
+                    </Card>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="p-4 bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-800 rounded-lg">
+                    <p className="text-sm text-amber-900 dark:text-amber-200">
+                      ⚠️ {aiSuggestion.description || 'No stages can be generated. Contacts need to be analyzed first.'}
+                    </p>
+                    <p className="text-xs text-amber-700 dark:text-amber-300 mt-2">
+                      Please run pipeline analysis on your contacts first, then try generating the pipeline again.
+                    </p>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => {
+                setShowAIGenerator(false);
+                setAiSuggestion(null);
+                setAiStageCount('');
+                setAiDecideStages(true);
+                setPipelineDetailLevel(5);
+                setUseCustomStageCount(false);
+              }}
+            >
+              Cancel
+            </Button>
+            {!aiSuggestion ? (
+              <Button onClick={handleGenerateAI} disabled={aiGenerating}>
+                {aiGenerating ? (
+                  <>
+                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                    Generating...
+                  </>
+                ) : (
+                  <>
+                    <Sparkles className="h-4 w-4 mr-2" />
+                    Generate Pipeline
+                  </>
+                )}
+              </Button>
+            ) : (
+              <Button onClick={handleCreateAIPipeline} disabled={aiGenerating}>
+                {aiGenerating ? (
+                  <>
+                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                    Creating...
+                  </>
+                ) : (
+                  'Create & Assign Pipeline'
+                )}
+              </Button>
+            )}
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

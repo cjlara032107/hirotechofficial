@@ -170,7 +170,6 @@ function parseContentWithMentions(
   }
 
   const parts: Array<{ type: 'text' | 'mention'; text?: string; name?: string; memberId?: string }> = []
-  let remaining = content
 
   // Find @mentions in content
   const mentionRegex = /@(\w+(?:\s+\w+)?)/g

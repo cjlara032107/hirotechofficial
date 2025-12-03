@@ -248,7 +248,100 @@ export async function syncContacts(facebookPageId: string): Promise<SyncResult> 
             });
           }
 
-          // Step 6: Compute best contact times (non-blocking, runs in background)
+          // Step 6: Save messages to database (non-blocking, runs in background)
+          if (messages && messages.length > 0) {
+            (async () => {
+              try {
+                // Find or create conversation
+                const { Platform, MessageStatus } = await import('@prisma/client');
+                let conversation = await prisma.conversation.findFirst({
+                  where: {
+                    contactId: savedContact.id,
+                    platform: Platform.MESSENGER,
+                  },
+                });
+
+                if (!conversation) {
+                  conversation = await prisma.conversation.create({
+                    data: {
+                      contactId: savedContact.id,
+                      facebookPageId: page.id,
+                      platform: Platform.MESSENGER,
+                      status: 'OPEN',
+                      lastMessageAt: new Date(task.updatedTime),
+                    },
+                  });
+                }
+
+                // Prepare messages for bulk insert
+                const messagesToSave = messages
+                  .filter((msg: any) => msg.message && msg.created_time) // Only save messages with content and timestamp
+                  .map((msg: any) => {
+                    const isFromBusiness = msg.from?.id === page.pageId;
+                    const createdAt = new Date(msg.created_time);
+                    
+                    return {
+                      contactId: savedContact.id,
+                      conversationId: conversation.id,
+                      content: msg.message || '[Media]',
+                      platform: Platform.MESSENGER,
+                      facebookMessageId: msg.id,
+                      isFromBusiness,
+                      status: MessageStatus.DELIVERED,
+                      createdAt,
+                      sentAt: createdAt,
+                      deliveredAt: createdAt,
+                    };
+                  });
+
+                // Check which messages already exist (by facebookMessageId) to avoid duplicates
+                if (messagesToSave.length > 0) {
+                  const messageIds = messagesToSave
+                    .map(m => m.facebookMessageId)
+                    .filter((id): id is string => !!id);
+                  
+                  const existingMessages = messageIds.length > 0
+                    ? await prisma.message.findMany({
+                        where: {
+                          facebookMessageId: { in: messageIds },
+                          conversationId: conversation.id,
+                        },
+                        select: { facebookMessageId: true },
+                      })
+                    : [];
+                  
+                  const existingIds = new Set(
+                    existingMessages
+                      .map(m => m.facebookMessageId)
+                      .filter((id): id is string => !!id)
+                  );
+                  
+                  // Filter out messages that already exist
+                  const newMessagesToSave = messagesToSave.filter(
+                    msg => !msg.facebookMessageId || !existingIds.has(msg.facebookMessageId)
+                  );
+                  
+                  // Save messages in batches
+                  if (newMessagesToSave.length > 0) {
+                    const BATCH_SIZE = 100;
+                    for (let i = 0; i < newMessagesToSave.length; i += BATCH_SIZE) {
+                      const batch = newMessagesToSave.slice(i, i + BATCH_SIZE);
+                      await prisma.message.createMany({
+                        data: batch,
+                        skipDuplicates: true,
+                      });
+                    }
+                    console.log(`[Sync] ✅ Saved ${newMessagesToSave.length} new messages for contact ${savedContact.id} (${messagesToSave.length} total, ${existingIds.size} already existed)`);
+                  }
+                }
+              } catch (messageError) {
+                console.error(`[Sync] ⚠️ Failed to save messages for contact ${savedContact.id}:`, messageError instanceof Error ? messageError.message : String(messageError));
+                // Don't fail the whole sync if message saving fails
+              }
+            })();
+          }
+
+          // Step 7: Compute best contact times (non-blocking, runs in background)
           computeAndStoreBestContactTimes(savedContact.id).catch((error) => {
             console.error(`[BestContactTimes] Failed to compute for contact ${savedContact.id}:`, error);
           });

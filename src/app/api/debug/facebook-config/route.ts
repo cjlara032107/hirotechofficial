@@ -1,6 +1,12 @@
 import { NextResponse } from 'next/server';
+import { auth } from '@/auth';
 
 export async function GET() {
+  // Require authentication for security
+  const session = await auth();
+  if (!session?.user) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  }
   const appUrl = process.env.NEXT_PUBLIC_APP_URL;
   const appId = process.env.FACEBOOK_APP_ID;
   const appSecret = process.env.FACEBOOK_APP_SECRET;

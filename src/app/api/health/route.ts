@@ -1,45 +1,46 @@
-import { NextResponse } from 'next/server';
-import { prisma } from '@/lib/db';
+import { NextRequest, NextResponse } from 'next/server';
 
 export const dynamic = 'force-dynamic';
 
-export async function GET() {
-  const checks = {
-    timestamp: new Date().toISOString(),
-    status: 'healthy',
-    services: {
-      database: { status: 'unknown', details: '' },
-      prisma: { status: 'unknown', details: '' },
-      environment: { status: 'unknown', details: '' },
-    },
-    environment: {
-      nodeEnv: process.env.NODE_ENV || 'development',
-      nextVersion: process.env.npm_package_version || 'unknown',
-    },
-    requiredEnvVars: {} as Record<string, boolean>,
-  };
-
-  // Check Database Connection
+export async function GET(request: NextRequest) {
+  const startTime = Date.now();
+  const requestId = `health-${Date.now()}`;
+  
   try {
-    await prisma.$queryRaw`SELECT 1`;
-    checks.services.database.status = 'healthy';
-    checks.services.database.details = 'Database connection successful';
-  } catch (error) {
-    checks.services.database.status = 'unhealthy';
-    checks.services.database.details = error instanceof Error ? error.message : 'Database connection failed';
-    checks.status = 'unhealthy';
-  }
+    console.log(`[Health Check ${requestId}] Starting health check`);
 
-  // Check Prisma Client
-  try {
-    const userCount = await prisma.user.count();
-    checks.services.prisma.status = 'healthy';
-    checks.services.prisma.details = `Prisma client operational (${userCount} users)`;
-  } catch (error) {
-    checks.services.prisma.status = 'unhealthy';
-    checks.services.prisma.details = error instanceof Error ? error.message : 'Prisma client error';
-    checks.status = 'unhealthy';
-  }
+    const checks = {
+      timestamp: new Date().toISOString(),
+      status: 'healthy',
+      services: {
+        database: { status: 'unknown' as const, details: '' },
+        prisma: { status: 'unknown' as const, details: '' },
+        environment: { status: 'unknown' as const, details: '' },
+      },
+      environment: {
+        nodeEnv: process.env.NODE_ENV || 'development',
+        nextVersion: process.env.npm_package_version || 'unknown',
+      },
+      requiredEnvVars: {} as Record<string, boolean>,
+    };
+
+    // Check Database Connection (safe with error handling)
+    try {
+      const { performHealthCheck } = await import('@/lib/health/comprehensive-health-check');
+      const healthResult = await performHealthCheck();
+      
+      checks.services.database.status = healthResult.services.database.status;
+      checks.services.database.details = healthResult.services.database.message;
+      
+      checks.services.prisma.status = healthResult.services.database.status;
+      checks.services.prisma.details = `Database ${healthResult.services.database.status}`;
+    } catch (healthError) {
+      console.warn(`[Health Check ${requestId}] Comprehensive check failed, using fallback`, healthError);
+      checks.services.database.status = 'unknown';
+      checks.services.database.details = 'Health check module unavailable';
+      checks.services.prisma.status = 'unknown';
+      checks.services.prisma.details = 'Health check module unavailable';
+    }
 
   // Check Required Environment Variables
   const requiredVars = [
@@ -90,8 +91,35 @@ export async function GET() {
     response.warnings.push('NEXT_PUBLIC_APP_URL not set - OAuth redirects may fail');
   }
 
-  return NextResponse.json(response, {
+  const httpResponse = NextResponse.json(response, {
     status: checks.status === 'healthy' ? 200 : 503,
   });
+
+    try {
+      logResponse(request, httpResponse, startTime);
+    } catch (logError) {
+      // Non-critical - continue even if logging fails
+      console.warn('[Health] Log response failed:', logError);
+    }
+    
+    return httpResponse;
+  } catch (error) {
+    // Ultimate fallback - return error response if everything fails
+    console.error('[Health] Critical error in health check:', error);
+    return NextResponse.json(
+      {
+        timestamp: new Date().toISOString(),
+        status: 'unhealthy',
+        error: 'Health check failed',
+        message: error instanceof Error ? error.message : 'Unknown error',
+        services: {
+          database: { status: 'unknown', details: 'Health check error' },
+          prisma: { status: 'unknown', details: 'Health check error' },
+          environment: { status: 'unknown', details: 'Health check error' },
+        },
+      },
+      { status: 500 }
+    );
+  }
 }
 

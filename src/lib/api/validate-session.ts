@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+import { auth } from '@/auth';
 
 interface ValidatedSession {
   user: {
@@ -40,5 +41,29 @@ export function validateSession(session: any): { error: NextResponse } | { sessi
   }
 
   return { session: session as ValidatedSession };
+}
+
+/**
+ * Validates session with automatic token refresh handling
+ * This function fetches the session and validates it in one call
+ * Use this as the standard way to validate sessions in API routes
+ * 
+ * @returns Validated session or error response
+ */
+export async function requireAuth(): Promise<{ error: NextResponse } | { session: ValidatedSession }> {
+  try {
+    const session = await auth();
+    return validateSession(session);
+  } catch (error) {
+    console.error('[requireAuth] Error fetching session:', error);
+    // If there's an error fetching the session (e.g., token expired, invalid token),
+    // return 401 Unauthorized
+    return {
+      error: NextResponse.json(
+        { error: 'Session expired or invalid. Please log in again.' },
+        { status: 401 }
+      ),
+    };
+  }
 }
 

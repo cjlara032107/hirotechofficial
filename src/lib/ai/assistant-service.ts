@@ -1,8 +1,9 @@
 import OpenAI from 'openai';
 import { prisma } from '@/lib/db';
 import apiKeyManager from './api-key-manager';
+import { executeAIRequest, getTimeoutForOperation, getPriorityForOperation } from './ai-request-wrapper';
 
-const MODEL = 'openai/gpt-oss-20b';
+const MODEL = 'openai/gpt-oss-120b'; // 120B parameters for better reasoning
 const BASE_URL = 'https://integrate.api.nvidia.com/v1';
 
 // Get API key from database first, then fall back to environment variables
@@ -399,8 +400,8 @@ export async function processAssistantMessage(
   userId: string,
   chatHistory: Array<{ role: 'user' | 'assistant'; content: string }> = []
 ): Promise<{ response: string; sources?: string[] }> {
-  const startTime = Date.now();
-  const apiKey = await getApiKey({ operation: 'processAssistantMessage', userId });
+  const operation = 'processAssistantMessage';
+  const apiKey = await getApiKey({ operation, userId });
   if (!apiKey) {
     throw new Error('No NVIDIA API key available. Please configure an API key in Settings → API Keys or set NVIDIA_API_KEY environment variable.');
   }
@@ -451,39 +452,51 @@ Important guidelines:
   const client = createNvidiaClient(apiKey);
 
   try {
-    const completion = await client.chat.completions.create({
-      model: MODEL,
-      messages: messages as any,
-      temperature: 0.7,
-      max_tokens: 2000,
-    });
+    const result = await executeAIRequest(
+      async () => {
+        const completion = await client.chat.completions.create({
+          model: MODEL,
+          messages: messages as any,
+          temperature: 0.7,
+          max_tokens: 2000,
+        });
 
-    const response = completion.choices[0]?.message?.content;
-    if (!response) {
-      throw new Error('No response from AI model');
-    }
+        const response = completion.choices[0]?.message?.content;
+        if (!response) {
+          throw new Error('No response from AI model');
+        }
 
-    // Extract sources from context
-    const sources: string[] = [];
-    if (context.contacts.recent.length > 0) sources.push('contacts');
-    if (context.pipelines.length > 0) sources.push('pipelines');
-    if (context.campaigns.recent.length > 0) sources.push('campaigns');
-    if (context.conversations.recent.length > 0) sources.push('conversations');
+        // Extract sources from context
+        const sources: string[] = [];
+        if (context.contacts.recent.length > 0) sources.push('contacts');
+        if (context.pipelines.length > 0) sources.push('pipelines');
+        if (context.campaigns.recent.length > 0) sources.push('campaigns');
+        if (context.conversations.recent.length > 0) sources.push('conversations');
 
-    // Record success with duration
-    const duration = Date.now() - startTime;
+        return {
+          response,
+          sources,
+        };
+      },
+      {
+        operation,
+        priority: getPriorityForOperation(operation, true), // User-initiated = high priority
+        timeout: getTimeoutForOperation(operation),
+        circuitBreaker: 'assistantMessage',
+        apiKeyId: apiKey.substring(0, 16),
+      }
+    );
+
+    // Record success
     await apiKeyManager.recordSuccess(apiKey, { 
-      operation: 'processAssistantMessage',
-      duration 
+      operation,
     }).catch(() => {
       // Non-critical if recording fails
     });
 
-    return {
-      response,
-      sources,
-    };
+    return result;
   } catch (error) {
+    // Error already logged by performance monitor
     console.error('[Assistant] Error processing message:', error);
     throw error;
   }

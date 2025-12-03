@@ -1,4 +1,5 @@
 import { prisma } from '@/lib/db';
+import { getPrismaForOrg } from '@/lib/db/get-prisma-for-org';
 import { Prisma } from '@prisma/client';
 import { FacebookClient } from '@/lib/facebook/client';
 import { formatUserFriendlyError } from '@/lib/facebook/error-messages';
@@ -16,6 +17,7 @@ async function sendMessageDirect(data: {
   recipientId: string | null;
   mediaUrl?: string | null;
   mediaType?: 'image' | 'video' | null;
+  organizationId: string;
 }): Promise<{ success: boolean; error?: string; message?: string; code?: number; type?: string }> {
   const {
     campaignId,
@@ -27,14 +29,18 @@ async function sendMessageDirect(data: {
     recipientId,
     mediaUrl,
     mediaType,
+    organizationId,
   } = data;
+
+  // Use multi-DB routing for all database operations
+  const db = getPrismaForOrg(organizationId);
 
   // Validate recipientId before attempting to send
   if (!recipientId) {
     const error = `No recipient ID (PSID) available for contact`;
-    console.error(error, { contactId, platform });
+    console.error(error, { contactId, platform, organizationId });
     
-    await prisma.message.create({
+    await db.message.create({
       data: {
         content,
         platform: platform as any,
@@ -128,7 +134,7 @@ async function sendMessageDirect(data: {
     }
 
     if (result.success) {
-      await prisma.message.create({
+      await db.message.create({
         data: {
           content: content || (mediaUrl ? `[${mediaType}]` : ''),
           platform: platform as any,
@@ -148,7 +154,7 @@ async function sendMessageDirect(data: {
 
       // Update sentCount atomically
       try {
-        await prisma.campaign.update({
+        await db.campaign.update({
           where: { id: campaignId },
           data: { sentCount: { increment: 1 } },
         });
@@ -157,7 +163,7 @@ async function sendMessageDirect(data: {
         console.error(`Failed to update sentCount for campaign ${campaignId}:`, error);
       }
 
-      await prisma.contactActivity.create({
+      await db.contactActivity.create({
         data: {
           contactId,
           type: 'CAMPAIGN_SENT',
@@ -185,7 +191,7 @@ async function sendMessageDirect(data: {
       // SECURITY: Sanitize error message before storing in database
       const sanitizedErrorMessage = formatUserFriendlyError(errorMessage);
       
-      await prisma.message.create({
+      await db.message.create({
         data: {
           content,
           platform: platform as any,
@@ -201,7 +207,7 @@ async function sendMessageDirect(data: {
 
       // Update failedCount atomically
       try {
-        await prisma.campaign.update({
+        await db.campaign.update({
           where: { id: campaignId },
           data: { failedCount: { increment: 1 } },
         });
@@ -216,7 +222,7 @@ async function sendMessageDirect(data: {
       // SECURITY: Sanitize error message before storing in database
       const sanitizedErrorMessage = formatUserFriendlyError(error);
       
-      await prisma.message.create({
+      await db.message.create({
         data: {
           content,
           platform: platform as any,
@@ -232,7 +238,7 @@ async function sendMessageDirect(data: {
 
     // Update failedCount atomically
     try {
-      await prisma.campaign.update({
+      await db.campaign.update({
         where: { id: campaignId },
         data: { failedCount: { increment: 1 } },
       });
@@ -261,6 +267,7 @@ async function sendMessagesInBackground(
     recipientId: string | null;
     mediaUrl?: string | null;
     mediaType?: 'image' | 'video' | null;
+    organizationId: string;
   }>
 ): Promise<void> {
   if (!messages || messages.length === 0) {
@@ -269,7 +276,29 @@ async function sendMessagesInBackground(
   }
 
   const campaignId = messages[0].campaignId;
-  console.log(`🚀 Starting fast parallel sending for ${messages.length} messages (Campaign: ${campaignId})`);
+  const organizationId = messages[0].organizationId;
+  console.log(`🚀 Starting fast parallel sending for ${messages.length} messages (Campaign: ${campaignId}, Org: ${organizationId})`);
+
+  // Use multi-DB routing for all background operations
+  const db = getPrismaForOrg(organizationId);
+
+  // Log routed DB
+  if (process.env.ENABLE_MULTI_DB === 'true') {
+    try {
+      const { getDatabaseRouter } = await import('@/lib/db/multi-db-router');
+      const router = getDatabaseRouter();
+      const client = router.getClient(organizationId);
+      const dbConfig = router.getAllDatabaseConfigs().find(c => c.client === client);
+      console.log('[Campaign Background Send] Routed DB', {
+        campaignId,
+        organizationId,
+        dbIndex: dbConfig?.index,
+        dbUrlHost: dbConfig ? new URL(dbConfig.url).hostname : 'unknown',
+      });
+    } catch (err) {
+      console.warn('[Campaign Background Send] Could not log DB routing details:', err);
+    }
+  }
 
   // Process messages asynchronously without blocking the API response
   // Use Promise.resolve().then() to ensure this runs asynchronously
@@ -295,7 +324,7 @@ async function sendMessagesInBackground(
         const totalBatches = Math.ceil(messages.length / BATCH_SIZE);
         
         // Check if campaign has been paused or cancelled before each batch
-        const currentCampaign = await prisma.campaign.findUnique({
+        const currentCampaign = await db.campaign.findUnique({
           where: { id: campaignId },
           select: { status: true },
         });
@@ -436,7 +465,7 @@ async function sendMessagesInBackground(
       
       while (retryCount < maxRetries) {
         try {
-          const finalCampaign = await prisma.campaign.findUnique({
+          const finalCampaign = await db.campaign.findUnique({
             where: { id: campaignId },
             select: { status: true, sentCount: true, totalRecipients: true, failedCount: true },
           });
@@ -465,12 +494,12 @@ async function sendMessagesInBackground(
           // This prevents campaigns from getting stuck
           if (finalCampaign.status === 'SENDING') {
             // Get campaign with media info before updating
-            const campaignWithMedia = await prisma.campaign.findUnique({
+            const campaignWithMedia = await db.campaign.findUnique({
               where: { id: campaignId },
               select: { mediaUrl: true, mediaType: true },
             });
             
-            const updateResult = await prisma.campaign.update({
+            const updateResult = await db.campaign.update({
               where: { id: campaignId },
               data: { 
                 status: 'COMPLETED',

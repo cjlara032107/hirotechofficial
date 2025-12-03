@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { auth } from '@/auth';
 import { prisma } from '@/lib/db';
 import { startBackgroundSync } from '@/lib/facebook/background-sync';
+import { validateUUID } from '@/lib/api/validate-uuid';
 
 export async function POST(request: NextRequest) {
   try {
@@ -20,10 +21,33 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    // Validate facebookPageId is valid UUID format
+    if (typeof facebookPageId !== 'string') {
+      return NextResponse.json(
+        { error: 'facebookPageId must be a string' },
+        { status: 400 }
+      );
+    }
+
+    const trimmedFacebookPageId = facebookPageId.trim();
+    if (trimmedFacebookPageId.length === 0) {
+      return NextResponse.json(
+        { error: 'facebookPageId cannot be empty' },
+        { status: 400 }
+      );
+    }
+    const uuidValidation = validateUUID(trimmedFacebookPageId);
+    if (uuidValidation?.error) {
+      return NextResponse.json(
+        { error: uuidValidation.error.message },
+        { status: uuidValidation.error.status }
+      );
+    }
+
     // Verify the page belongs to the user's organization
     const page = await prisma.facebookPage.findFirst({
       where: {
-        id: facebookPageId,
+        id: trimmedFacebookPageId,
         organizationId: session.user.organizationId,
       },
     });
@@ -35,24 +59,26 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const result = await startBackgroundSync(facebookPageId);
+    const result = await startBackgroundSync(trimmedFacebookPageId);
     
     // CRITICAL: Use Vercel's waitUntil to keep the function alive for background tasks
     // This ensures the background promise continues executing after the response is sent
     if ('waitUntil' in request) {
       // Store the background promise and wait for it
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const backgroundPromise = (globalThis as any).__activeSyncPromises?.values().next().value;
       if (backgroundPromise) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         (request as any).waitUntil(backgroundPromise);
       }
     }
 
     return NextResponse.json(result);
   } catch (error) {
-    const errorMessage = error instanceof Error ? error.message : 'Failed to start sync';
     console.error('Background sync error:', error);
+    // SECURITY: Sanitize error messages to prevent sensitive data exposure
     return NextResponse.json(
-      { error: errorMessage },
+      { error: 'Failed to start sync. Please try again.' },
       { status: 500 }
     );
   }

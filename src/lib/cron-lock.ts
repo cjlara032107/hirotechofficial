@@ -5,7 +5,9 @@
 
 import { prisma } from './db';
 
-const CONNECTION_TIMEOUT_MS = 2000; // 2 seconds - short timeout to fail fast but allow for connection acquisition
+// Increase timeout for Vercel serverless (cold starts, network latency)
+const isVercel = process.env.VERCEL === '1' || process.env.NEXT_PUBLIC_VERCEL_ENV;
+const CONNECTION_TIMEOUT_MS = isVercel ? 5000 : 2000; // 5s for Vercel, 2s for traditional
 
 /**
  * Check if database connection is available quickly
@@ -61,6 +63,7 @@ export function getCronStaggerDelay(lockName: string): number {
   const delays: Record<string, number> = {
     'send-scheduled': 0, // Run first
     'ai-automations': 30000, // Run 30 seconds later
+    'pipeline-updates': 60000, // Run 60 seconds later (after ai-automations)
   };
   
   const baseDelay = delays[lockName] || 0;

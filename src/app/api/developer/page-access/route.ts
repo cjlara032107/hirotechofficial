@@ -29,6 +29,7 @@ export async function GET() {
         pagePath: 'asc',
       },
     });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const pageAccesses = allPageAccesses.filter((pa: any) => pa.userId === session.user.id);
 
     return NextResponse.json(pageAccesses);
@@ -97,6 +98,7 @@ export async function POST(request: NextRequest) {
     });
 
     // Check if this existing record belongs to the current user
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const userOwnsRecord = existing && (existing as any).userId === session.user.id;
     
     const pageAccess = userOwnsRecord
@@ -109,6 +111,7 @@ export async function POST(request: NextRequest) {
             userId: session.user.id,
             pagePath: pagePath,
             isEnabled,
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
           } as any, // Type assertion needed until Prisma types are regenerated
         });
 

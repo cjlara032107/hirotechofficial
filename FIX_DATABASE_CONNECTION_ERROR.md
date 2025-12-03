@@ -138,3 +138,15 @@ For Supabase, make sure you're using the correct connection strings:
 
 
 
+
+
+
+
+
+
+
+
+
+
+
+

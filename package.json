@@ -5,37 +5,10 @@
   "scripts": {
     "dev": "next dev",
     "build": "npx --yes prisma@6.19.0 generate && next build",
+    "vercel-build": "npx --yes prisma@6.19.0 generate && next build",
     "start": "next start",
-    "lint": "eslint",
-    "test": "jest",
-    "test:watch": "jest --watch",
-    "clean-prisma": "rimraf node_modules/.prisma node_modules/@prisma",
-    "prisma:generate": "prisma generate",
-    "prisma:push": "prisma db push",
-    "prisma:studio": "prisma studio",
-    "postinstall": "npx prisma@6.19.0 generate || echo 'Prisma generate will run during build'",
-    "reset": "npm run clean-prisma && npm install && npm run prisma:push",
-    "diagnose": "tsx scripts/diagnose.ts",
-    "fix:campaigns": "npx tsx scripts/fix-stuck-campaigns.ts",
-    "check:keys": "npx tsx scripts/check-which-keys-exist.ts",
-    "add:missing-keys": "npx tsx scripts/add-missing-keys.ts",
-    "test:keys": "npx tsx scripts/test-nvidia-keys.ts",
-    "validate:env": "npx tsx scripts/validate-env-and-credentials.ts",
-    "test:redis": "npx tsx scripts/test-redis-connection.ts",
-    "verify:migrations": "npx tsx scripts/verify-database-migrations.ts",
-    "verify:webhook": "npx tsx scripts/verify-facebook-webhook.ts",
-    "verify:monitoring": "npx tsx scripts/verify-error-monitoring.ts",
-    "verify:db-pool": "npx tsx scripts/verify-db-pool-settings.ts",
-    "verify:all": "npm run verify:migrations && npm run test:redis && npm run verify:webhook && npm run verify:monitoring",
-    "check:rate-limit": "npx tsx scripts/check-rate-limiting.ts",
-    "validate:timeouts": "npx tsx scripts/validate-timeout-settings.ts",
-    "backup:db": "npx tsx scripts/backup-database.ts",
-    "restore:db": "npx tsx scripts/restore-database.ts",
-    "cleanup:db": "npx tsx scripts/cleanup-database.ts",
-    "vercel-build": "prisma generate && (prisma migrate deploy || prisma db push --accept-data-loss) && next build",
-    "ngrok:start": "node scripts/start-ngrok.js",
-    "ngrok:stop": "node scripts/stop-ngrok.js",
-    "dev:with-ngrok": "concurrently \"npm run dev\" \"npm run ngrok:start\""
+    "lint": "next lint",
+    "postinstall": "npx prisma@6.19.0 generate || echo 'Prisma generate will run during build'"
   },
   "dependencies": {
     "@auth/prisma-adapter": "^2.11.1",
@@ -71,6 +44,8 @@
     "@tiptap/react": "^3.10.5",
     "@tiptap/starter-kit": "^3.10.5",
     "@types/bcrypt": "^6.0.0",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
     "axios": "^1.13.2",
     "bcrypt": "^6.0.0",
     "bullmq": "^5.65.0",
@@ -101,9 +76,7 @@
     "tw-animate-css": "^1.4.0",
     "typescript": "^5",
     "use-debounce": "^10.0.6",
-    "zod": "^4.1.12",
-    "@types/react": "^19",
-    "@types/react-dom": "^19"
+    "zod": "^4.1.12"
   },
   "devDependencies": {
     "@testing-library/dom": "^10.4.1",
@@ -119,8 +92,10 @@
     "jest": "^29.7.0",
     "jest-environment-jsdom": "^30.2.0",
     "jest-environment-node": "^29.7.0",
+    "ngrok": "^5.0.0-beta.2",
     "rimraf": "^6.1.0",
     "ts-jest": "^29.2.5",
     "tsx": "^4.19.2"
   }
 }
+

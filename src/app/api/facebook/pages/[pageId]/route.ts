@@ -50,7 +50,7 @@ export async function PATCH(
     }
 
     const body = await request.json();
-    const { autoPipelineId, autoPipelineMode } = body;
+    const { autoPipelineId, autoPipelineMode, autoSync } = body;
 
     // Verify page belongs to user's organization
     const page = await prisma.facebookPage.findFirst({
@@ -64,13 +64,31 @@ export async function PATCH(
       return NextResponse.json({ error: 'Page not found' }, { status: 404 });
     }
 
-    // Update settings (null for autoPipelineId disables auto-assignment)
+    // Build update data object conditionally
+    const updateData: {
+      autoPipelineId?: string | null;
+      autoPipelineMode?: 'SKIP_EXISTING' | 'UPDATE_EXISTING';
+      autoSync?: boolean;
+    } = {};
+
+    if (autoPipelineId !== undefined) {
+      updateData.autoPipelineId = autoPipelineId === null || autoPipelineId === 'none' ? null : autoPipelineId;
+    }
+    if (autoPipelineMode !== undefined) {
+      updateData.autoPipelineMode = (autoPipelineMode || 'SKIP_EXISTING') as 'SKIP_EXISTING' | 'UPDATE_EXISTING';
+    }
+    if (autoSync !== undefined) {
+      updateData.autoSync = Boolean(autoSync);
+    }
+
+    // Update settings - only update if we have data to update
+    if (Object.keys(updateData).length === 0) {
+      return NextResponse.json(page);
+    }
+
     const updated = await prisma.facebookPage.update({
       where: { id: pageId },
-      data: {
-        autoPipelineId: autoPipelineId === null || autoPipelineId === 'none' ? null : autoPipelineId,
-        autoPipelineMode: autoPipelineMode || 'SKIP_EXISTING'
-      }
+      data: updateData
     });
 
     return NextResponse.json(updated);

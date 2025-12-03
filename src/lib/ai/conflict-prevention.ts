@@ -1,9 +1,11 @@
 /**
  * Conflict Prevention Utilities for AI Automations
  * Prevents conflicts with Campaigns, Pipelines, and Team activities
+ * All time operations use Philippine Time (PHT, UTC+8)
  */
 
 import { prisma } from '@/lib/db';
+import { nowPHT, getHoursMinutesPHT, createDatePHT } from '@/lib/utils/timezone';
 
 /**
  * Check if contact is currently in an active campaign
@@ -261,6 +263,7 @@ export async function isContactEligibleForAutomation(
 /**
  * Get safe send time window
  * Returns current time if within safe window, or next safe time
+ * All times are in Philippine Time (PHT, UTC+8)
  */
 export function getSafeSendTimeWindow(
   activeHoursStart: number,
@@ -274,8 +277,9 @@ export function getSafeSendTimeWindow(
     return { canSendNow: true };
   }
 
-  const now = new Date();
-  const currentHour = now.getHours();
+  const now = nowPHT();
+  const currentTime = getHoursMinutesPHT(now);
+  const currentHour = currentTime.hour;
 
   // Normal time range (e.g., 9 AM - 9 PM)
   if (activeHoursEnd > activeHoursStart) {
@@ -285,15 +289,16 @@ export function getSafeSendTimeWindow(
       return { canSendNow: true };
     }
 
-    // Calculate next safe time
-    const nextSafe = new Date(now);
+    // Calculate next safe time in PHT
+    let nextSafe: Date;
     if (currentHour >= activeHoursEnd) {
       // After end time, wait until tomorrow's start time
-      nextSafe.setDate(nextSafe.getDate() + 1);
-      nextSafe.setHours(activeHoursStart, 0, 0, 0);
+      const tomorrow = new Date(now);
+      tomorrow.setDate(tomorrow.getDate() + 1);
+      nextSafe = createDatePHT(activeHoursStart, 0, tomorrow);
     } else {
       // Before start time, wait until today's start time
-      nextSafe.setHours(activeHoursStart, 0, 0, 0);
+      nextSafe = createDatePHT(activeHoursStart, 0, now);
     }
 
     return {
@@ -309,9 +314,8 @@ export function getSafeSendTimeWindow(
     return { canSendNow: true };
   }
 
-  // Calculate next safe time
-  const nextSafe = new Date(now);
-  nextSafe.setHours(activeHoursStart, 0, 0, 0);
+  // Calculate next safe time in PHT
+  const nextSafe = createDatePHT(activeHoursStart, 0, now);
 
   return {
     canSendNow: false,

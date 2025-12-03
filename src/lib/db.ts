@@ -1,32 +1,42 @@
 import { PrismaClient } from '@prisma/client';
+import { systemMonitor } from './monitoring/system-monitor';
 
+// Check if multi-DB is enabled
+const ENABLE_MULTI_DB = process.env.ENABLE_MULTI_DB === 'true';
+const DB_COUNT = parseInt(process.env.DB_COUNT || '1', 10);
+
+// Single database implementation (existing code)
 const prismaClientSingleton = () => {
-  // Enhance DATABASE_URL with connection pool settings if not already present
   let databaseUrl = process.env.DATABASE_URL || '';
   
-  // Add connection pool parameters if using Supabase pooler
   if (databaseUrl.includes('pooler.supabase.com') && !databaseUrl.includes('connection_limit')) {
     const separator = databaseUrl.includes('?') ? '&' : '?';
-    
-    // OPTIMIZED: For Vercel/serverless, use connection_limit=5
-    // This allows multiple concurrent queries per function instance without exhausting the pool
-    // Supabase pooler can handle 60-200 connections (depending on tier), so 5 per instance is safe
-    // Previous limit of 1 was causing timeouts when multiple queries ran concurrently
     const isVercel = process.env.VERCEL === '1' || process.env.NEXT_PUBLIC_VERCEL_ENV;
-    const connectionLimit = isVercel ? 5 : 10; // 5 for serverless (allows concurrent queries), 10 for traditional servers
+    const connectionLimit = isVercel ? 20 : 30; // Increased from 10/15 to 20/30
+    // Increase timeouts for Vercel serverless (cold starts, network latency)
+    const poolTimeout = isVercel ? 60 : 90; // 60s for Vercel, 90s for traditional
+    const connectTimeout = isVercel ? 60 : 30; // 60s for Vercel, 30s for traditional
     
-    // pool_timeout: 90 - gives more time to get a connection under high load
-    // connect_timeout: 30 - more time for initial connection
-    // statement_cache_size: 0 - disable statement caching to reduce memory usage
-    databaseUrl = `${databaseUrl}${separator}connection_limit=${connectionLimit}&pool_timeout=90&connect_timeout=30&statement_cache_size=0`;
+    databaseUrl = `${databaseUrl}${separator}connection_limit=${connectionLimit}&pool_timeout=${poolTimeout}&connect_timeout=${connectTimeout}&statement_cache_size=0`;
     
-    console.log(`[Prisma] 🔧 Connection pool settings (${isVercel ? 'Vercel/serverless' : 'traditional server'}):`);
-    console.log(`[Prisma]   - connection_limit: ${connectionLimit} ${isVercel ? '(serverless - pooler handles pooling)' : ''}`);
-    console.log(`[Prisma]   - pool_timeout: 90s`);
-    console.log(`[Prisma]   - connect_timeout: 30s`);
+    // Extract host for logging (mask credentials)
+    let dbHost = 'unknown';
+    try {
+      const urlMatch = databaseUrl.match(/postgresql:\/\/[^@]*@([^\/]+)/);
+      dbHost = urlMatch ? urlMatch[1] : 'unknown';
+    } catch {
+      // Ignore
+    }
+    
+    console.log(`[DB Pool] 🔧 Single-DB mode initialized`);
+    console.log(`[DB Pool]   - Environment: ${isVercel ? 'Vercel/serverless' : 'traditional server'}`);
+    console.log(`[DB Pool]   - Host: ${dbHost}`);
+    console.log(`[DB Pool]   - connection_limit: ${connectionLimit}`);
+    console.log(`[DB Pool]   - pool_timeout: ${poolTimeout}s`);
+    console.log(`[DB Pool]   - connect_timeout: ${connectTimeout}s`);
   }
   
-  return new PrismaClient({
+  const client = new PrismaClient({
     log: process.env.NODE_ENV === 'development' ? ['warn', 'error'] : ['error'],
     datasources: {
       db: {
@@ -34,6 +44,54 @@ const prismaClientSingleton = () => {
       },
     },
   });
+
+  // Track queries
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  client.$on('query' as any, (e: any) => {
+    const query = e.query || '';
+    const duration = e.duration || 0;
+    
+    let model: string | undefined;
+    let action: string | undefined;
+    
+    const modelPatterns = [
+      /FROM\s+"?(\w+)"?/i,
+      /INTO\s+"?(\w+)"?/i,
+      /UPDATE\s+"?(\w+)"?/i,
+      /JOIN\s+"?(\w+)"?/i,
+    ];
+    
+    for (const pattern of modelPatterns) {
+      const match = query.match(pattern);
+      if (match) {
+        model = match[1];
+        break;
+      }
+    }
+    
+    const actionMatch = query.match(/^\s*(\w+)/i);
+    if (actionMatch) {
+      action = actionMatch[1].toUpperCase();
+    }
+    
+    systemMonitor.recordDatabaseQuery({
+      query: query.substring(0, 500),
+      duration,
+      model,
+      action,
+      timestamp: Date.now(),
+      success: true,
+    });
+
+    if (process.env.NODE_ENV === 'development' && duration > 2000) {
+      console.warn(
+        `[Prisma] ⚠️ Slow query (${duration}ms):`,
+        query.substring(0, 150) || 'N/A'
+      );
+    }
+  });
+
+  return client;
 };
 
 declare global {
@@ -41,32 +99,125 @@ declare global {
   var prismaConnectionPromise: undefined | Promise<void>;
 }
 
-const prismaClient = globalThis.prismaGlobal ?? prismaClientSingleton();
+if (!globalThis.prismaGlobal) {
+  globalThis.prismaGlobal = prismaClientSingleton();
+}
 
-// Ensure Prisma is connected before use (critical for serverless environments)
-// In serverless, connections can be lost between requests, so we need to reconnect
+const prismaClient = globalThis.prismaGlobal;
+
 let connectionPromise: Promise<void> | undefined;
 let connectionState: 'idle' | 'connecting' | 'connected' = 'idle';
 
+// Pool usage tracking for alerting
+interface PoolUsageMetrics {
+  failureCount: number;
+  lastFailureTime: number;
+  consecutiveTimeouts: number;
+  p2024Count: number;
+  lastAlertTime: number;
+}
+
+const poolMetrics: PoolUsageMetrics = {
+  failureCount: 0,
+  lastFailureTime: 0,
+  consecutiveTimeouts: 0,
+  p2024Count: 0,
+  lastAlertTime: 0,
+};
+
+// Alert thresholds
+const POOL_ALERT_THRESHOLD = 5; // Alert after 5 failures in window
+const POOL_ALERT_WINDOW_MS = 5 * 60 * 1000; // 5 minute window
+const POOL_ALERT_COOLDOWN_MS = 10 * 60 * 1000; // 10 minute cooldown between alerts
+
+/**
+ * Check pool usage metrics and trigger alerts if thresholds exceeded
+ */
+async function checkPoolUsageAndAlert(errorCode?: string, dbIndex?: number) {
+  const now = Date.now();
+  
+  // Track P2024 errors specifically
+  if (errorCode === 'P2024') {
+    poolMetrics.p2024Count++;
+  }
+  
+  // Reset counters if outside the alert window
+  if (now - poolMetrics.lastFailureTime > POOL_ALERT_WINDOW_MS) {
+    poolMetrics.failureCount = 0;
+    poolMetrics.consecutiveTimeouts = 0;
+    poolMetrics.p2024Count = 0;
+  }
+  
+  poolMetrics.failureCount++;
+  poolMetrics.lastFailureTime = now;
+  
+  if (errorCode === 'P2024' || errorCode?.includes('timeout')) {
+    poolMetrics.consecutiveTimeouts++;
+  }
+  
+  // Calculate estimated pool usage percentage (rough heuristic)
+  const connectionLimit = parseInt(
+    process.env.DATABASE_URL?.match(/connection_limit=(\d+)/)?.[1] || '15',
+    10
+  );
+  const estimatedUsagePercent = Math.min(
+    100,
+    (poolMetrics.failureCount / POOL_ALERT_THRESHOLD) * 80
+  );
+  
+  // Log pool usage warning if high
+  if (estimatedUsagePercent >= 80) {
+    const dbContext = dbIndex !== undefined ? ` (DB index: ${dbIndex})` : '';
+    console.warn(
+      `[DB Pool] ⚠️ High pool usage detected${dbContext}:`,
+      `\n  - Estimated usage: ~${estimatedUsagePercent.toFixed(0)}%`,
+      `\n  - Failures in window: ${poolMetrics.failureCount}`,
+      `\n  - P2024 errors: ${poolMetrics.p2024Count}`,
+      `\n  - Consecutive timeouts: ${poolMetrics.consecutiveTimeouts}`,
+      `\n  - Connection limit: ${connectionLimit}`
+    );
+  }
+  
+  // Trigger alert if threshold exceeded and not in cooldown
+  if (
+    poolMetrics.failureCount >= POOL_ALERT_THRESHOLD &&
+    now - poolMetrics.lastAlertTime > POOL_ALERT_COOLDOWN_MS
+  ) {
+    poolMetrics.lastAlertTime = now;
+    
+    const dbContext = dbIndex !== undefined ? ` on DB ${dbIndex}` : '';
+    console.error(
+      `[DB Pool] 🚨 ALERT: Pool exhaustion threshold exceeded${dbContext}`,
+      `\n  - Failures in last ${POOL_ALERT_WINDOW_MS / 1000}s: ${poolMetrics.failureCount}`,
+      `\n  - P2024 errors: ${poolMetrics.p2024Count}`,
+      `\n  - Connection limit: ${connectionLimit}`,
+      `\n  - Recommended: Check connection pooling config and Supabase pooler URLs`
+    );
+    
+    try {
+      const { alertDatabasePoolExhaustion } = await import('@/lib/alerts/alert-service');
+      await alertDatabasePoolExhaustion(connectionLimit, connectionLimit);
+    } catch (alertError) {
+      console.warn(`[DB Pool] Failed to send alert notification:`, alertError);
+    }
+  }
+}
+
 async function ensurePrismaConnected() {
-  // If already connected, return immediately
   if (connectionState === 'connected') {
     return;
   }
 
-  // If connection is in progress, wait for it
   if (connectionState === 'connecting' && connectionPromise) {
     try {
       await connectionPromise;
       return;
     } catch (error) {
-      // Connection failed, reset and retry
       connectionState = 'idle';
       connectionPromise = undefined;
     }
   }
 
-  // Start new connection
   connectionState = 'connecting';
   connectionPromise = prismaClient.$connect()
     .then(() => {
@@ -80,83 +231,167 @@ async function ensurePrismaConnected() {
       console.error('[Prisma] ❌ Connection error:', error);
       connectionState = 'idle';
       connectionPromise = undefined;
+      if (error?.message?.includes('forcibly closed') || 
+          error?.message?.includes('ConnectionReset') ||
+          error?.message?.includes('Server has closed the connection')) {
+        prismaClient.$disconnect().catch(() => {});
+      }
       throw error;
     });
 
   return connectionPromise;
 }
 
-// Helper to ensure connection before queries (call at start of API routes)
-// Includes retry logic for transient connection failures (P1001 errors)
-export async function connectPrisma(maxRetries = 3, retryDelay = 1000) {
+async function connectPrismaSingle(maxRetries = 3, retryDelay = 1000) {
   let lastError: unknown;
+  const connectionId = `conn-${Date.now()}`;
+  
+  // Extract DB info for logging
+  const connectionLimit = parseInt(
+    process.env.DATABASE_URL?.match(/connection_limit=(\d+)/)?.[1] || '15',
+    10
+  );
+  let dbHost = 'unknown';
+  try {
+    const urlMatch = process.env.DATABASE_URL?.match(/postgresql:\/\/[^@]*@([^\/]+)/);
+    dbHost = urlMatch ? urlMatch[1] : 'unknown';
+  } catch {
+    // Ignore
+  }
+  
+  console.log(
+    `[DB Pool] Attempting connection (maxRetries: ${maxRetries})`,
+    `\n  - Connection ID: ${connectionId}`,
+    `\n  - Host: ${dbHost}`,
+    `\n  - Connection limit: ${connectionLimit}`
+  );
   
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
-  try {
-    await ensurePrismaConnected();
-      // Connection successful
+    const attemptStartTime = Date.now();
+    try {
+      console.log(`[DB Pool] [${connectionId}] Attempt ${attempt}/${maxRetries} - Connecting...`);
+      await ensurePrismaConnected();
+      const attemptDuration = Date.now() - attemptStartTime;
+      
+      // Reset metrics on successful connection
+      poolMetrics.consecutiveTimeouts = 0;
+      
       if (attempt > 1) {
-        console.log(`[Prisma] ✅ Connected after ${attempt} attempt(s)`);
+        console.log(`[DB Pool] [${connectionId}] ============================================`);
+        console.log(`[DB Pool] [${connectionId}] ✅ CONNECTED AFTER ${attempt} ATTEMPT(S)`);
+        console.log(`[DB Pool] [${connectionId}]   - Duration: ${attemptDuration}ms`);
+        console.log(`[DB Pool] [${connectionId}]   - Host: ${dbHost}`);
+        console.log(`[DB Pool] [${connectionId}]   - Connection State: ${connectionState}`);
+        console.log(`[DB Pool] [${connectionId}] ============================================`);
+      } else {
+        console.log(`[DB Pool] [${connectionId}] ✅ Connected successfully in ${attemptDuration}ms`);
       }
       return;
     } catch (error: unknown) {
       lastError = error;
+      const attemptDuration = Date.now() - attemptStartTime;
       const errorObj = error as { code?: string; message?: string };
       
-      // Check if it's a connection error (P1001) or pool exhaustion (P2024)
       const isConnectionError = errorObj?.code === 'P1001' || 
         errorObj?.code === 'P2024' ||
         errorObj?.message?.includes("Can't reach database") ||
         errorObj?.message?.includes('connection') ||
         errorObj?.message?.includes('pool') ||
-        errorObj?.message?.includes('timeout');
+        errorObj?.message?.includes('timeout') ||
+        errorObj?.message?.includes('forcibly closed') ||
+        errorObj?.message?.includes('ConnectionReset') ||
+        errorObj?.message?.includes('Server has closed the connection');
       
-      // If it's not a connection error or we've exhausted retries, throw immediately
+      const isPoolError = errorObj?.code === 'P2024' || errorObj?.message?.includes('pool');
+      const isTimeout = errorObj?.message?.includes('timeout');
+      
+      console.error(`[DB Pool] [${connectionId}] ============================================`);
+      console.error(`[DB Pool] [${connectionId}] ❌ CONNECTION ATTEMPT ${attempt}/${maxRetries} FAILED`);
+      console.error(`[DB Pool] [${connectionId}]   - Duration: ${attemptDuration}ms`);
+      console.error(`[DB Pool] [${connectionId}]   - Host: ${dbHost}`);
+      console.error(`[DB Pool] [${connectionId}]   - Error Code: ${errorObj?.code || 'N/A'}`);
+      console.error(`[DB Pool] [${connectionId}]   - Error Type: ${isPoolError ? 'Pool Exhaustion' : isTimeout ? 'Timeout' : 'Connection Error'}`);
+      console.error(`[DB Pool] [${connectionId}]   - Error Message: ${errorObj?.message || String(error)}`);
+      console.error(`[DB Pool] [${connectionId}]   - Connection State: ${connectionState}`);
+      console.error(`[DB Pool] [${connectionId}]   - Connection Limit: ${connectionLimit}`);
+      
+      // Track pool usage and trigger alerts
+      if (isPoolError || isTimeout) {
+        await checkPoolUsageAndAlert(errorObj?.code);
+      }
+      
       if (!isConnectionError || attempt === maxRetries) {
-        if (errorObj?.code === 'P2024' || errorObj?.message?.includes('pool')) {
-          console.error(
-            `[Prisma] ❌ Connection pool exhausted (attempt ${attempt}/${maxRetries}): ` +
-            `All connections are in use. Consider increasing connection_limit or reducing concurrent operations.`
-          );
-        } else {
-          console.error(`[Prisma] ❌ Failed to connect (attempt ${attempt}/${maxRetries}):`, error);
-        }
-        // Reset state to allow retry on next call
+        console.error(`[DB Pool] [${connectionId}] ============================================`);
         connectionState = 'idle';
         connectionPromise = undefined;
         throw error;
       }
       
-      // Connection error - retry with exponential backoff
       const delay = retryDelay * Math.pow(2, attempt - 1);
-      console.warn(`[Prisma] ⚠️ Connection failed (attempt ${attempt}/${maxRetries}), retrying in ${delay}ms...`);
+      console.error(`[DB Pool] [${connectionId}]   - Will retry in ${delay}ms...`);
+      console.error(`[DB Pool] [${connectionId}] ============================================`);
       
-      // Reset state before retry
+      if (errorObj?.message?.includes('forcibly closed') || 
+          errorObj?.message?.includes('ConnectionReset') ||
+          errorObj?.message?.includes('Server has closed the connection')) {
+        try {
+          console.log(`[DB Pool] [${connectionId}] Disconnecting stale connection before retry`);
+          await prismaClient.$disconnect();
+        } catch (disconnectError) {
+          console.warn(`[DB Pool] [${connectionId}] Disconnect error (ignoring):`, disconnectError);
+        }
+      }
+      
       connectionState = 'idle';
       connectionPromise = undefined;
-      
-      // Wait before retry
       await new Promise(resolve => setTimeout(resolve, delay));
     }
   }
   
-  // Should never reach here, but TypeScript needs it
+  console.error(
+    `[DB Pool] [${connectionId}] ❌ All ${maxRetries} connection attempts failed`,
+    `\n  - Host: ${dbHost}`,
+    `\n  - Connection limit: ${connectionLimit}`,
+    `\n  - Pool metrics:`,
+    `\n    • Failures in window: ${poolMetrics.failureCount}`,
+    `\n    • P2024 errors: ${poolMetrics.p2024Count}`,
+    `\n    • Consecutive timeouts: ${poolMetrics.consecutiveTimeouts}`
+  );
   throw lastError;
 }
 
-// Initialize connection on module load (for serverless warm starts)
 if (typeof window === 'undefined') {
-  // Only run on server side
   ensurePrismaConnected().catch(() => {
-    // Silently fail on initial connection - will retry on first query
+    // Silently fail on initial connection
   });
 }
 
-// Export prisma client - Prisma handles connections automatically
-// but we ensure connection is established before first use
-export const prisma = prismaClient;
+// Always export prisma - use multi-DB router if enabled, otherwise single DB
+let prismaInstance: PrismaClient;
+let connectPrismaInstance: (maxRetries?: number, retryDelay?: number) => Promise<void>;
+let getPrismaExport: ((key?: string) => PrismaClient) | undefined;
+let getDatabaseRouterExport: (() => unknown) | undefined;
 
-if (process.env.NODE_ENV !== 'production') {
-  globalThis.prismaGlobal = prismaClient;
+if (ENABLE_MULTI_DB && DB_COUNT > 1) {
+  // Multi-DB mode: use router
+  const router = require('./db/multi-db-router');
+  prismaInstance = router.getPrisma();
+  connectPrismaInstance = router.connectPrisma;
+  getPrismaExport = router.getPrisma;
+  getDatabaseRouterExport = router.getDatabaseRouter;
+  
+  console.log('[DB] ✅ Multi-database routing enabled');
+} else {
+  // Single DB mode
+  prismaInstance = prismaClient;
+  connectPrismaInstance = connectPrismaSingle;
+  console.log('[DB] ✅ Single database mode');
 }
 
+// Always export these for TypeScript compatibility
+export const prisma = prismaInstance;
+export const connectPrisma = connectPrismaInstance;
+
+// Conditionally export multi-DB functions (using type assertion to avoid TS1184)
+export const getPrisma = getPrismaExport as typeof getPrismaExport | undefined;
+export const getDatabaseRouter = getDatabaseRouterExport as typeof getDatabaseRouterExport | undefined;

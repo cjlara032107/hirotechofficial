@@ -208,7 +208,7 @@ async function runTests() {
         pass: res.status === 401 || res.status === 413,
         details: `Handled large request: ${res.status}`
       };
-    } catch (error) {
+    } catch {
       return {
         pass: true,
         details: 'Large request properly rejected'

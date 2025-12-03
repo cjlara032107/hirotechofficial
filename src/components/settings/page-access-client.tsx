@@ -143,7 +143,7 @@ export function PageAccessClient() {
         <CardHeader>
           <CardTitle>Available Pages</CardTitle>
           <CardDescription>
-            Toggle access to specific pages for all users. When disabled, all users will see an "Under Development" message when trying to access the page.
+            Toggle access to specific pages for all users. When disabled, all users will see an &quot;Under Development&quot; message when trying to access the page.
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -185,7 +185,7 @@ export function PageAccessClient() {
                       </p>
                       {!enabled && (
                         <p className="text-xs text-red-600 dark:text-red-400 font-medium mt-1">
-                          ⚠️ All users will see "Under Development" message
+                          ⚠️ All users will see &quot;Under Development&quot; message
                         </p>
                       )}
                     </div>

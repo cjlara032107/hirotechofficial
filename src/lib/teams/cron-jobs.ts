@@ -9,20 +9,31 @@
 
 import { prisma } from '@/lib/db'
 import { rotateAllExpiredJoinCodes } from './join-codes'
+import { logJobStart, logJobComplete, logJobFailure } from '@/lib/logging/job-logger'
 
 /**
  * Rotates all expired join codes
  * Should run every 10 minutes
  */
 export async function rotateExpiredJoinCodesJob() {
-  console.log('[CRON] Starting join code rotation job...')
+  const jobType = 'cron-rotate-join-codes'
+  const startTime = Date.now()
+  
+  await logJobStart(jobType, undefined, 'Starting join code rotation job').catch(() => {
+    // Silently fail - logging should not break the app
+  })
   
   try {
     const result = await rotateAllExpiredJoinCodes()
-    console.log('[CRON] Join code rotation complete:', result)
+    const duration = Date.now() - startTime
+    await logJobComplete(jobType, undefined, `Join code rotation complete: ${JSON.stringify(result)}`, duration, { result }).catch(() => {
+      // Silently fail - logging should not break the app
+    })
     return result
   } catch (error) {
-    console.error('[CRON] Error rotating join codes:', error)
+    await logJobFailure(jobType, undefined, 'Error rotating join codes', error as Error).catch(() => {
+      // Silently fail - logging should not break the app
+    })
     throw error
   }
 }
@@ -32,7 +43,12 @@ export async function rotateExpiredJoinCodesJob() {
  * Should run daily
  */
 export async function cleanupExpiredInvitesJob() {
-  console.log('[CRON] Starting invite cleanup job...')
+  const jobType = 'cron-cleanup-invites'
+  const startTime = Date.now()
+  
+  await logJobStart(jobType, undefined, 'Starting invite cleanup job').catch(() => {
+    // Silently fail - logging should not break the app
+  })
   
   try {
     const now = new Date()
@@ -56,17 +72,21 @@ export async function cleanupExpiredInvitesJob() {
       data: { status: 'EXHAUSTED' }
     })
     
-    console.log('[CRON] Invite cleanup complete:', {
-      expired: expiredResult.count,
-      exhausted: exhaustedResult.count
-    })
-    
-    return {
+    const result = {
       expired: expiredResult.count,
       exhausted: exhaustedResult.count
     }
+    
+    const duration = Date.now() - startTime
+    await logJobComplete(jobType, undefined, `Invite cleanup complete: ${JSON.stringify(result)}`, duration, result).catch(() => {
+      // Silently fail - logging should not break the app
+    })
+    
+    return result
   } catch (error) {
-    console.error('[CRON] Error cleaning up invites:', error)
+    await logJobFailure(jobType, undefined, 'Error cleaning up invites', error as Error).catch(() => {
+      // Silently fail - logging should not break the app
+    })
     throw error
   }
 }
@@ -76,7 +96,12 @@ export async function cleanupExpiredInvitesJob() {
  * Should run hourly
  */
 export async function sendTaskRemindersJob() {
-  console.log('[CRON] Starting task reminders job...')
+  const jobType = 'cron-send-task-reminders'
+  const startTime = Date.now()
+  
+  await logJobStart(jobType, undefined, 'Starting task reminders job').catch(() => {
+    // Silently fail - logging should not break the app
+  })
   
   try {
     const now = new Date()
@@ -112,10 +137,17 @@ export async function sendTaskRemindersJob() {
     // TODO: Send notifications to assigned users
     // This would integrate with your notification system
     
-    console.log('[CRON] Task reminders sent:', overdueTasks.length)
-    return { remindersSent: overdueTasks.length }
+    const result = { remindersSent: overdueTasks.length }
+    const duration = Date.now() - startTime
+    await logJobComplete(jobType, undefined, `Task reminders sent: ${overdueTasks.length}`, duration, result).catch(() => {
+      // Silently fail - logging should not break the app
+    })
+    
+    return result
   } catch (error) {
-    console.error('[CRON] Error sending task reminders:', error)
+    await logJobFailure(jobType, undefined, 'Error sending task reminders', error as Error).catch(() => {
+      // Silently fail - logging should not break the app
+    })
     throw error
   }
 }
@@ -125,7 +157,12 @@ export async function sendTaskRemindersJob() {
  * Should run hourly
  */
 export async function unsuspendExpiredSuspensionsJob() {
-  console.log('[CRON] Starting unsuspend job...')
+  const jobType = 'cron-unsuspend-expired'
+  const startTime = Date.now()
+  
+  await logJobStart(jobType, undefined, 'Starting unsuspend job').catch(() => {
+    // Silently fail - logging should not break the app
+  })
   
   try {
     const now = new Date()
@@ -143,10 +180,17 @@ export async function unsuspendExpiredSuspensionsJob() {
       }
     })
     
-    console.log('[CRON] Unsuspend job complete:', result.count)
-    return { unsuspended: result.count }
+    const jobResult = { unsuspended: result.count }
+    const duration = Date.now() - startTime
+    await logJobComplete(jobType, undefined, `Unsuspend job complete: ${result.count} members unsuspended`, duration, jobResult).catch(() => {
+      // Silently fail - logging should not break the app
+    })
+    
+    return jobResult
   } catch (error) {
-    console.error('[CRON] Error unsuspending members:', error)
+    await logJobFailure(jobType, undefined, 'Error unsuspending members', error as Error).catch(() => {
+      // Silently fail - logging should not break the app
+    })
     throw error
   }
 }
@@ -156,7 +200,12 @@ export async function unsuspendExpiredSuspensionsJob() {
  * Call this from your cron setup (e.g., Vercel Cron, node-cron, etc.)
  */
 export async function runScheduledJobs(jobType: 'every-10-min' | 'hourly' | 'daily') {
-  console.log(`[CRON] Running ${jobType} jobs...`)
+  const schedulerJobType = `cron-scheduler-${jobType}`
+  const startTime = Date.now()
+  
+  await logJobStart(schedulerJobType, undefined, `Running ${jobType} jobs`).catch(() => {
+    // Silently fail - logging should not break the app
+  })
   
   try {
     switch (jobType) {
@@ -176,9 +225,14 @@ export async function runScheduledJobs(jobType: 'every-10-min' | 'hourly' | 'dai
         break
     }
     
-    console.log(`[CRON] ${jobType} jobs completed successfully`)
+    const duration = Date.now() - startTime
+    await logJobComplete(schedulerJobType, undefined, `${jobType} jobs completed successfully`, duration).catch(() => {
+      // Silently fail - logging should not break the app
+    })
   } catch (error) {
-    console.error(`[CRON] Error running ${jobType} jobs:`, error)
+    await logJobFailure(schedulerJobType, undefined, `Error running ${jobType} jobs`, error as Error).catch(() => {
+      // Silently fail - logging should not break the app
+    })
   }
 }
 

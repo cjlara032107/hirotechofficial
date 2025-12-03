@@ -1,10 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/db';
+import { getPrismaForOrg } from '@/lib/db/get-prisma-for-org';
 import { Prisma } from '@prisma/client';
 import { auth } from '@/auth';
 import { generateFollowUpMessage } from '@/lib/ai/google-ai-service';
 import { FacebookClient } from '@/lib/facebook/client';
 import { isContactEligibleForAutomation } from '@/lib/ai/conflict-prevention';
+import { logger } from '@/lib/utils/logger';
 
 // POST /api/ai-automations/execute - Manual trigger of automation rule
 export async function POST(request: NextRequest) {
@@ -37,8 +39,63 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Get rule
-    const rule = await prisma.aIAutomationRule.findFirst({
+    // Get user's organization for multi-DB routing
+    const user = await prisma.user.findUnique({
+      where: { id: session.user.id },
+      select: { organizationId: true },
+    });
+
+    if (!user?.organizationId) {
+      logger.error('[Automation Execute] User has no organization', new Error('Missing organization'), { 
+        userId: session.user.id,
+        ruleId,
+      });
+      return NextResponse.json(
+        { error: 'User organization not found' },
+        { status: 400 }
+      );
+    }
+
+    // ⭐ MULTI-DB ROUTING: Get Prisma client for user's organization
+    const db = getPrismaForOrg(user.organizationId);
+    
+    // Log routing information
+    logger.info('[Automation Execute] Start', {
+      ruleId,
+      userId: session.user.id,
+      organizationId: user.organizationId,
+      multiDbEnabled: process.env.ENABLE_MULTI_DB === 'true',
+      routingStrategy: process.env.DB_ROUTING_STRATEGY || 'hash',
+      triggerType: 'manual',
+    });
+
+    // Log routed DB details if multi-DB is enabled
+    if (process.env.ENABLE_MULTI_DB === 'true') {
+      try {
+        const { getDatabaseRouter } = await import('@/lib/db/multi-db-router');
+        const router = getDatabaseRouter();
+        const client = router.getClient(user.organizationId);
+        const dbConfig = router.getAllDatabaseConfigs().find(c => c.client === client);
+        
+        if (dbConfig) {
+          const dbHost = new URL(dbConfig.url).hostname;
+          logger.info('[Automation Execute] Routed DB', {
+            organizationId: user.organizationId,
+            ruleId,
+            dbIndex: dbConfig.index,
+            dbHost,
+            dbHealth: dbConfig.health,
+          });
+        }
+      } catch (error) {
+        logger.warn('[Automation Execute] Could not log routing details', { 
+          error: error instanceof Error ? error.message : String(error) 
+        });
+      }
+    }
+
+    // Get rule from routed DB
+    const rule = await db.aIAutomationRule.findFirst({
       where: {
         id: ruleId,
         userId: session.user.id,
@@ -49,26 +106,28 @@ export async function POST(request: NextRequest) {
     });
 
     if (!rule) {
+      logger.warn('[Automation Execute] Rule not found in routed DB', {
+        ruleId,
+        userId: session.user.id,
+        organizationId: user.organizationId,
+      });
+      
       return NextResponse.json(
-        { error: 'Automation rule not found' },
+        { 
+          error: 'Automation rule not found',
+          details: process.env.ENABLE_MULTI_DB === 'true' 
+            ? 'Rule not found in routed database. Check DB1/DB2 connectivity.' 
+            : undefined,
+        },
         { status: 404 }
       );
     }
 
-    console.log(`[AI Automations] Manual execution of rule: ${rule.name}`);
-
-    // Get user's organization
-    const user = await prisma.user.findUnique({
-      where: { id: session.user.id },
-      select: { organizationId: true },
+    logger.info('[Automation Execute] Manual execution of automation rule', { 
+      ruleId: rule.id, 
+      ruleName: rule.name,
+      organizationId: user.organizationId,
     });
-
-    if (!user) {
-      return NextResponse.json(
-        { error: 'User not found' },
-        { status: 404 }
-      );
-    }
 
     // Calculate time threshold
     const now = new Date();
@@ -100,9 +159,9 @@ export async function POST(request: NextRequest) {
       };
     }
 
-    // Get eligible contacts
+    // Get eligible contacts from routed DB
     // Use select to avoid issues with new columns that may not exist yet
-    let eligibleContacts = await prisma.contact.findMany({
+    let eligibleContacts = await db.contact.findMany({
       where: whereClause,
       select: {
         id: true,
@@ -150,7 +209,7 @@ export async function POST(request: NextRequest) {
     }
 
     // Filter out contacts that have been stopped for this rule
-    const stoppedContactIds = await prisma.aIAutomationStop.findMany({
+    const stoppedContactIds = await db.aIAutomationStop.findMany({
       where: {
         ruleId: rule.id,
       },
@@ -162,13 +221,13 @@ export async function POST(request: NextRequest) {
     const stoppedIds = stoppedContactIds.map(s => s.contactId);
     eligibleContacts = eligibleContacts.filter(c => !stoppedIds.includes(c.id));
 
-    console.log(`[AI Automations] Found ${eligibleContacts.length} eligible contacts`);
+    logger.info('Found eligible contacts', { count: eligibleContacts.length });
 
     // Check for contacts that were just processed recently (prevent duplicate manual triggers)
     // Use the rule's time interval as the cooldown, with a minimum of 2 minutes
     const cooldownMs = Math.max(thresholdMs, 2 * 60 * 1000); // At least 2 minutes
     const recentExecutionCutoff = new Date(now.getTime() - cooldownMs);
-    const recentlyProcessed = await prisma.aIAutomationExecution.findMany({
+    const recentlyProcessed = await db.aIAutomationExecution.findMany({
       where: {
         ruleId: rule.id,
         contactId: { in: eligibleContacts.map(c => c.id) },
@@ -188,168 +247,237 @@ export async function POST(request: NextRequest) {
 
     if (recentlyProcessedIds.size > 0) {
       const cooldownMinutes = Math.ceil(cooldownMs / (60 * 1000));
-      console.log(`[AI Automations] Skipping ${recentlyProcessedIds.size} contacts that were processed in the last ${cooldownMinutes} minutes`);
+      logger.debug('Skipping recently processed contacts', { 
+        skippedCount: recentlyProcessedIds.size, 
+        cooldownMinutes 
+      });
     }
 
-    console.log(`[AI Automations] Processing ${contactsToProcess.length} contacts (${eligibleContacts.length - contactsToProcess.length} skipped due to recent processing)`);
+    logger.info('Processing contacts for automation', { 
+      toProcess: contactsToProcess.length, 
+      skipped: eligibleContacts.length - contactsToProcess.length 
+    });
+
+    // Concurrency limiter for parallel processing
+    class ConcurrencyLimiter {
+      private queue: Array<{ fn: () => Promise<unknown>; resolve: (value: unknown) => void; reject: (error: unknown) => void }> = [];
+      private running = 0;
+      constructor(private limit: number) {}
+      async execute<T>(fn: () => Promise<T>): Promise<T> {
+        return new Promise<T>((resolve, reject) => {
+          this.queue.push({ fn: fn as () => Promise<unknown>, resolve: resolve as (value: unknown) => void, reject: reject as (error: unknown) => void });
+          this.process();
+        });
+      }
+      private async process() {
+        while (this.running < this.limit && this.queue.length > 0) {
+          const task = this.queue.shift();
+          if (!task) break;
+          this.running++;
+          task.fn().then(task.resolve).catch(task.reject).finally(() => {
+            this.running--;
+            this.process();
+          });
+        }
+      }
+    }
+    
+    // Get dynamic concurrency limit based on API keys
+    const { getCachedConcurrencyLimits } = await import('@/lib/ai/dynamic-concurrency');
+    const concurrencyLimits = await getCachedConcurrencyLimits();
+    const automationLimiter = new ConcurrencyLimiter(concurrencyLimits.automationConcurrency);
+    
+    logger.info(`Using ${concurrencyLimits.automationConcurrency} concurrent automations (${concurrencyLimits.keyCount} API keys)`);
 
     let sent = 0;
     let failed = 0;
 
-    // Process each eligible contact
-    for (const contact of contactsToProcess) {
-      try {
-        // ⭐ CONFLICT PREVENTION: Check if contact is eligible
-        // Skip recent contact check and active chat check for manual execution (allow immediate retry)
-        const eligibilityCheck = await isContactEligibleForAutomation(
-          contact.id,
-          rule.excludeTags,
-          { 
-            skipRecentContactCheck: true,
-            skipActiveChatCheck: true // Skip active chat session check for manual execution
-          }
-        );
+    // Process all contacts in parallel with concurrency limit
+    const results = await Promise.allSettled(
+      contactsToProcess.map(contact =>
+        automationLimiter.execute(async () => {
+          try {
+            // ⭐ CONFLICT PREVENTION: Check if contact is eligible
+            // Skip recent contact check and active chat check for manual execution (allow immediate retry)
+            const eligibilityCheck = await isContactEligibleForAutomation(
+              contact.id,
+              rule.excludeTags,
+              { 
+                skipRecentContactCheck: true,
+                skipActiveChatCheck: true // Skip active chat session check for manual execution
+              }
+            );
 
-        if (!eligibilityCheck.eligible) {
-          console.log(`[AI Automations] Contact ${contact.id} not eligible: ${eligibilityCheck.reason}`);
-          continue;
-        }
+            if (!eligibilityCheck.eligible) {
+              logger.debug('Contact not eligible for automation', { 
+                contactId: contact.id, 
+                reason: eligibilityCheck.reason 
+              });
+              return { success: false, reason: 'not_eligible' };
+            }
 
-        const conversation = contact.conversations[0];
-        if (!conversation) {
-          console.log(`[AI Automations] No conversation found for contact: ${contact.id}`);
-          failed++;
-          continue;
-        }
+            const conversation = contact.conversations[0];
+            if (!conversation) {
+              logger.warn('No conversation found for contact', { contactId: contact.id });
+              return { success: false, reason: 'no_conversation' };
+            }
 
-        // Get conversation history
-        const messages = await prisma.message.findMany({
-          where: {
-            conversationId: conversation.id,
-          },
-          orderBy: {
-            createdAt: 'desc',
-          },
-          take: 20,
-        });
+            // Get conversation history
+            const messages = await db.message.findMany({
+              where: {
+                conversationId: conversation.id,
+              },
+              orderBy: {
+                createdAt: 'desc',
+              },
+              take: 20,
+            });
 
-        if (messages.length === 0) {
-          console.log(`[AI Automations] No messages in conversation: ${conversation.id}`);
-          failed++;
-          continue;
-        }
+            // Handle conversations with no messages
+            if (messages.length === 0) {
+              logger.warn('No messages in conversation', { conversationId: conversation.id });
+              return { success: false, reason: 'no_messages' };
+            }
 
-        // Format messages for AI
-        const conversationHistory = messages.reverse().map(msg => ({
-          from: msg.isFromBusiness ? 'Business' : contact.firstName || 'Customer',
-          text: msg.content,
-          timestamp: msg.createdAt,
-        }));
+            // Filter out system messages (isFromBusiness = true)
+            const { filterSystemMessagesFromDB } = await import('@/lib/facebook/message-filtering');
+            const userMessages = filterSystemMessagesFromDB(messages);
 
-        // Generate AI message
-        const aiResult = await generateFollowUpMessage(
-          contact.firstName || 'there',
-          conversationHistory,
-          rule.customPrompt,
-          rule.languageStyle
-        );
+            // Handle conversations with only system messages
+            if (userMessages.length === 0) {
+              logger.warn('No user messages in conversation (only system messages)', { conversationId: conversation.id });
+              return { success: false, reason: 'no_user_messages' };
+            }
 
-        if (!aiResult) {
-          console.error(`[AI Automations] Failed to generate message for contact: ${contact.id}`);
-          failed++;
-          
-          // Log execution failure
-          await prisma.aIAutomationExecution.create({
-            data: {
-              id: `exec_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
-              ruleId: rule.id,
-              userId: session.user.id,
-              contactId: contact.id,
-              conversationId: conversation.id,
-              recipientPSID: contact.messengerPSID || 'unknown',
-              recipientName: `${contact.firstName} ${contact.lastName || ''}`.trim(),
-              aiPromptUsed: rule.customPrompt,
-              status: 'failed',
-              errorMessage: 'Failed to generate AI message',
-              executedAt: new Date(),
-            },
-          });
-          
-          continue;
-        }
+            // Format messages for AI (only user messages)
+            const conversationHistory = userMessages.reverse().map(msg => ({
+              from: contact.firstName || 'Customer',
+              text: msg.content,
+              timestamp: msg.createdAt,
+            }));
 
-        // Send message via Facebook
-        const facebookClient = new FacebookClient(contact.facebookPage.pageAccessToken);
-        const result = await facebookClient.sendMessengerMessage({
-          recipientId: contact.messengerPSID!,
-          message: aiResult.message,
-          messageTag: rule.messageTag || 'ACCOUNT_UPDATE',
-        });
+            // Generate AI message
+            const aiResult = await generateFollowUpMessage(
+              contact.firstName || 'there',
+              conversationHistory,
+              rule.customPrompt,
+              rule.languageStyle
+            );
 
-        if (result.success) {
-          // Log successful execution
-          await prisma.aIAutomationExecution.create({
-            data: {
-              id: `exec_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
-              ruleId: rule.id,
-              userId: session.user.id,
-              contactId: contact.id,
-              conversationId: conversation.id,
-              recipientPSID: contact.messengerPSID || 'unknown',
-              recipientName: `${contact.firstName} ${contact.lastName || ''}`.trim(),
-              aiPromptUsed: rule.customPrompt,
-              generatedMessage: aiResult.message,
-              aiReasoning: aiResult.reasoning,
-              previousMessages: conversationHistory as Prisma.InputJsonValue,
-              status: 'sent',
-              facebookMessageId: result.data?.message_id,
-              executedAt: new Date(),
-            },
-          });
+            if (!aiResult) {
+              logger.error('[Automation Execute] Failed to generate message for contact', new Error('AI message generation failed'), { 
+                contactId: contact.id,
+                ruleId: rule.id,
+                organizationId: user.organizationId,
+              });
+              
+              // Log execution failure
+              await db.aIAutomationExecution.create({
+                data: {
+                  id: `exec_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+                  ruleId: rule.id,
+                  userId: session.user.id,
+                  contactId: contact.id,
+                  conversationId: conversation.id,
+                  recipientPSID: contact.messengerPSID || 'unknown',
+                  recipientName: `${contact.firstName} ${contact.lastName || ''}`.trim(),
+                  aiPromptUsed: rule.customPrompt,
+                  status: 'failed',
+                  errorMessage: 'Failed to generate AI message',
+                  executedAt: new Date(),
+                },
+              });
+              
+              return { success: false, reason: 'ai_generation_failed' };
+            }
 
-          // Save message to database
-          await prisma.message.create({
-            data: {
-              content: aiResult.message,
-              platform: 'MESSENGER',
-              status: 'SENT',
+            // Send message via Facebook
+            const facebookClient = new FacebookClient(contact.facebookPage.pageAccessToken);
+            const result = await facebookClient.sendMessengerMessage({
+              recipientId: contact.messengerPSID!,
+              message: aiResult.message,
               messageTag: rule.messageTag || 'ACCOUNT_UPDATE',
-              facebookMessageId: result.data?.message_id,
-              contactId: contact.id,
-              conversationId: conversation.id,
-              isFromBusiness: true,
-              sentAt: new Date(),
-            },
-          });
+            });
 
-          sent++;
-          console.log(`[AI Automations] Sent message to ${contact.firstName}: "${aiResult.message}"`);
-        } else {
-          failed++;
-          
-          // Log execution failure
-          await prisma.aIAutomationExecution.create({
-            data: {
-              id: `exec_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
-              ruleId: rule.id,
-              userId: session.user.id,
-              contactId: contact.id,
-              conversationId: conversation.id,
-              recipientPSID: contact.messengerPSID || 'unknown',
-              recipientName: `${contact.firstName} ${contact.lastName || ''}`.trim(),
-              aiPromptUsed: rule.customPrompt,
-              generatedMessage: aiResult.message,
-              aiReasoning: aiResult.reasoning,
-              status: 'failed',
-              errorMessage: result.error || 'Unknown error',
-              executedAt: new Date(),
-            },
-          });
-          
-          console.error(`[AI Automations] Failed to send message: ${result.error}`);
-        }
-      } catch (error) {
-        console.error(`[AI Automations] Error processing contact ${contact.id}:`, error);
+            if (result.success) {
+              // Log successful execution
+              await db.aIAutomationExecution.create({
+                data: {
+                  id: `exec_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+                  ruleId: rule.id,
+                  userId: session.user.id,
+                  contactId: contact.id,
+                  conversationId: conversation.id,
+                  recipientPSID: contact.messengerPSID || 'unknown',
+                  recipientName: `${contact.firstName} ${contact.lastName || ''}`.trim(),
+                  aiPromptUsed: rule.customPrompt,
+                  generatedMessage: aiResult.message,
+                  aiReasoning: aiResult.reasoning,
+                  previousMessages: conversationHistory as Prisma.InputJsonValue,
+                  status: 'sent',
+                  facebookMessageId: result.data?.message_id,
+                  executedAt: new Date(),
+                },
+              });
+
+              // Save message to database
+              await db.message.create({
+                data: {
+                  content: aiResult.message,
+                  platform: 'MESSENGER',
+                  status: 'SENT',
+                  messageTag: rule.messageTag || 'ACCOUNT_UPDATE',
+                  facebookMessageId: result.data?.message_id,
+                  contactId: contact.id,
+                  conversationId: conversation.id,
+                  isFromBusiness: true,
+                  sentAt: new Date(),
+                },
+              });
+
+              logger.info('Sent automation message', { 
+                contactId: contact.id, 
+                contactName: contact.firstName,
+                messageLength: aiResult.message.length 
+              });
+              
+              return { success: true };
+            } else {
+              // Log execution failure
+              await db.aIAutomationExecution.create({
+                data: {
+                  id: `exec_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+                  ruleId: rule.id,
+                  userId: session.user.id,
+                  contactId: contact.id,
+                  conversationId: conversation.id,
+                  recipientPSID: contact.messengerPSID || 'unknown',
+                  recipientName: `${contact.firstName} ${contact.lastName || ''}`.trim(),
+                  aiPromptUsed: rule.customPrompt,
+                  generatedMessage: aiResult.message,
+                  aiReasoning: aiResult.reasoning,
+                  status: 'failed',
+                  errorMessage: result.error || 'Unknown error',
+                  executedAt: new Date(),
+                },
+              });
+              
+              logger.error('Failed to send automation message', new Error(result.error || 'Unknown error'), { contactId: contact.id });
+              return { success: false, reason: 'send_failed', error: result.error };
+            }
+          } catch (error) {
+            logger.error('Error processing contact for automation', error instanceof Error ? error : new Error(String(error)), { contactId: contact.id });
+            return { success: false, reason: 'error', error: error instanceof Error ? error.message : String(error) };
+          }
+        })
+      )
+    );
+
+    // Count successes and failures
+    for (const result of results) {
+      if (result.status === 'fulfilled' && result.value.success) {
+        sent++;
+      } else {
         failed++;
       }
     }
@@ -357,7 +485,7 @@ export async function POST(request: NextRequest) {
     // Update rule statistics
     // Set lastExecutedAt to current time so cron respects the time interval
     // This ensures cron will wait for the full time interval before running again
-    await prisma.aIAutomationRule.update({
+    await db.aIAutomationRule.update({
       where: { id: rule.id },
       data: {
         lastExecutedAt: now, // Set to current time so cron respects the interval
@@ -370,7 +498,15 @@ export async function POST(request: NextRequest) {
 
     const skippedCount = eligibleContacts.length - contactsToProcess.length;
     const cooldownMinutes = Math.ceil(cooldownMs / (60 * 1000));
-    console.log(`[AI Automations] Manual execution complete: ${sent} sent, ${failed} failed, ${skippedCount} skipped. Next cron execution will respect ${cooldownMinutes}-minute time interval.`);
+    logger.info('[Automation Execute] Complete', { 
+      ruleId: rule.id,
+      organizationId: user.organizationId,
+      sent, 
+      failed, 
+      skipped: skippedCount, 
+      cooldownMinutes,
+      triggerType: 'manual',
+    });
 
     return NextResponse.json({
       success: true,
@@ -383,9 +519,20 @@ export async function POST(request: NextRequest) {
         : undefined,
     });
   } catch (error) {
-    console.error('[AI Automations] Execute error:', error);
+    logger.error('[Automation Execute] Failed to execute automation rule', error instanceof Error ? error : new Error(String(error)), {
+      multiDbEnabled: process.env.ENABLE_MULTI_DB === 'true',
+    });
+    
+    const errorMessage = error instanceof Error ? error.message : 'Failed to execute automation rule';
+    const isDbError = errorMessage.includes('database') || errorMessage.includes('connection') || errorMessage.includes('timeout');
+    
     return NextResponse.json(
-      { error: 'Failed to execute automation rule' },
+      { 
+        error: isDbError 
+          ? 'Database connection error. Please check DB1/DB2 connectivity and try again.' 
+          : 'Failed to execute automation rule',
+        details: process.env.NODE_ENV === 'development' ? errorMessage : undefined,
+      },
       { status: 500 }
     );
   }

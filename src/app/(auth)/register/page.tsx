@@ -8,6 +8,7 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { logger } from '@/lib/utils/logger';
 
 export default function RegisterPage() {
   const router = useRouter();
@@ -24,10 +25,7 @@ export default function RegisterPage() {
     setIsLoading(true);
 
     try {
-      console.log('[Register] === Starting Supabase Registration ===');
-      console.log('[Register] Email:', email);
-      console.log('[Register] Name:', name);
-      console.log('[Register] Organization:', organizationName);
+      logger.debug('Starting Supabase registration');
 
       const supabase = createClient();
 
@@ -43,14 +41,13 @@ export default function RegisterPage() {
         },
       });
 
-      console.log('[Register] Supabase signup response:', {
+      logger.debug('Supabase signup response', {
         hasUser: !!authData?.user,
         hasSession: !!authData?.session,
-        error: signUpError?.message,
       });
 
       if (signUpError) {
-        console.error('[Register] ❌ Signup error:', signUpError);
+        logger.error('Signup error', signUpError instanceof Error ? signUpError : new Error(String(signUpError)));
         
         if (signUpError.message.includes('already registered')) {
           setError('This email is already registered. Please login instead.');
@@ -63,13 +60,13 @@ export default function RegisterPage() {
       }
 
       if (!authData?.user) {
-        console.error('[Register] ❌ No user returned');
+        logger.error('No user returned from registration');
         setError('Registration failed. Please try again.');
         setIsLoading(false);
         return;
       }
 
-      console.log('[Register] ✅ User created in Supabase:', authData.user.id);
+      logger.info('User created in Supabase', { userId: authData.user.id });
 
       // Step 2: Create organization and user profile in our database
       const response = await fetch('/api/auth/register-profile', {
@@ -88,7 +85,7 @@ export default function RegisterPage() {
       const profileData = await response.json();
 
       if (!response.ok) {
-        console.error('[Register] ❌ Profile creation failed:', profileData.error);
+        logger.error('Profile creation failed', new Error(profileData.error || 'Unknown error'));
         // User is created in Supabase but profile failed
         // They can still login but might have issues
         setError('Account created but profile setup failed. Please contact support.');
@@ -96,15 +93,15 @@ export default function RegisterPage() {
         return;
       }
 
-      console.log('[Register] ✅ Profile created successfully!');
+      logger.info('Profile created successfully');
 
       // Check if email confirmation is required
       if (authData.session) {
-        console.log('[Register] ✅ Auto-logged in! Redirecting to dashboard...');
+        logger.debug('Auto-logged in, redirecting to dashboard');
         router.push('/dashboard');
         router.refresh();
       } else {
-        console.log('[Register] 📧 Email confirmation required');
+        logger.debug('Email confirmation required');
         setError('Registration successful! Please check your email to verify your account before logging in.');
         setIsLoading(false);
         // Redirect to login after showing message
@@ -113,7 +110,7 @@ export default function RegisterPage() {
         }, 3000);
       }
     } catch (error) {
-      console.error('[Register] 💥 Exception:', error);
+      logger.error('Registration exception', error instanceof Error ? error : new Error(String(error)));
       setError('An unexpected error occurred. Please try again or contact support.');
       setIsLoading(false);
     }

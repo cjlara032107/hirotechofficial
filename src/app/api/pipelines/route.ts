@@ -3,6 +3,7 @@ import { auth } from '@/auth';
 import { prisma } from '@/lib/db';
 import { StageType } from '@prisma/client';
 import { applyStageScoreRanges } from '@/lib/pipelines/stage-analyzer';
+import { getCachedPipelines } from '@/lib/cache/pipeline-cache';
 
 // Enable ISR with 60 second revalidation
 export const revalidate = 60;
@@ -14,22 +15,8 @@ export async function GET() {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
-    const pipelines = await prisma.pipeline.findMany({
-      where: {
-        organizationId: session.user.organizationId,
-        isArchived: false,
-      },
-      include: {
-        stages: {
-          orderBy: { order: 'asc' },
-          include: {
-            _count: {
-              select: { contacts: true },
-            },
-          },
-        },
-      },
-    });
+    // Use cached pipeline fetch
+    const pipelines = await getCachedPipelines(session.user.organizationId, false);
 
     return NextResponse.json(pipelines, {
       headers: {

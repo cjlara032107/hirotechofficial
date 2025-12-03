@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { prisma } from '@/lib/db'
+import { auth } from '@/auth'
 
 /**
  * Test endpoint to verify Supabase Realtime configuration
@@ -12,6 +13,11 @@ import { prisma } from '@/lib/db'
  * 3. Realtime publication status for required tables
  */
 export async function GET() {
+  // Require authentication for security
+  const session = await auth();
+  if (!session?.user) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  }
   try {
     const supabase = await createClient()
     
@@ -27,7 +33,7 @@ export async function GET() {
     // Check which tables have realtime enabled
     const requiredTables = ['Contact', 'Pipeline', 'PipelineStage', 'PipelineAutomation', 'TeamMessage', 'TeamThread']
     
-    let realtimeStatus: Record<string, boolean> = {}
+    const realtimeStatus: Record<string, boolean> = {}
     let realtimeError: string | null = null
     
     try {

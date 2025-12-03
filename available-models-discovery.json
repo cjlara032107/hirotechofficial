@@ -1,0 +1,49 @@
+{
+  "discoveredAt": "2025-11-30T16:24:20.688Z",
+  "available": [
+    "openai/gpt-oss-120b",
+    "openai/gpt-oss-20b",
+    "meta/llama-3.1-405b-instruct",
+    "meta/llama-3.1-70b-instruct",
+    "meta/llama-3.3-70b-instruct",
+    "meta/llama-3.1-8b-instruct",
+    "google/gemma-2-27b-it",
+    "google/gemma-2-9b-it",
+    "microsoft/phi-3-medium-4k-instruct",
+    "microsoft/phi-3-mini-4k-instruct"
+  ],
+  "unavailable": [
+    {
+      "model": "meta/llama-3-70b-instruct",
+      "reason": "Model not found (404)"
+    },
+    {
+      "model": "meta/llama-3-8b-instruct",
+      "reason": "Model not found (404)"
+    },
+    {
+      "model": "mistralai/mixtral-8x22b-instruct",
+      "reason": "Model not found (404)"
+    },
+    {
+      "model": "mistralai/mixtral-8x7b-instruct",
+      "reason": "Model not found (404)"
+    },
+    {
+      "model": "mistralai/mixtral-8x7b",
+      "reason": "Model not found (404)"
+    },
+    {
+      "model": "meta/llama-3.1-405b",
+      "reason": "Model not found (404)"
+    },
+    {
+      "model": "meta/llama-3.1-70b",
+      "reason": "Model not found (404)"
+    },
+    {
+      "model": "mistralai/mixtral-8x22b",
+      "reason": "Model not found (404)"
+    }
+  ]
+}

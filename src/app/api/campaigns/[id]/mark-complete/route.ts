@@ -63,6 +63,10 @@ export async function POST(
       failedCount: campaign.failedCount,
     });
 
+    // Get media info before updating
+    const mediaUrl = (campaign as any).mediaUrl;
+    const mediaType = (campaign as any).mediaType;
+    
     // Force completion
     const updated = await prisma.campaign.update({
       where: { id },
@@ -71,6 +75,12 @@ export async function POST(
         completedAt: new Date(),
       },
     });
+    
+    // Delete media file after campaign completion
+    if (mediaUrl && mediaType) {
+      const { deleteCampaignMedia } = await import('@/lib/campaigns/delete-media');
+      await deleteCampaignMedia(mediaUrl, mediaType);
+    }
 
     console.log(`✅ Campaign ${id} manually marked as COMPLETED`);
 

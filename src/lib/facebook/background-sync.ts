@@ -522,13 +522,12 @@ async function executeBackgroundSync(jobId: string, facebookPageId: string): Pro
                 const existing = existingContactsMap.get(task.participantId);
                 const conversationUpdatedTime = new Date(task.updatedTime);
                 
-                // SAFE OPTIMIZATION: Only fetch recent messages (200) for AI analysis
-                // Recent messages are more relevant for context, and this is 5-10x faster
-                // For most conversations, last 200 messages cover 3-6 months of history
+                // Fetch ALL messages for the conversation (paginated, up to 50 pages = 5000 messages)
+                // This ensures we have complete conversation history for analysis and storage
                 const messages = await Promise.race([
-                  client.getRecentMessagesForConversation(task.conversationId, 200), // Only last 200 messages
+                  client.getAllMessagesForConversation(task.conversationId, 50), // Get all messages (paginated)
                   new Promise<any[]>((_, reject) => 
-                    setTimeout(() => reject(new Error(`Timeout: Fetching messages for conversation ${task.conversationId} took longer than 15 seconds`)), 15000)
+                    setTimeout(() => reject(new Error(`Timeout: Fetching messages for conversation ${task.conversationId} took longer than 60 seconds`)), 60000)
                   )
                 ]);
                 return { task, messages, error: null, existing };
@@ -1038,8 +1037,9 @@ async function executeBackgroundSync(jobId: string, facebookPageId: string): Pro
               igMessageFetchLimiter.execute(async () => {
                 try {
                   const existing = existingIgContactsMap.get(task.participantId);
-                  // SAFE OPTIMIZATION: Only fetch recent messages (200) for AI analysis
-                  const messages = await client.getRecentMessagesForConversation(task.conversationId, 200);
+                  // Fetch ALL messages for AI analysis (paginated, up to 50 pages = 5000 messages)
+                  // This ensures complete conversation history for accurate analysis
+                  const messages = await client.getAllMessagesForConversation(task.conversationId, 50);
                   return { task, messages, error: null, existing };
                 } catch (error) {
                   const errorMessage = error instanceof Error ? error.message : 'Unknown error';

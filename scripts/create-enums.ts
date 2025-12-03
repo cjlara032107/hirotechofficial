@@ -39,7 +39,7 @@ async function createEnums() {
         USING "status"::"SyncJobStatus";
       `);
       console.log('   ✅ SyncJob status column updated');
-    } catch (error) {
+    } catch {
       // Column might already be the correct type
       console.log('   ℹ️  SyncJob status column already using enum');
     }

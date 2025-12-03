@@ -178,6 +178,7 @@ export function TeamTasks({ teamId, currentMemberId }: TeamTasksProps) {
     URGENT: 'bg-red-500'
   }
 
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const statusIcons: Record<string, any> = {
     TODO: Clock,
     IN_PROGRESS: AlertCircle,

@@ -32,6 +32,22 @@ export function ContactsPagination({
     });
   }
 
+  // Handle edge cases: 0 contacts or 1 contact
+  if (totalContacts === 0) {
+    return null; // Don't show pagination for empty state
+  }
+
+  // For 1 contact, show simple count without pagination controls
+  if (totalContacts === 1 && totalPages === 1) {
+    return (
+      <div className="flex items-center justify-between">
+        <p className="text-sm text-muted-foreground">
+          Showing 1 of 1 contact
+        </p>
+      </div>
+    );
+  }
+
   return (
     <div className="flex items-center justify-between">
       <p className="text-sm text-muted-foreground">

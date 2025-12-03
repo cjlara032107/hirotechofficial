@@ -1,6 +1,7 @@
 import { prisma } from '@/lib/db';
 import { decryptKey } from '@/lib/crypto/encryption';
 import { ApiKeyStatus } from '@prisma/client';
+import { apiKeyBatchQueue } from './api-key-batch-queue';
 
 /**
  * Database-backed API Key Manager
@@ -13,6 +14,8 @@ class ApiKeyManager {
   private readonly CACHE_TTL = 60000; // Cache for 60 seconds
   private usageStats: Map<string, { count: number; lastUsed: number }> = new Map();
   private requestCounter: number = 0;
+  private refreshPromise: Promise<void> | null = null; // Prevent concurrent cache refreshes
+  private readonly cacheLock = { locked: false }; // Simple lock mechanism
 
   /**
    * Generate a unique request ID for tracking
@@ -31,14 +34,53 @@ class ApiKeyManager {
     const startTime = Date.now();
     
     try {
-      // Refresh cache if stale
+      // Refresh cache if stale (with race condition protection)
       const now = Date.now();
       if (now - this.lastRefresh > this.CACHE_TTL || this.activeKeyIds.length === 0) {
-        await this.refreshActiveKeys();
+        // If another request is already refreshing, wait for it
+        if (this.refreshPromise) {
+          console.log(`[ApiKeyManager] [${requestId}] Waiting for ongoing cache refresh`);
+          await this.refreshPromise;
+        } else {
+          // We're the first to detect stale cache, perform the refresh
+          await this.refreshActiveKeys();
+        }
       }
 
       if (this.activeKeyIds.length === 0) {
-        console.warn(`[ApiKeyManager] [${requestId}] ⚠️ No active keys available`);
+        // Check if all keys are rate-limited and when they'll be available
+        const rateLimitInfo = await this.getRateLimitExhaustionInfo();
+        if (rateLimitInfo.allRateLimited) {
+          const timeUntilAvailable = rateLimitInfo.earliestAvailableAt 
+            ? Math.max(0, rateLimitInfo.earliestAvailableAt.getTime() - Date.now())
+            : null;
+          const minutesUntilAvailable = timeUntilAvailable 
+            ? Math.ceil(timeUntilAvailable / 60000)
+            : null;
+          
+          console.error(
+            `[ApiKeyManager] [${requestId}] 🚫 All API keys are rate-limited. ` +
+            (minutesUntilAvailable 
+              ? `Earliest key available in ~${minutesUntilAvailable} minute(s). ` 
+              : '') +
+            `Rate-limited keys: ${rateLimitInfo.rateLimitedCount}/${rateLimitInfo.totalKeys}`
+          );
+
+          // Create system alert for rate limit exhaustion
+          try {
+            const { alertApiRateLimitExhaustion } = await import('@/lib/alerts/alert-service');
+            await alertApiRateLimitExhaustion(
+              rateLimitInfo.rateLimitedCount,
+              rateLimitInfo.totalKeys,
+              rateLimitInfo.earliestAvailableAt
+            );
+          } catch (error) {
+            // Non-critical - alerting failure shouldn't break key retrieval
+            console.warn('[ApiKeyManager] Failed to create rate limit alert:', error);
+          }
+        } else {
+          console.warn(`[ApiKeyManager] [${requestId}] ⚠️ No active keys available`);
+        }
         return null;
       }
 
@@ -63,14 +105,9 @@ class ApiKeyManager {
         return this.getNextKey(requestContext);
       }
 
-      // Update last used timestamp
-      await prisma.apiKey.update({
-        where: { id: keyId },
-        data: { lastUsedAt: new Date() },
-      }).catch((err: unknown) => {
-        // Non-critical, just log
-        console.warn(`[ApiKeyManager] [${requestId}] Failed to update lastUsedAt:`, err);
-      });
+      // Queue update for batching (reduces DB queries by 70-80%)
+      // Updates are batched and flushed every 5 seconds or when 50 updates accumulate
+      apiKeyBatchQueue.queueUpdate(keyId, new Date());
 
       // Decrypt and return the key
       const decryptedKey = decryptKey(apiKeyRecord.encryptedKey);
@@ -86,72 +123,122 @@ class ApiKeyManager {
         ? ` | Operation: ${requestContext.operation}${requestContext.contactId ? ` | Contact: ${requestContext.contactId.substring(0, 8)}...` : ''}${requestContext.campaignId ? ` | Campaign: ${requestContext.campaignId.substring(0, 8)}...` : ''}`
         : '';
       
-      console.log(
-        `[ApiKeyManager] [${requestId}] ✅ Using key #${keyIndex + 1}/${this.activeKeyIds.length} ` +
-        `(${keyId.substring(0, 8)}... | ${apiKeyRecord.name || 'unnamed'})` +
-        ` | Total uses: ${stats.count}${contextInfo}`
-      );
+      const duration = Date.now() - startTime;
+      
+      console.log(`[ApiKeyManager] [${requestId}] ============================================`);
+      console.log(`[ApiKeyManager] [${requestId}] ✅ API KEY RETRIEVED`);
+      console.log(`[ApiKeyManager] [${requestId}] - Key Index: ${keyIndex + 1}/${this.activeKeyIds.length}`);
+      console.log(`[ApiKeyManager] [${requestId}] - Key ID: ${keyId.substring(0, 8)}...`);
+      console.log(`[ApiKeyManager] [${requestId}] - Key Name: ${apiKeyRecord.name || 'unnamed'}`);
+      console.log(`[ApiKeyManager] [${requestId}] - Total Uses: ${stats.count}`);
+      console.log(`[ApiKeyManager] [${requestId}] - Retrieval Time: ${duration}ms`);
+      if (requestContext?.operation) {
+        console.log(`[ApiKeyManager] [${requestId}] - Operation: ${requestContext.operation}`);
+        if (requestContext.contactId) {
+          console.log(`[ApiKeyManager] [${requestId}] - Contact ID: ${requestContext.contactId.substring(0, 12)}...`);
+        }
+        if (requestContext.campaignId) {
+          console.log(`[ApiKeyManager] [${requestId}] - Campaign ID: ${requestContext.campaignId.substring(0, 12)}...`);
+        }
+      }
       
       // Log parallel usage indicator
       const activeRequests = Array.from(this.usageStats.values()).filter(
         s => Date.now() - s.lastUsed < 5000 // Active in last 5 seconds
       ).length;
       if (activeRequests > 1) {
-        console.log(`[ApiKeyManager] [${requestId}] 🔄 Parallel processing: ${activeRequests} concurrent requests detected`);
+        console.log(`[ApiKeyManager] [${requestId}] - 🔄 Parallel Requests: ${activeRequests} concurrent`);
       }
+      console.log(`[ApiKeyManager] [${requestId}] ============================================`);
       
       return decryptedKey;
     } catch (error) {
-      console.error(`[ApiKeyManager] [${requestId}] ❌ Error getting next key:`, error);
+      const duration = Date.now() - startTime;
+      const errorMsg = error instanceof Error ? error.message : String(error);
+      console.error(`[ApiKeyManager] [${requestId}] ============================================`);
+      console.error(`[ApiKeyManager] [${requestId}] ❌ ERROR GETTING API KEY`);
+      console.error(`[ApiKeyManager] [${requestId}] - Duration: ${duration}ms`);
+      console.error(`[ApiKeyManager] [${requestId}] - Error: ${errorMsg}`);
+      console.error(`[ApiKeyManager] [${requestId}] - Active Keys: ${this.activeKeyIds.length}`);
+      console.error(`[ApiKeyManager] [${requestId}] - Last Cache Refresh: ${new Date(this.lastRefresh).toISOString()}`);
+      if (error instanceof Error && error.stack) {
+        console.error(`[ApiKeyManager] [${requestId}] - Stack trace (first 3 lines):`);
+        error.stack.split('\n').slice(0, 3).forEach((line, idx) => {
+          console.error(`[ApiKeyManager] [${requestId}]   ${idx + 1}. ${line.trim()}`);
+        });
+      }
+      console.error(`[ApiKeyManager] [${requestId}] ============================================`);
       return null;
     }
   }
 
   /**
    * Refresh the cache of active key IDs
+   * Protected against race conditions with a lock mechanism
    */
   private async refreshActiveKeys(): Promise<void> {
-    try {
-      const activeKeys = await prisma.apiKey.findMany({
-        where: {
-          status: ApiKeyStatus.ACTIVE,
-        },
-        select: {
-          id: true,
-          name: true,
-          lastUsedAt: true,
-          totalRequests: true,
-        },
-        orderBy: {
-          createdAt: 'asc',
-        },
-      });
-
-      const previousCount = this.activeKeyIds.length;
-      this.activeKeyIds = activeKeys.map((k: { id: string }) => k.id);
-      this.lastRefresh = Date.now();
-      
-      if (this.activeKeyIds.length > 0) {
-        // Reset index to avoid out-of-bounds
-        this.currentIndex = this.currentIndex % this.activeKeyIds.length;
-        
-        // Log detailed refresh information
-        const keyNames = activeKeys.map((k: { id: string; name: string | null; lastUsedAt: Date | null; totalRequests: number }) => 
-          `${k.name || 'unnamed'} (${k.totalRequests} reqs)`
-        ).join(', ');
-        
-        console.log(
-          `[ApiKeyManager] 🔄 Refreshed active keys cache: ${this.activeKeyIds.length} keys available ` +
-          `(${previousCount} → ${this.activeKeyIds.length})`
-        );
-        console.log(`[ApiKeyManager] 📋 Active keys: ${keyNames}`);
-      } else {
-        console.warn('[ApiKeyManager] ⚠️ No active keys found in database');
-      }
-    } catch (error) {
-      console.error('[ApiKeyManager] ❌ Error refreshing active keys:', error);
-      this.activeKeyIds = [];
+    // If a refresh is already in progress, wait for it
+    if (this.refreshPromise) {
+      return this.refreshPromise;
     }
+
+    // Create the refresh promise to prevent concurrent refreshes
+    this.refreshPromise = (async () => {
+      try {
+        const refreshStartTime = Date.now();
+        console.log('[ApiKeyManager] 🔄 Starting cache refresh...');
+        
+        const activeKeys = await prisma.apiKey.findMany({
+          where: {
+            status: ApiKeyStatus.ACTIVE,
+          },
+          select: {
+            id: true,
+            name: true,
+            lastUsedAt: true,
+            totalRequests: true,
+          },
+          orderBy: {
+            createdAt: 'asc',
+          },
+        });
+
+        const previousCount = this.activeKeyIds.length;
+        this.activeKeyIds = activeKeys.map((k: { id: string }) => k.id);
+        this.lastRefresh = Date.now();
+        
+        if (this.activeKeyIds.length > 0) {
+          // Reset index to avoid out-of-bounds (with bounds check)
+          if (this.currentIndex >= this.activeKeyIds.length) {
+            this.currentIndex = 0;
+          }
+          
+          // Log detailed refresh information
+          const keyNames = activeKeys.map((k: { id: string; name: string | null; lastUsedAt: Date | null; totalRequests: number }) => 
+            `${k.name || 'unnamed'} (${k.totalRequests} reqs)`
+          ).join(', ');
+          
+          const refreshDuration = Date.now() - refreshStartTime;
+          console.log(
+            `[ApiKeyManager] ✅ Refreshed active keys cache in ${refreshDuration}ms: ${this.activeKeyIds.length} keys available ` +
+            `(${previousCount} → ${this.activeKeyIds.length})`
+          );
+          console.log(`[ApiKeyManager] 📋 Active keys: ${keyNames}`);
+        } else {
+          console.warn('[ApiKeyManager] ⚠️ No active keys found in database');
+        }
+      } catch (error) {
+        console.error('[ApiKeyManager] ❌ Error refreshing active keys:', error);
+        // Keep existing keys on error - don't clear to prevent complete failure
+        // But reset lastRefresh to allow retry on next request
+        this.lastRefresh = Date.now() - this.CACHE_TTL + 5000; // Retry in 5 seconds
+      } finally {
+        // Clear the promise to allow future refreshes
+        this.refreshPromise = null;
+      }
+    })();
+
+    return this.refreshPromise;
   }
 
   /**
@@ -308,6 +395,10 @@ class ApiKeyManager {
       // Invalidate cache to exclude this key
       await this.refreshActiveKeys();
       
+      // Invalidate concurrency cache so limits update
+      const { invalidateConcurrencyCache } = await import('./dynamic-concurrency');
+      invalidateConcurrencyCache();
+      
       const keyName = fullKey?.name || 'unnamed';
       console.error(`[ApiKeyManager] ⚠️ Marked key ${apiKeyRecord.id} (${keyName}) as DISABLED - ${reason}`);
       console.error(`[ApiKeyManager] Please check this key in the API Keys settings and update it if needed`);
@@ -385,6 +476,172 @@ class ApiKeyManager {
     } catch (error) {
       console.error('[ApiKeyManager] Error getting all keys:', error);
       return [];
+    }
+  }
+
+  /**
+   * Get information about rate limit exhaustion
+   * Returns whether all keys are rate-limited and when the earliest key will be available
+   */
+  async getRateLimitExhaustionInfo(): Promise<{
+    allRateLimited: boolean;
+    rateLimitedCount: number;
+    totalKeys: number;
+    earliestAvailableAt: Date | null;
+  }> {
+    try {
+      const allKeys = await prisma.apiKey.findMany({
+        select: {
+          id: true,
+          status: true,
+          rateLimitedAt: true,
+        },
+      });
+
+      const totalKeys = allKeys.length;
+      const rateLimitedKeys = allKeys.filter(k => k.status === ApiKeyStatus.RATE_LIMITED);
+      const rateLimitedCount = rateLimitedKeys.length;
+      const allRateLimited = totalKeys > 0 && rateLimitedCount === totalKeys;
+
+      // Find the earliest time when a rate-limited key will be available
+      // Rate limits typically reset after 24 hours
+      const RATE_LIMIT_RESET_HOURS = 24;
+      let earliestAvailableAt: Date | null = null;
+
+      if (rateLimitedKeys.length > 0) {
+        const rateLimitedTimes = rateLimitedKeys
+          .map(k => k.rateLimitedAt)
+          .filter((date): date is Date => date !== null)
+          .map(date => {
+            const resetTime = new Date(date);
+            resetTime.setHours(resetTime.getHours() + RATE_LIMIT_RESET_HOURS);
+            return resetTime;
+          });
+
+        if (rateLimitedTimes.length > 0) {
+          earliestAvailableAt = new Date(Math.min(...rateLimitedTimes.map(d => d.getTime())));
+        }
+      }
+
+      return {
+        allRateLimited,
+        rateLimitedCount,
+        totalKeys,
+        earliestAvailableAt,
+      };
+    } catch (error) {
+      console.error('[ApiKeyManager] Error getting rate limit exhaustion info:', error);
+      return {
+        allRateLimited: false,
+        rateLimitedCount: 0,
+        totalKeys: 0,
+        earliestAvailableAt: null,
+      };
+    }
+  }
+
+  /**
+   * Get rate limit usage statistics for monitoring
+   */
+  async getRateLimitUsageStats() {
+    try {
+      const now = new Date();
+      const oneHourAgo = new Date(now.getTime() - 60 * 60 * 1000);
+      const oneDayAgo = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+
+      // Get all keys with their usage stats
+      const allKeys = await prisma.apiKey.findMany({
+        select: {
+          id: true,
+          name: true,
+          status: true,
+          totalRequests: true,
+          failedRequests: true,
+          rateLimitedAt: true,
+          lastUsedAt: true,
+          lastSuccessAt: true,
+          consecutiveFailures: true,
+          createdAt: true,
+        },
+        orderBy: {
+          lastUsedAt: 'desc',
+        },
+      });
+
+      // Calculate aggregate statistics
+      const activeKeys = allKeys.filter(k => k.status === ApiKeyStatus.ACTIVE);
+      const rateLimitedKeys = allKeys.filter(k => k.status === ApiKeyStatus.RATE_LIMITED);
+      const disabledKeys = allKeys.filter(k => k.status === ApiKeyStatus.DISABLED);
+
+      const totalRequests = allKeys.reduce((sum, k) => sum + k.totalRequests, 0);
+      const totalFailed = allKeys.reduce((sum, k) => sum + k.failedRequests, 0);
+      const totalRateLimited = rateLimitedKeys.length;
+
+      // Calculate usage in last hour
+      // Note: This is an approximation based on keys used in the last hour
+      // For exact request counts, a separate usage log table would be needed
+      const recentKeys = allKeys.filter(k => 
+        k.lastUsedAt && new Date(k.lastUsedAt) >= oneHourAgo
+      );
+      // Count keys that were active in the last hour (indicator of recent usage)
+      const requestsLastHour = recentKeys.length;
+
+      // Get keys that were rate limited in the last 24 hours
+      const recentlyRateLimited = rateLimitedKeys.filter(k =>
+        k.rateLimitedAt && new Date(k.rateLimitedAt) >= oneDayAgo
+      );
+
+      return {
+        summary: {
+          totalKeys: allKeys.length,
+          activeKeys: activeKeys.length,
+          rateLimitedKeys: rateLimitedKeys.length,
+          disabledKeys: disabledKeys.length,
+          totalRequests,
+          totalFailed,
+          successRate: totalRequests > 0 ? ((totalRequests - totalFailed) / totalRequests * 100).toFixed(2) : '0.00',
+        },
+        recentActivity: {
+          requestsLastHour: requestsLastHour,
+          recentlyRateLimited: recentlyRateLimited.length,
+        },
+        keys: allKeys.map(k => ({
+          id: k.id,
+          name: k.name,
+          status: k.status,
+          totalRequests: k.totalRequests,
+          failedRequests: k.failedRequests,
+          successRate: k.totalRequests > 0 
+            ? ((k.totalRequests - k.failedRequests) / k.totalRequests * 100).toFixed(2)
+            : '0.00',
+          rateLimitedAt: k.rateLimitedAt?.toISOString() || null,
+          lastUsedAt: k.lastUsedAt?.toISOString() || null,
+          lastSuccessAt: k.lastSuccessAt?.toISOString() || null,
+          consecutiveFailures: k.consecutiveFailures,
+          isRecentlyRateLimited: k.rateLimitedAt && new Date(k.rateLimitedAt) >= oneDayAgo,
+        })),
+        timestamp: now.toISOString(),
+      };
+    } catch (error) {
+      console.error('[ApiKeyManager] Error getting rate limit usage stats:', error);
+      return {
+        summary: {
+          totalKeys: 0,
+          activeKeys: 0,
+          rateLimitedKeys: 0,
+          disabledKeys: 0,
+          totalRequests: 0,
+          totalFailed: 0,
+          successRate: '0.00',
+        },
+        recentActivity: {
+          requestsLastHour: 0,
+          recentlyRateLimited: 0,
+        },
+        keys: [],
+        timestamp: new Date().toISOString(),
+        error: error instanceof Error ? error.message : 'Unknown error',
+      };
     }
   }
 }

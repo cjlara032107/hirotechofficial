@@ -107,7 +107,7 @@ async function addBulkNvidiaKeys() {
         const encryptedKey = encryptKey(apiKey);
 
         // Create database record
-        const apiKeyRecord = await prisma.apiKey.create({
+        await prisma.apiKey.create({
           data: {
             name: keyName,
             encryptedKey,

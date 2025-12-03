@@ -12,7 +12,7 @@
 
 import { FacebookClient, FacebookApiError } from '../client';
 import { analyzeContact } from './analyze-contact';
-import { analyzeContactQueued } from '@/lib/ai/analyze-contact-queued';
+import { analyzeContactQueued, isQueueEnabled } from '@/lib/ai/analyze-contact-queued';
 import { jobStatusCache } from './job-status-cache';
 
 export interface ConversationInfo {
@@ -190,6 +190,14 @@ export async function processContact(
         return null;
       }
 
+      // Use longer timeout if queue is enabled (queue has 2-minute timeout + processing time)
+      // Queue operations can take longer due to waiting in queue
+      const queueEnabled = isQueueEnabled();
+      const analysisTimeout = queueEnabled ? 180000 : 90000; // 3 minutes with queue, 90s without
+      const timeoutMessage = queueEnabled 
+        ? 'Analysis timeout after 3 minutes (queue may be busy)' 
+        : 'Analysis timeout after 90 seconds';
+
       analysisResult = await Promise.race([
         analysisLimiter.execute(async () => {
           // Check cancellation inside the analysis limiter
@@ -214,9 +222,9 @@ export async function processContact(
 
           return result;
         }),
-        // Timeout after 60 seconds
+        // Dynamic timeout based on queue status
         new Promise<never>((_, reject) => {
-          const timeoutId = setTimeout(() => reject(new Error('Analysis timeout after 60 seconds')), 60000);
+          const timeoutId = setTimeout(() => reject(new Error(timeoutMessage)), analysisTimeout);
           // Check cancellation periodically during timeout
           const checkInterval = setInterval(async () => {
             if (await isJobCancelled(jobId)) {
@@ -227,7 +235,7 @@ export async function processContact(
           }, 1000); // Check every second
           
           // Clean up interval when timeout completes
-          setTimeout(() => clearInterval(checkInterval), 60000);
+          setTimeout(() => clearInterval(checkInterval), analysisTimeout);
         })
       ]);
     } catch (error) {

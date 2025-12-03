@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import crypto from 'crypto';
 import { prisma } from '@/lib/db';
+import { isValidSID, normalizeContactId, hasValidContactId } from '@/lib/facebook/contact-validation';
 
 // Webhook event types
 interface WebhookMessage {
@@ -536,8 +537,17 @@ async function handleInstagramMessage(value: WebhookEvent) {
     }
 
     // Find the Facebook page by Instagram account
+    // Note: Multiple organizations can have the same Instagram account,
+    // so we use findFirst. If you need to route to a specific organization,
+    // you'll need additional context (e.g., from webhook payload)
     const page = await prisma.facebookPage.findFirst({
-      where: { instagramAccountId: recipientId },
+      where: { 
+        instagramAccountId: recipientId,
+        isActive: true, // Only active pages
+      },
+      orderBy: {
+        createdAt: 'desc', // Get the most recently created one
+      },
     });
 
     if (!page) {
@@ -545,25 +555,41 @@ async function handleInstagramMessage(value: WebhookEvent) {
       return;
     }
 
-    // Find or create contact
+    // Validate and normalize Instagram SID
+    const normalizedSenderId = normalizeContactId(senderId);
+    if (!normalizedSenderId || !isValidSID(normalizedSenderId)) {
+      console.error(`Invalid Instagram SID format in webhook: ${senderId}`);
+      return;
+    }
+
+    // Find or create contact - check for both Instagram and Messenger IDs
     let contact = await prisma.contact.findFirst({
       where: { 
-        instagramSID: senderId,
-        facebookPageId: page.id,
+        OR: [
+          { instagramSID: normalizedSenderId, facebookPageId: page.id },
+          { messengerPSID: normalizedSenderId, facebookPageId: page.id },
+        ],
       },
+      select: { id: true, messengerPSID: true, instagramSID: true },
     });
 
     // Auto-create contact if doesn't exist (webhook-based contact creation)
     if (!contact) {
+      // Ensure contact has at least one valid ID before creating
+      if (!hasValidContactId(null, normalizedSenderId)) {
+        console.error(`Cannot create contact without valid ID: ${normalizedSenderId}`);
+        return;
+      }
+
       try {
         // Fetch profile from Graph API to enrich contact
         const { FacebookClient } = await import('@/lib/facebook/client');
         const client = new FacebookClient(page.pageAccessToken);
-        const profile = await client.getInstagramProfile(senderId);
+        const profile = await client.getInstagramProfile(normalizedSenderId);
 
         contact = await prisma.contact.create({
           data: {
-            instagramSID: senderId,
+            instagramSID: normalizedSenderId,
             firstName: profile.name || profile.username || 'Unknown',
             profilePicUrl: profile.profile_picture_url,
             hasInstagram: true,
@@ -587,7 +613,7 @@ async function handleInstagramMessage(value: WebhookEvent) {
         // Create minimal contact if profile fetch fails
         contact = await prisma.contact.create({
           data: {
-            instagramSID: senderId,
+            instagramSID: normalizedSenderId,
             firstName: 'Unknown',
             hasInstagram: true,
             organizationId: page.organizationId,
@@ -596,6 +622,37 @@ async function handleInstagramMessage(value: WebhookEvent) {
           },
         });
       }
+    } else {
+      // Update contact to ensure both IDs are preserved if contact has both
+      const updateData: {
+        lastInteraction: Date;
+        hasInstagram?: boolean;
+        instagramSID?: string;
+        hasMessenger?: boolean;
+      } = {
+        lastInteraction: new Date(),
+      };
+
+      // If contact was found by Messenger PSID but we're adding Instagram, preserve both
+      if (contact.messengerPSID && !contact.instagramSID) {
+        updateData.hasInstagram = true;
+        updateData.instagramSID = normalizedSenderId;
+        updateData.hasMessenger = true;
+      } else if (!contact.instagramSID) {
+        // Contact doesn't have Instagram ID yet, add it
+        updateData.hasInstagram = true;
+        updateData.instagramSID = normalizedSenderId;
+      } else if (contact.instagramSID !== normalizedSenderId) {
+        // Contact has different Instagram ID, update it (shouldn't happen, but handle it)
+        updateData.hasInstagram = true;
+        updateData.instagramSID = normalizedSenderId;
+      }
+
+      // Always update lastInteraction, and update IDs if needed
+      await prisma.contact.update({
+        where: { id: contact.id },
+        data: updateData,
+      });
     }
 
     // Find or create conversation

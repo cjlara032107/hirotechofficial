@@ -88,6 +88,7 @@ export async function POST(
       )
     }
 
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     let result: any
 
     switch (action) {

@@ -130,7 +130,7 @@ Summary:`;
             statusText: response?.statusText,
             data: response?.data,
           };
-        } catch (e) {
+        } catch {
           // Ignore
         }
       }

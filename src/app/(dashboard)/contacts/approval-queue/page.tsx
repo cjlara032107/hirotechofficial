@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
+import Image from 'next/image';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -58,10 +59,6 @@ export default function ApprovalQueuePage() {
   const [feedback, setFeedback] = useState('');
   const [pendingAction, setPendingAction] = useState<'approve' | 'reject' | null>(null);
 
-  useEffect(() => {
-    loadContacts();
-  }, [pagination.page]);
-
   const loadContacts = async () => {
     try {
       setLoading(true);
@@ -80,6 +77,11 @@ export default function ApprovalQueuePage() {
       setLoading(false);
     }
   };
+
+  useEffect(() => {
+    loadContacts();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pagination.page]);
 
   const handleSelectAll = () => {
     if (selectedContacts.size === contacts.length) {
@@ -257,9 +259,11 @@ export default function ApprovalQueuePage() {
                         <div className="flex items-start justify-between">
                           <div className="flex items-center gap-3">
                             {contact.profilePicUrl ? (
-                              <img
+                              <Image
                                 src={contact.profilePicUrl}
                                 alt={`${contact.firstName} ${contact.lastName || ''}`}
+                                width={40}
+                                height={40}
                                 className="w-10 h-10 rounded-full"
                               />
                             ) : (
@@ -400,4 +404,3 @@ export default function ApprovalQueuePage() {
     </div>
   );
 }
-

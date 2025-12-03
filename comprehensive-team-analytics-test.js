@@ -10,7 +10,7 @@ const testResults = {
 };
 
 // Configuration
-const BASE_URL = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000';
+// const BASE_URL = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000';
 
 /**
  * Test 1: Team Analytics Component Structure
@@ -595,7 +595,7 @@ if (typeof module !== 'undefined' && module.exports) {
 // Run tests if executed directly
 if (require.main === module) {
   runAllTests()
-    .then(({ results, summary }) => {
+    .then(() => {
       console.log('\n\n📊 DETAILED RESULTS AVAILABLE');
       console.log('Check the output above for specific findings and recommendations.');
       process.exit(testResults.failed.length > 0 ? 1 : 0);

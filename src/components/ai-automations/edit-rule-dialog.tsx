@@ -42,6 +42,7 @@ interface Rule {
   activeHoursEnd: number;
   run24_7: boolean;
   stopOnReply: boolean;
+  respectBestContactTime: boolean;
   removeTagOnReply?: string;
   messageTag?: string;
 }
@@ -74,6 +75,7 @@ export function EditRuleDialog({ open, onOpenChange, rule, onSuccess }: EditRule
     activeHoursEnd: rule.activeHoursEnd.toString(),
     run24_7: rule.run24_7,
     stopOnReply: rule.stopOnReply,
+    respectBestContactTime: rule.respectBestContactTime ?? false,
     removeTagOnReply: rule.removeTagOnReply || '',
     messageTag: rule.messageTag || 'ACCOUNT_UPDATE',
     enabled: rule.enabled
@@ -98,6 +100,7 @@ export function EditRuleDialog({ open, onOpenChange, rule, onSuccess }: EditRule
       activeHoursEnd: rule.activeHoursEnd.toString(),
       run24_7: rule.run24_7,
       stopOnReply: rule.stopOnReply,
+      respectBestContactTime: rule.respectBestContactTime ?? false,
       removeTagOnReply: rule.removeTagOnReply || '',
       messageTag: rule.messageTag || 'ACCOUNT_UPDATE',
       enabled: rule.enabled
@@ -175,6 +178,7 @@ export function EditRuleDialog({ open, onOpenChange, rule, onSuccess }: EditRule
           activeHoursEnd: parseInt(formData.activeHoursEnd),
           run24_7: formData.run24_7,
           stopOnReply: formData.stopOnReply,
+          respectBestContactTime: formData.respectBestContactTime,
           removeTagOnReply: formData.removeTagOnReply || null,
           messageTag: formData.messageTag || null,
           enabled: formData.enabled,
@@ -492,6 +496,19 @@ export function EditRuleDialog({ open, onOpenChange, rule, onSuccess }: EditRule
               <Switch
                 checked={formData.stopOnReply}
                 onCheckedChange={(checked) => setFormData({ ...formData, stopOnReply: checked })}
+              />
+            </div>
+
+            <div className="flex items-center justify-between">
+              <div className="space-y-0.5">
+                <Label>Respect Best Contact Time</Label>
+                <p className="text-xs text-muted-foreground">
+                  Only send messages during each contact's best contact time window
+                </p>
+              </div>
+              <Switch
+                checked={formData.respectBestContactTime}
+                onCheckedChange={(checked) => setFormData({ ...formData, respectBestContactTime: checked })}
               />
             </div>
 

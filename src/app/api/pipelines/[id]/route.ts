@@ -19,8 +19,11 @@ export async function GET(
     const { searchParams } = new URL(request.url);
     const search = searchParams.get('search');
     const page = parseInt(searchParams.get('page') || '1');
-    const limit = parseInt(searchParams.get('limit') || '50');
+    // Reduced default page size for better performance
+    const limit = parseInt(searchParams.get('limit') || '25');
 
+    // Use a single optimized query to fetch pipeline with stages and contacts
+    // This avoids N+1 queries by fetching everything in one database round-trip
     const pipeline = await prisma.pipeline.findFirst({
       where: {
         id: id,
@@ -47,7 +50,7 @@ export async function GET(
                     ],
                   }
                 : undefined,
-              take: Math.min(limit, 20), // Reduce initial load from 50 to 20
+              take: Math.min(limit, 25), // Optimized page size for better performance
               skip: (page - 1) * limit,
               orderBy: { stageEnteredAt: 'desc' },
               select: {

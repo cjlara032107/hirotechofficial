@@ -464,6 +464,331 @@ npm run dev
 
 ---
 
+---
+
+## 📱 Facebook & Instagram Integration Issues
+
+### 11. Facebook API Errors
+
+**Common Error Codes:**
+
+| Code | Meaning | Solution |
+|------|---------|----------|
+| **190** | Access token expired | Reconnect Facebook page in Settings |
+| **200** | Permission denied | Check required permissions in Facebook App |
+| **100** | Invalid parameter | Contact may have blocked page or deleted account |
+| **613** | Rate limit exceeded | Wait 5-10 minutes, then retry |
+| **4** | Rate limit (alternative) | Wait 5-10 minutes, then retry |
+| **17** | Rate limit (alternative) | Wait 5-10 minutes, then retry |
+| **10903** | Outside 24hr window | Use appropriate message tag |
+| **10** | User privacy restriction | Contact opted out of messaging |
+
+**Diagnosis:**
+```bash
+# Check Facebook connection status
+curl http://localhost:3000/api/facebook/pages/connected
+
+# Test Facebook credentials
+npm run validate:env
+```
+
+**Solution:**
+1. **Token Expired (190):**
+   - Go to Settings > Integrations
+   - Disconnect and reconnect Facebook page
+   - Re-authenticate with required permissions
+
+2. **Rate Limited (613, 4, 17):**
+   - Wait 5-10 minutes
+   - Reduce campaign sending speed
+   - Check campaign rate limit settings
+
+3. **Permission Error (200, 10):**
+   - Verify Facebook App has required permissions:
+     - `pages_messaging`
+     - `pages_manage_metadata`
+     - `pages_read_engagement`
+     - `instagram_basic` (for Instagram)
+     - `instagram_manage_messages` (for Instagram)
+
+---
+
+### 12. Campaign Not Sending Messages
+
+**Symptoms:**
+- Campaign stuck in "SENDING" status
+- Messages show as "PENDING"
+- No error messages displayed
+
+**Diagnosis:**
+```bash
+# Check if BullMQ worker is running
+# Worker should be started separately:
+node -r esbuild-register src/lib/campaigns/worker.ts
+
+# Check Redis connection
+npm run test:redis
+
+# Check campaign status
+curl http://localhost:3000/api/campaigns
+```
+
+**Solution:**
+
+1. **Start BullMQ Worker:**
+   ```bash
+   # In separate terminal
+   node -r esbuild-register src/lib/campaigns/worker.ts
+   ```
+
+2. **Check Redis:**
+   ```bash
+   # Windows
+   cd redis-server
+   .\redis-server.exe
+   
+   # Or Docker
+   docker run -d -p 6379:6379 redis:alpine
+   ```
+
+3. **Fix Stuck Campaigns:**
+   ```bash
+   npm run fix:campaigns
+   ```
+
+4. **Check Campaign Logs:**
+   - View browser console for errors
+   - Check server logs for API errors
+   - Verify Facebook page access token is valid
+
+---
+
+### 13. Contact Sync Issues
+
+**Symptoms:**
+- Sync takes too long or hangs
+- Contacts not appearing after sync
+- "Failed to sync contact" errors
+- Sync shows 0 contacts
+
+**Diagnosis:**
+```bash
+# Check sync status
+curl http://localhost:3000/api/facebook/sync
+
+# Test Facebook API access
+curl http://localhost:3000/api/debug/facebook-config
+```
+
+**Common Causes:**
+
+1. **AI Analysis Slowdown:**
+   - AI analysis takes 5-10 seconds per contact
+   - For 100 contacts: 8-17 minutes
+   - **Solution:** Use "Instant Sync" mode (skips AI initially)
+
+2. **Token Expired:**
+   - Facebook access token expired
+   - **Solution:** Reconnect Facebook page
+
+3. **Rate Limiting:**
+   - Too many API calls to Facebook
+   - **Solution:** Wait 10-15 minutes, then retry
+
+4. **Large Conversation Count:**
+   - Pages with 1000+ conversations take 30-90 seconds
+   - **Solution:** Use background sync for large pages
+
+**Solution:**
+1. Use "Instant Sync" for faster initial sync
+2. Reconnect Facebook page if token expired
+3. Wait and retry if rate limited
+4. Check Facebook App permissions
+
+---
+
+### 14. JSON Parse Errors in Browser Console
+
+**Symptoms:**
+- Console shows: `Unexpected token '<', "<!DOCTYPE "... is not valid JSON`
+- API calls fail silently
+- UI doesn't update after actions
+
+**Cause:**
+- Server returns HTML error page instead of JSON
+- Usually indicates 500 error or authentication failure
+
+**Diagnosis:**
+1. Open browser DevTools (F12)
+2. Go to Network tab
+3. Find failed request
+4. Check Response tab - should see HTML instead of JSON
+
+**Solution:**
+1. **Check Server Logs:**
+   - Look for error stack traces
+   - Common causes: Prisma errors, missing env vars
+
+2. **Run Diagnostics:**
+   ```bash
+   npm run diagnose
+   ```
+
+3. **Check Authentication:**
+   - Clear cookies and log in again
+   - Verify session is valid
+
+4. **Fix Root Cause:**
+   - Usually Prisma client lock or database connection
+   - Follow Issue #1 (Prisma Client Lock) steps
+
+---
+
+### 15. AI Analysis Not Working
+
+**Symptoms:**
+- Contact analysis shows "Pending" or "Failed"
+- AI scores not updating
+- Analysis jobs stuck at 0%
+
+**Diagnosis:**
+```bash
+# Check NVIDIA API keys
+npm run check:keys
+
+# Test NVIDIA API
+npm run test:keys
+
+# Check API key rate limits
+npm run check:rate-limit
+```
+
+**Common Causes:**
+
+1. **Missing API Keys:**
+   - NVIDIA API key not configured
+   - **Solution:** Add `NVIDIA_API_KEY` to `.env.local`
+
+2. **Rate Limit Exhausted:**
+   - All API keys have hit rate limits
+   - **Solution:** Wait 24 hours or add more API keys
+
+3. **Invalid API Key:**
+   - API key format incorrect or revoked
+   - **Solution:** Generate new API key from NVIDIA
+
+**Solution:**
+1. **Add API Key:**
+   ```bash
+   npm run add:missing-keys
+   ```
+
+2. **Check Rate Limits:**
+   - Go to Settings > API Keys
+   - View rate limit status
+   - Add additional keys if needed
+
+3. **Verify Key Format:**
+   - NVIDIA keys should start with `nvapi-`
+   - Check key is active in NVIDIA dashboard
+
+---
+
+### 16. Database Connection Pool Exhausted
+
+**Symptoms:**
+- Intermittent 500 errors
+- "Connection pool timeout" errors
+- "P2024" Prisma errors
+- Errors during high load (campaigns, syncs)
+
+**Cause:**
+- Too many concurrent database connections
+- Default pool size (5) too small for workload
+
+**Diagnosis:**
+```bash
+# Check database pool settings
+npm run verify:db-pool
+
+# Check connection pool usage
+# Look for P2024 errors in logs
+```
+
+**Solution:**
+1. **Increase Pool Size:**
+   - Edit `DATABASE_URL` in `.env.local`
+   - Add `?connection_limit=10&pool_timeout=20`
+   - Example: `postgresql://user:pass@host:5432/db?connection_limit=10&pool_timeout=20`
+
+2. **Reduce Concurrent Operations:**
+   - Lower campaign batch size
+   - Reduce sync concurrency
+   - Process operations sequentially
+
+3. **Add Connection Retry:**
+   - System automatically retries on pool exhaustion
+   - Wait 1-2 seconds and retry
+
+---
+
+### 17. Webhook Not Receiving Events
+
+**Symptoms:**
+- New messages not appearing in inbox
+- Conversations not updating
+- Delivery/read receipts not updating
+
+**Diagnosis:**
+```bash
+# Check webhook configuration
+curl http://localhost:3000/api/webhooks/facebook
+
+# Test webhook locally (requires ngrok)
+npm run ngrok:start
+# Then update Facebook App webhook URL to ngrok URL
+```
+
+**Common Causes:**
+
+1. **Webhook URL Not Configured:**
+   - Facebook App webhook URL not set
+   - **Solution:** Configure in Facebook App settings
+
+2. **Verify Token Mismatch:**
+   - Token in Facebook App doesn't match `FACEBOOK_WEBHOOK_VERIFY_TOKEN`
+   - **Solution:** Update token in Facebook App or `.env.local`
+
+3. **Webhook Not Subscribed:**
+   - Missing event subscriptions
+   - **Solution:** Subscribe to: `messages`, `messaging_postbacks`, `message_deliveries`, `message_reads`
+
+4. **Local Development:**
+   - Facebook can't reach localhost
+   - **Solution:** Use ngrok or deploy to staging
+
+**Solution:**
+1. **Configure Webhook in Facebook App:**
+   - URL: `https://your-domain.com/api/webhooks/facebook`
+   - Verify Token: Use value from `FACEBOOK_WEBHOOK_VERIFY_TOKEN`
+   - Subscribe to required events
+
+2. **For Local Development:**
+   ```bash
+   # Start ngrok
+   npm run ngrok:start
+   
+   # Update Facebook App webhook URL to ngrok URL
+   # Example: https://abc123.ngrok.io/api/webhooks/facebook
+   ```
+
+3. **Test Webhook:**
+   - Send test message from Facebook
+   - Check server logs for webhook events
+   - Verify events appear in inbox
+
+---
+
 ## 🔗 Related Documentation
 
 - [FIX_INTERNAL_SERVER_ERROR.md](./FIX_INTERNAL_SERVER_ERROR.md) - Detailed fix instructions
@@ -471,4 +796,6 @@ npm run dev
 - [ENV_SETUP_GUIDE.md](./ENV_SETUP_GUIDE.md) - Environment variables
 - [README.md](./README.md) - General documentation
 - [QUICK_START_CAMPAIGNS.md](./QUICK_START_CAMPAIGNS.md) - Campaign setup
+- [PERFORMANCE_EXPECTATIONS.md](./PERFORMANCE_EXPECTATIONS.md) - Performance benchmarks
+- [LIMITATIONS_AND_KNOWN_ISSUES.md](./LIMITATIONS_AND_KNOWN_ISSUES.md) - Known limitations
 

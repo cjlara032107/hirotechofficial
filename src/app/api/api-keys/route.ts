@@ -176,6 +176,10 @@ export async function POST(request: NextRequest) {
     // If single key, return object; if multiple, return array
     const responseBody = results.length === 1 ? results[0] : results;
 
+    // Invalidate concurrency cache so limits update with new keys
+    const { invalidateConcurrencyCache } = await import('@/lib/ai/dynamic-concurrency');
+    invalidateConcurrencyCache();
+
     return NextResponse.json(responseBody, { status: 201 });
   } catch (error) {
     console.error('Create API key error:', error);

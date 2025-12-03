@@ -24,7 +24,8 @@ export async function GET(
     const { id: teamId } = await params
     const { searchParams } = new URL(request.url)
     
-    const limit = parseInt(searchParams.get('limit') || '50')
+    // Reduced default page size for better performance
+    const limit = parseInt(searchParams.get('limit') || '25')
     const offset = parseInt(searchParams.get('offset') || '0')
     const unreadOnly = searchParams.get('unreadOnly') === 'true'
 

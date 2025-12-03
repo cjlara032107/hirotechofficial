@@ -16,8 +16,12 @@ export async function POST(
     const { tag } = await request.json();
     const contactId = id;
 
-    const contact = await prisma.contact.findUnique({
-      where: { id: contactId },
+    // Verify contact exists and belongs to user's organization
+    const contact = await prisma.contact.findFirst({
+      where: {
+        id: contactId,
+        organizationId: session.user.organizationId,
+      },
     });
 
     if (!contact) {
@@ -104,8 +108,12 @@ export async function DELETE(
     const { tag } = await request.json();
     const contactId = id;
 
-    const contact = await prisma.contact.findUnique({
-      where: { id: contactId },
+    // Verify contact exists and belongs to user's organization
+    const contact = await prisma.contact.findFirst({
+      where: {
+        id: contactId,
+        organizationId: session.user.organizationId,
+      },
     });
 
     if (!contact) {

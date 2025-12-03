@@ -74,7 +74,13 @@ export function FacebookPageSelectorDialog({
       }
 
       const data = await response.json();
-      setPages(data.pages);
+      console.log('[Page Selector] Fetched pages:', {
+        total: data.pages?.length || 0,
+        connected: data.pages?.filter((p: any) => p.isConnected).length || 0,
+        available: data.pages?.filter((p: any) => !p.isConnected).length || 0,
+        pages: data.pages,
+      });
+      setPages(data.pages || []);
     } catch (error) {
       console.error('Error fetching pages:', error);
       const message = error instanceof Error ? error.message : 'Failed to fetch Facebook pages';
@@ -147,16 +153,34 @@ export function FacebookPageSelectorDialog({
       const data = await response.json();
 
       if (!response.ok) {
-        throw new Error(data.error || 'Failed to save pages');
+        console.error('[Page Selector] Save failed:', {
+          status: response.status,
+          error: data.error,
+          errors: data.errors,
+          details: data.details,
+        });
+        
+        // Show specific error message
+        let errorMessage = data.error || 'Failed to save pages';
+        if (data.errors && data.errors.length > 0) {
+          errorMessage += `: ${data.errors.map((e: any) => e.error || e.pageName).join(', ')}`;
+        }
+        throw new Error(errorMessage);
       }
+
+      console.log('[Page Selector] Save successful:', {
+        savedPages: data.savedPages,
+        errors: data.errors?.length || 0,
+      });
 
       toast.success(
         `Successfully connected ${data.savedPages} page${data.savedPages > 1 ? 's' : ''}`
       );
 
       if (data.errors && data.errors.length > 0) {
+        const errorDetails = data.errors.map((e: any) => `${e.pageName || e.pageId}: ${e.error || 'Unknown error'}`).join('; ');
         toast.error(
-          `Failed to connect ${data.errors.length} page${data.errors.length > 1 ? 's' : ''}`
+          `Failed to connect ${data.errors.length} page${data.errors.length > 1 ? 's' : ''}: ${errorDetails}`
         );
       }
 

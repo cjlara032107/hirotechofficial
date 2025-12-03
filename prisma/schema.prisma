@@ -5,24 +5,24 @@ generator client {
 datasource db {
   provider  = "postgresql"
   url       = env("DATABASE_URL")
-  directUrl = env("DIRECT_URL")
+  directUrl = env("DIRECT_URL") // Optional: can be same as DATABASE_URL if not using connection pooler. If not set, will use DATABASE_URL.
 }
 
 model Organization {
-  id            String         @id @default(cuid())
-  name          String
-  slug          String         @unique
-  createdAt     DateTime       @default(now())
-  updatedAt     DateTime       @updatedAt
-  campaigns     Campaign[]
-  contacts      Contact[]
-  facebookPages FacebookPage[]
-  pipelines     Pipeline[]
-  tags          Tag[]
-  teams         Team[]
-  templates     Template[]
-  users         User[]
-  analysisJobs  AnalysisJob[]
+  id             String          @id @default(cuid())
+  name           String
+  slug           String          @unique
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+  campaigns      Campaign[]
+  contacts       Contact[]
+  facebookPages  FacebookPage[]
+  pipelines      Pipeline[]
+  tags           Tag[]
+  teams          Team[]
+  templates      Template[]
+  users          User[]
+  analysisJobs   AnalysisJob[]
   assistantChats AssistantChat[]
 }
 
@@ -51,16 +51,16 @@ model User {
   organization          Organization            @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   pageAccesses          PageAccess[]
   analysisJobs          AnalysisJob[]
-  assistantChats       AssistantChat[]
+  assistantChats        AssistantChat[]
 }
 
 model FacebookPage {
   id                 String                 @id @default(cuid())
   organizationId     String
-  pageId             String                 @unique
+  pageId             String
   pageName           String
   pageAccessToken    String
-  instagramAccountId String?                @unique
+  instagramAccountId String?
   instagramUsername  String?
   autoSync           Boolean                @default(true)
   syncInterval       Int                    @default(3600)
@@ -78,6 +78,10 @@ model FacebookPage {
   organization       Organization           @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   syncJobs           SyncJob[]
   teamPermissions    TeamMemberPermission[]
+
+  @@unique([pageId, organizationId])
+  @@index([autoPipelineId])
+  @@index([organizationId])
 }
 
 model Contact {
@@ -100,15 +104,32 @@ model Contact {
   leadStatus            LeadStatus              @default(NEW)
   tags                  String[]
   notes                 String?
-  aiContext             String?
+  aiContext             String?                 @db.Text // AI reasoning and analysis details (comprehensive)
+  aiSummary             String?                 @db.Text // User-friendly summary (separate from context, longer and more detailed)
   aiContextUpdatedAt    DateTime?
+  conversionProbability Float? // AI-predicted conversion likelihood (0-100)
+  buyerIntent           String? // Detected buyer intent (BROWSING, PRICE_INQUIRY, READY_TO_BUY, etc.)
+  sentiment             String? // Detected sentiment (POSITIVE, NEGATIVE, NEUTRAL, FRUSTRATED, EXCITED)
+  productInterests      String[] // Extracted product interests
+  intentSignals         Json? // Buyer intent signals (rapid replies, multiple questions, etc.)
+  nextBestAction        String? // AI-suggested next action
+  agentSuggestions      Json? // Agent assistance suggestions (best reply, follow-up, offers)
   lastInteraction       DateTime?
-  contactInfo           Json?                  // Stores extracted contact information (age, phone, email, socials, etc.)
-  bestContactTimes      Json?                  // Stores best contact times with multiple estimates and days of week
-  riskScore             Int?                   // Risk score (0-100), higher = more risky
-  riskLevel             String?                 // LOW, MEDIUM, HIGH, CRITICAL
-  approvalStatus        ApprovalStatus?         // PENDING, APPROVED, REJECTED, AUTO_APPROVED
-  riskReasons           String[]                // Array of risk reasons
+  stageChangeFeedback   Json? // Feedback from manual stage changes (for learning)
+  // New advanced AI features
+  conversionPath        String[]                @default([]) // Conversion path mapping (e.g., ["Greeting", "Price", "Delivery", "Payment"])
+  similarLeadsInsight   String?                 @db.Text // Similar lead suggestions and patterns
+  botAccuracyScore      Float? // Bot's self-evaluation of its sorting accuracy (0-100)
+  conversationPatterns  Json? // Cross-message pattern linking (repeated concerns, behavioral loops, etc.)
+  indirectIntent        Json? // Indirect intent detection (Filipino/Taglish patterns)
+  buyerReliability      Json? // Buyer Reliability Model (follow-through probability, ghosting risk, etc.)
+  buyerStyle            String? // Buyer Style Classifier (STRAIGHT_TO_POINT, EMOTIONAL, ANALYTICAL, etc.)
+  contactInfo           Json? // Stores extracted contact information (age, phone, email, socials, etc.)
+  bestContactTimes      Json? // Stores best contact times with multiple estimates and days of week
+  riskScore             Int? // Risk score (0-100), higher = more risky
+  riskLevel             String? // LOW, MEDIUM, HIGH, CRITICAL
+  approvalStatus        ApprovalStatus? // PENDING, APPROVED, REJECTED, AUTO_APPROVED
+  riskReasons           String[] // Array of risk reasons
   approvedAt            DateTime?
   approvedBy            String?
   rejectedAt            DateTime?
@@ -130,15 +151,19 @@ model Contact {
 
   @@unique([messengerPSID, facebookPageId])
   @@index([instagramSID])
+  @@index([facebookPageId])
   @@index([pipelineId, stageId])
   @@index([leadStatus])
   @@index([organizationId])
   @@index([createdAt])
   @@index([firstName])
   @@index([leadScore])
+  @@index([lastInteraction])
   @@index([organizationId, createdAt])
   @@index([organizationId, leadScore])
   @@index([organizationId, firstName])
+  @@index([organizationId, lastInteraction])
+  @@index([facebookPageId, lastInteraction])
   @@index([approvalStatus])
   @@index([riskScore])
   @@index([organizationId, approvalStatus])
@@ -192,17 +217,23 @@ model Pipeline {
 }
 
 model PipelineStage {
-  id             String            @id @default(cuid())
-  name           String
-  description    String?
-  color          String            @default("#64748b")
-  order          Int
-  type           StageType         @default(IN_PROGRESS)
-  leadScoreMin   Int               @default(0)
-  leadScoreMax   Int               @default(100)
-  pipelineId     String
-  createdAt      DateTime          @default(now())
-  updatedAt      DateTime          @updatedAt
+  id           String    @id @default(cuid())
+  name         String
+  description  String?
+  color        String    @default("#64748b")
+  order        Int
+  type         StageType @default(IN_PROGRESS)
+  leadScoreMin Int       @default(0)
+  leadScoreMax Int       @default(100)
+  pipelineId   String
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  // Auto-tagging configuration
+  autoTagEnabled  Boolean @default(false)
+  autoTagToAdd    String?
+  autoTagToRemove String?
+
   contacts       Contact[]
   fromActivities ContactActivity[] @relation("fromStage")
   activities     ContactActivity[] @relation("toStage")
@@ -210,6 +241,7 @@ model PipelineStage {
 
   @@unique([pipelineId, order])
   @@index([pipelineId])
+  @@index([autoTagEnabled])
 }
 
 model ContactActivity {
@@ -230,6 +262,9 @@ model ContactActivity {
 
   @@index([contactId, createdAt])
   @@index([type])
+  @@index([fromStageId])
+  @@index([toStageId])
+  @@index([userId])
 }
 
 model PipelineAutomation {
@@ -289,6 +324,10 @@ model Campaign {
   aiCustomInstructions String?
   aiMessagesMap        Json?
 
+  // Media Attachment Feature
+  mediaUrl             String?
+  mediaType            String?
+
   createdAt    DateTime       @default(now())
   updatedAt    DateTime       @updatedAt
   createdBy    User           @relation(fields: [createdById], references: [id])
@@ -302,6 +341,9 @@ model Campaign {
   @@index([organizationId])
   @@index([scheduledAt])
   @@index([status, scheduledAt])
+  @@index([createdById])
+  @@index([templateId])
+  @@index([facebookPageId])
 }
 
 model Template {
@@ -338,6 +380,9 @@ model Conversation {
 
   @@index([status, platform])
   @@index([lastMessageAt])
+  @@index([assignedToId])
+  @@index([contactId])
+  @@index([facebookPageId])
 }
 
 model Message {
@@ -356,6 +401,7 @@ model Message {
   readAt            DateTime?
   failedAt          DateTime?
   errorMessage      String?
+  attachments       Json?
   createdAt         DateTime      @default(now())
   campaign          Campaign?     @relation(fields: [campaignId], references: [id])
   contact           Contact       @relation(fields: [contactId], references: [id], onDelete: Cascade)
@@ -377,40 +423,51 @@ model WebhookEvent {
 }
 
 model SyncJob {
-  id             String        @id @default(cuid())
-  facebookPageId String
-  status         SyncJobStatus @default(PENDING)
-  totalContacts  Int           @default(0)
-  syncedContacts Int           @default(0)
-  failedContacts Int           @default(0)
-  errors         Json?
-  tokenExpired   Boolean       @default(false)
-  startedAt      DateTime?
-  completedAt    DateTime?
-  createdAt      DateTime      @default(now())
-  updatedAt      DateTime      @updatedAt
-  facebookPage   FacebookPage  @relation(fields: [facebookPageId], references: [id], onDelete: Cascade)
+  id                String        @id @default(cuid())
+  facebookPageId    String
+  status            SyncJobStatus @default(PENDING)
+  totalContacts     Int           @default(0)
+  syncedContacts    Int           @default(0)
+  failedContacts    Int           @default(0)
+  errors            Json?
+  tokenExpired      Boolean       @default(false)
+  startedAt         DateTime?
+  completedAt       DateTime?
+  lastProgressAt    DateTime?
+  // Performance metrics
+  durationMs        Int? // Job completion time in milliseconds
+  contactsPerSecond Float? // Contacts processed per second
+  createdAt         DateTime      @default(now())
+  updatedAt         DateTime      @updatedAt
+  facebookPage      FacebookPage  @relation(fields: [facebookPageId], references: [id], onDelete: Cascade)
 
   @@index([facebookPageId, status])
   @@index([status, createdAt])
+  @@index([lastProgressAt])
+  @@index([status, lastProgressAt])
 }
 
 model AnalysisJob {
-  id              String            @id @default(cuid())
-  organizationId  String
-  userId          String
-  contactIds      String[]
-  status          AnalysisJobStatus @default(PENDING)
-  totalContacts   Int               @default(0)
-  analyzedContacts Int              @default(0)
-  failedContacts   Int              @default(0)
-  errors           Json?
-  startedAt        DateTime?
-  completedAt      DateTime?
-  createdAt        DateTime         @default(now())
-  updatedAt        DateTime         @updatedAt
-  organization     Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  user             User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  id                String            @id @default(cuid())
+  organizationId    String
+  userId            String
+  contactIds        String[]
+  status            AnalysisJobStatus @default(PENDING)
+  totalContacts     Int               @default(0)
+  analyzedContacts  Int               @default(0)
+  failedContacts    Int               @default(0)
+  errors            Json?
+  startedAt         DateTime?
+  completedAt       DateTime?
+  // Performance metrics
+  durationMs        Int? // Job completion time in milliseconds
+  contactsPerSecond Float? // Contacts processed per second
+  aiSuccessRate     Float? // AI analysis success rate (0-100)
+  apiSuccessRate    Float? // API call success rate (0-100)
+  createdAt         DateTime          @default(now())
+  updatedAt         DateTime          @updatedAt
+  organization      Organization      @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user              User              @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([organizationId, status])
   @@index([userId, status])
@@ -446,6 +503,7 @@ model Team {
   @@index([organizationId])
   @@index([status])
   @@index([joinCode])
+  @@index([ownerId])
 }
 
 model TeamMember {
@@ -511,6 +569,7 @@ model TeamMemberPermission {
 
   @@unique([memberId, facebookPageId])
   @@index([memberId])
+  @@index([facebookPageId])
 }
 
 model TeamInvite {
@@ -533,6 +592,7 @@ model TeamInvite {
   @@index([teamId, status])
   @@index([code])
   @@index([expiresAt])
+  @@index([createdById])
 }
 
 model TeamJoinRequest {
@@ -551,6 +611,7 @@ model TeamJoinRequest {
 
   @@index([userId])
   @@index([inviteId, status])
+  @@index([reviewedById])
 }
 
 model TeamActivity {
@@ -600,6 +661,7 @@ model TeamTask {
   @@index([teamId, status])
   @@index([assignedToId, status])
   @@index([dueDate])
+  @@index([createdById])
 }
 
 model TeamThread {
@@ -630,6 +692,8 @@ model TeamThread {
   @@index([teamId, lastMessageAt])
   @@index([type])
   @@index([isChannel])
+  @@index([pinnedById])
+  @@index([createdById])
 }
 
 model TeamMessage {
@@ -664,6 +728,7 @@ model TeamMessage {
   @@index([senderId])
   @@index([isPinned])
   @@index([topicId, createdAt])
+  @@index([replyToId])
 }
 
 model TeamBroadcast {
@@ -737,6 +802,7 @@ model AIAutomationRule {
   activeHoursEnd        Int                     @default(21)
   run24_7               Boolean                 @default(false)
   stopOnReply           Boolean                 @default(true)
+  respectBestContactTime Boolean                 @default(false)
   removeTagOnReply      String?
   messageTag            MessageTag?
   lastExecutedAt        DateTime?
@@ -752,6 +818,7 @@ model AIAutomationRule {
 
   @@index([enabled, lastExecutedAt])
   @@index([userId, enabled])
+  @@index([facebookPageId])
 }
 
 model AIAutomationStop {
@@ -768,6 +835,7 @@ model AIAutomationStop {
 
   @@unique([ruleId, contactId])
   @@index([contactId])
+  @@index([ruleId])
 }
 
 model TeamNotification {
@@ -1062,7 +1130,7 @@ enum ApiKeyStatus {
 model PageAccess {
   id        String   @id @default(cuid())
   userId    String
-  pagePath  String   // e.g., "/dashboard", "/contacts", "/campaigns"
+  pagePath  String // e.g., "/dashboard", "/contacts", "/campaigns"
   isEnabled Boolean  @default(true)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -1074,14 +1142,14 @@ model PageAccess {
 }
 
 model AssistantChat {
-  id             String              @id @default(cuid())
+  id             String             @id @default(cuid())
   userId         String
   organizationId String
-  title          String?              // Auto-generated from first message
-  createdAt      DateTime             @default(now())
-  updatedAt      DateTime             @updatedAt
-  user           User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
-  organization   Organization         @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  title          String? // Auto-generated from first message
+  createdAt      DateTime           @default(now())
+  updatedAt      DateTime           @updatedAt
+  user           User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  organization   Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   messages       AssistantMessage[]
 
   @@index([userId, createdAt])
@@ -1089,13 +1157,13 @@ model AssistantChat {
 }
 
 model AssistantMessage {
-  id          String        @id @default(cuid())
-  chatId      String
-  role        MessageRole   @default(USER)
-  content     String        @db.Text
-  metadata    Json?         // Store sources, citations, etc.
-  createdAt   DateTime      @default(now())
-  chat        AssistantChat @relation(fields: [chatId], references: [id], onDelete: Cascade)
+  id        String        @id @default(cuid())
+  chatId    String
+  role      MessageRole   @default(USER)
+  content   String        @db.Text
+  metadata  Json? // Store sources, citations, etc.
+  createdAt DateTime      @default(now())
+  chat      AssistantChat @relation(fields: [chatId], references: [id], onDelete: Cascade)
 
   @@index([chatId, createdAt])
 }
@@ -1104,4 +1172,113 @@ enum MessageRole {
   USER
   ASSISTANT
   SYSTEM
+}
+
+model ConversationCache {
+  id           String   @id @default(cuid())
+  hash         String   @unique
+  analysisData String   @db.Text
+  createdAt    DateTime @default(now())
+  expiresAt    DateTime
+
+  @@index([hash])
+  @@index([expiresAt])
+}
+
+model PerformanceMetric {
+  id        String   @id @default(cuid())
+  operation String
+  duration  Int // Duration in milliseconds
+  success   Boolean
+  errorType String?
+  apiKeyId  String?
+  requestId String?
+  priority  String?
+  metadata  Json? // Additional context data
+  createdAt DateTime @default(now())
+
+  @@index([operation, createdAt])
+  @@index([success, createdAt])
+  @@index([createdAt])
+  @@index([apiKeyId, createdAt])
+}
+
+model ErrorLog {
+  id        String   @id @default(cuid())
+  level     String   @default("error") // error, warn, info
+  message   String   @db.Text
+  stack     String?  @db.Text // Full stack trace
+  errorType String? // Error class name
+  errorCode String? // Custom error code
+  context   Json? // Additional context (request ID, user ID, etc.)
+  metadata  Json? // Additional metadata
+  createdAt DateTime @default(now())
+
+  @@index([level, createdAt])
+  @@index([errorType, createdAt])
+  @@index([createdAt])
+  @@index([errorCode])
+}
+
+model JobLog {
+  id        String   @id @default(cuid())
+  jobType   String // e.g., "cron-send-scheduled", "background-sync", "ai-automations"
+  jobId     String? // Related job ID (e.g., SyncJob.id, Campaign.id)
+  status    String // "started", "progress", "completed", "failed", "cancelled"
+  message   String   @db.Text
+  progress  Int? // Progress percentage (0-100)
+  metadata  Json? // Additional context (counts, errors, etc.)
+  error     String?  @db.Text // Error message if failed
+  stack     String?  @db.Text // Stack trace if failed
+  duration  Int? // Duration in milliseconds (for completed jobs)
+  createdAt DateTime @default(now())
+
+  @@index([jobType, createdAt])
+  @@index([jobId, createdAt])
+  @@index([status, createdAt])
+  @@index([createdAt])
+}
+
+model SystemAlert {
+  id             String        @id @default(cuid())
+  type           AlertType
+  severity       AlertSeverity @default(WARNING)
+  title          String
+  message        String        @db.Text
+  status         AlertStatus   @default(ACTIVE)
+  metadata       Json? // Additional context (key IDs, connection counts, etc.)
+  resolvedAt     DateTime?
+  acknowledgedAt DateTime?
+  acknowledgedBy String? // User ID who acknowledged
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  @@index([type, status, createdAt])
+  @@index([status, createdAt])
+  @@index([severity, createdAt])
+  @@index([createdAt])
+}
+
+enum AlertType {
+  API_RATE_LIMIT_EXHAUSTION
+  DATABASE_CONNECTION_ISSUE
+  DATABASE_POOL_EXHAUSTION
+  MEMORY_LEAK_DETECTED
+  SYSTEM_ERROR
+  JOB_FAILURE
+  HIGH_ERROR_RATE
+  PERFORMANCE_DEGRADATION
+}
+
+enum AlertSeverity {
+  INFO
+  WARNING
+  ERROR
+  CRITICAL
+}
+
+enum AlertStatus {
+  ACTIVE
+  RESOLVED
+  ACKNOWLEDGED
 }

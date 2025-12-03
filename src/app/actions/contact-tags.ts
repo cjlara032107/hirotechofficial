@@ -4,6 +4,7 @@ import { auth } from '@/auth';
 import { prisma } from '@/lib/db';
 import { ActivityType } from '@prisma/client';
 import { revalidatePath } from 'next/cache';
+import { logger } from '@/lib/utils/logger';
 
 export async function addTagToContact(contactId: string, tag: string) {
   try {
@@ -58,10 +59,14 @@ export async function addTagToContact(contactId: string, tag: string) {
       await prisma.aIAutomationStop.deleteMany({
         where: {
           contactId,
-          ruleId: { in: rulesWithThisTag.map(r => r.id) },
+          ruleId: { in: rulesWithThisTag.map((r: { id: string }) => r.id) },
         },
       });
-      console.log(`[Tag Action] Removed ${rulesWithThisTag.length} stop records for contact ${contactId} after adding tag "${tag}"`);
+      logger.debug('Removed stop records after adding tag', { 
+        contactId, 
+        tag, 
+        stopRecordsRemoved: rulesWithThisTag.length 
+      });
     }
 
     // Create activity log
@@ -80,7 +85,7 @@ export async function addTagToContact(contactId: string, tag: string) {
     
     return { success: true };
   } catch (error) {
-    console.error('Error adding tag:', error);
+    logger.error('Error adding tag', error instanceof Error ? error : new Error(String(error)), { contactId, tag });
     return { success: false, error: 'Failed to add tag' };
   }
 }
@@ -110,7 +115,7 @@ export async function removeTagFromContact(contactId: string, tag: string) {
     }
 
     // Remove tag from contact
-    const updatedTags = contact.tags.filter((t) => t !== tag);
+    const updatedTags = contact.tags.filter((t: string) => t !== tag);
     
     await prisma.contact.update({
       where: { id: contactId },
@@ -135,7 +140,7 @@ export async function removeTagFromContact(contactId: string, tag: string) {
     
     return { success: true };
   } catch (error) {
-    console.error('Error removing tag:', error);
+    logger.error('Error removing tag', error instanceof Error ? error : new Error(String(error)), { contactId, tag });
     return { success: false, error: 'Failed to remove tag' };
   }
 }

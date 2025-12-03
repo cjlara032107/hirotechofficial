@@ -1,10 +1,16 @@
 import { NextResponse } from 'next/server';
+import { auth } from '@/auth';
 
 /**
  * GET /api/test-encryption
  * Test if ENCRYPTION_KEY is available and valid
  */
 export async function GET() {
+  // Require authentication for security
+  const session = await auth();
+  if (!session?.user) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  }
   try {
     const encryptionKey = process.env.ENCRYPTION_KEY;
     
@@ -38,13 +44,26 @@ export async function GET() {
       },
     });
   } catch (error) {
+    // SECURITY: Sanitize error messages to prevent sensitive data exposure
+    console.error('Test encryption error:', error);
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    const sanitizedError = errorMessage
+      .replace(/[a-zA-Z0-9]{20,}/g, '[REDACTED]') // Remove long tokens/IDs
+      .replace(/at\s+.*/g, '') // Remove stack trace lines
+      .replace(/\(.*?\)/g, '') // Remove file paths
+      .substring(0, 200); // Limit length
+    
     return NextResponse.json({
       status: 'error',
       message: 'Failed to check ENCRYPTION_KEY',
-      error: error instanceof Error ? error.message : 'Unknown error',
+      error: sanitizedError,
     }, { status: 500 });
   }
 }
+
+
+
+
 
 
 

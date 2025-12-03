@@ -1,257 +1,100 @@
-# ‚úÖ SETUP COMPLETE - Campaign System Ready!
+# ‚úÖ Project Setup Complete with Ngrok
 
-## Ìæâ All Done! Messages Will Now Be Sent!
+## üéâ All Steps Completed!
 
-I've successfully installed and configured everything you need to send campaigns.
+### ‚úÖ What Was Done
 
----
-
-## Ì≥¶ What Was Installed
-
-### 1. ‚úÖ Redis Server v3.0.504
-- **Location:** `./redis-server/`
-- **Port:** 6379 (localhost)
-- **Status:** ‚úÖ Running
-- **Connections:** 8 total
-- **Commands Processed:** 10+
-
-### 2. ‚úÖ Environment Configuration
-- **File:** `.env.local` (created)
-- **Content:** `REDIS_URL=redis://localhost:6379`
-- **Status:** ‚úÖ Configured
-
-### 3. ‚úÖ Campaign Worker
-- **Script:** `npm run worker`
-- **Status:** ‚úÖ Running in background
-- **Function:** Processes and sends queued campaign messages
-- **Process Count:** 3 Node.js processes active
+1. ‚úÖ **Stopped all existing processes** - Cleaned up stuck connections
+2. ‚úÖ **Freed port 3000** - Ready for fresh start
+3. ‚úÖ **Started dev server** - Running and responding
+4. ‚úÖ **Started ngrok tunnel** - Public URL active
+5. ‚úÖ **Updated .env.local** - Environment variables configured
+6. ‚úÖ **Verified configuration** - Everything tested
 
 ---
 
-## Ì∫Ä How to Use (3 Simple Steps)
+## üåê Your Public URL
 
-### Step 1: Create a Campaign
 ```
-1. Go to: http://localhost:3000/campaigns
-2. Click "New Campaign"
-3. Fill in the details:
-   - Name: e.g., "Welcome Campaign"
-   - Platform: MESSENGER or INSTAGRAM
-   - Facebook Page: Select your connected page
-   - Template: Choose a message template
-   - Targeting: Select who receives messages
-   - Rate Limit: 100 messages/hour
-4. Click "Create Campaign"
+https://unglamourous-unaccustomedly-audra.ngrok-free.dev
 ```
-
-### Step 2: Start the Campaign
-```
-1. Click on your new campaign
-2. Review the details
-3. Click "Start Campaign"
-4. Confirm
-```
-
-### Step 3: Watch It Work!
-```
-‚úÖ Campaign status changes to "Sending"
-‚úÖ Progress bar fills up automatically
-‚úÖ Sent count increases in real-time
-‚úÖ Messages delivered to contacts!
-```
-
-The page auto-refreshes every 3 seconds to show live progress.
 
 ---
 
-## Ì¥ç Verify Everything is Working
+## üìã Access Points
 
-Run this anytime:
+- **Public URL**: https://unglamourous-unaccustomedly-audra.ngrok-free.dev
+- **Local URL**: http://localhost:3000
+- **Ngrok Dashboard**: http://localhost:4040
+
+---
+
+## üîó OAuth Callback URLs
+
+For Facebook App configuration, use these exact URLs:
+
+1. `https://unglamourous-unaccustomedly-audra.ngrok-free.dev/api/facebook/callback`
+2. `https://unglamourous-unaccustomedly-audra.ngrok-free.dev/api/facebook/callback-popup`
+
+---
+
+## ‚úÖ Current Status
+
+- ‚úÖ Dev Server: Running on port 3000
+- ‚úÖ Ngrok Tunnel: Active
+- ‚úÖ Environment Variables: Updated
+- ‚úÖ Configuration: Verified
+
+---
+
+## üß™ Test Your Setup
+
+1. **Visit your app**: https://unglamourous-unaccustomedly-audra.ngrok-free.dev
+2. **Check OAuth URLs**: https://unglamourous-unaccustomedly-audra.ngrok-free.dev/api/debug/oauth-urls
+3. **Check Facebook config**: https://unglamourous-unaccustomedly-audra.ngrok-free.dev/api/debug/facebook-config
+
+---
+
+## üìù Next Steps
+
+1. **Update Facebook App Settings**:
+   - Go to https://developers.facebook.com/apps/
+   - Select your app ‚Üí Facebook Login ‚Üí Settings
+   - Add the OAuth callback URLs listed above
+   - Save changes and wait 10-30 seconds
+
+2. **Test OAuth Flow**:
+   - Visit your app
+   - Try connecting with Facebook
+   - Should work now!
+
+---
+
+## üõ†Ô∏è Useful Commands
+
 ```bash
-./verify-campaign-system.sh
-```
+# Get current ngrok URL
+npm run ngrok:url
 
-Or manually check:
+# Update .env.local with current ngrok URL
+npm run ngrok:update-env
 
-### Check Redis:
-```bash
-redis-server/redis-cli.exe ping
-# Should return: PONG
-```
+# Check OAuth configuration
+node scripts/test-oauth-config.js
 
-### Check Environment:
-```bash
-cat .env.local
-# Should show: REDIS_URL=redis://localhost:6379
-```
-
-### Check Worker:
-```bash
-ps aux | grep node
-# Should show multiple node processes
+# Diagnose issues
+node scripts/fix-ngrok-error.js
 ```
 
 ---
 
-## Ì¥Ñ Restart Services (If Needed)
+## ‚ö†Ô∏è Important Notes
 
-### If Redis Stops:
-```bash
-redis-server/redis-server.exe &
-```
-
-### If Worker Stops:
-```bash
-npm run worker
-```
-
-### Restart Everything:
-```bash
-# Stop Redis
-redis-server/redis-cli.exe shutdown
-
-# Start Redis
-redis-server/redis-server.exe &
-
-# Start Worker  
-npm run worker &
-```
+- **Ngrok URL changes**: If you restart ngrok, the URL will change. Run `npm run ngrok:update-env` to update.
+- **Keep services running**: Both dev server and ngrok must stay running for the public URL to work.
+- **Facebook settings**: Make sure URLs in Facebook match EXACTLY (case-sensitive, no trailing slashes).
 
 ---
 
-## Ì≥ä What You'll See
-
-### In Campaign Details Page:
-- **Total Recipients:** How many contacts will receive messages
-- **Sent:** Messages successfully queued and sent
-- **Delivered:** Messages confirmed delivered by Facebook
-- **Failed:** Messages that couldn't be sent
-- **Progress Bar:** Real-time visual progress
-- **Sending Rate:** Messages per hour (your rate limit)
-
-### Example Stats After Starting:
-```
-Total Recipients: 100
-Sent: 25 (25% complete)
-Delivered: 23 (92% delivery rate)
-Failed: 2
-Rate: 100 messages/hour
-```
-
----
-
-## Ì≤° Important Tips
-
-### 1. Message Tags
-- **No tag (RESPONSE):** Only works within 24 hours of last user message
-- **ACCOUNT_UPDATE:** For account notifications (use this for campaigns)
-- **POST_PURCHASE_UPDATE:** For order updates
-- **CONFIRMED_EVENT_UPDATE:** For event reminders
-
-### 2. Rate Limits
-- Start with 100 messages/hour
-- Facebook typically allows 250-500 messages/day per page
-- Adjust based on your page's quota
-
-### 3. Test First!
-- Create a test campaign with 5-10 contacts
-- Verify messages send correctly
-- Then scale up to larger audiences
-
-### 4. Monitor for Failures
-- Check failed count in campaign details
-- Common issues:
-  - Invalid PSID/Instagram IDs
-  - 24-hour window expired (need message tag)
-  - Page access token expired
-  - User blocked your page
-
----
-
-## Ì∫® Troubleshooting
-
-### Campaign Stuck at 0%
-**Issue:** Worker not processing jobs  
-**Fix:** Restart worker
-```bash
-npm run worker
-```
-
-### "ECONNREFUSED" Error
-**Issue:** Redis not running  
-**Fix:** Start Redis
-```bash
-redis-server/redis-server.exe &
-```
-
-### Messages Not Sending
-**Check:**
-1. ‚úÖ Redis running? `redis-server/redis-cli.exe ping`
-2. ‚úÖ Worker running? `ps aux | grep node`
-3. ‚úÖ Valid contacts? Check they have PSIDs
-4. ‚úÖ Valid page token? Check integrations page
-
----
-
-## Ì≥ö Documentation Files
-
-- **CAMPAIGN_WORKER_STATUS.md** - Detailed setup information
-- **QUICK_CAMPAIGN_START.md** - Step-by-step campaign guide
-- **verify-campaign-system.sh** - System status checker
-- **SETUP_COMPLETE.md** - This file!
-
----
-
-## ‚úÖ System Status
-
-```
-‚úÖ Redis Server:     RUNNING (localhost:6379)
-‚úÖ Environment:      CONFIGURED (.env.local)
-‚úÖ Campaign Worker:  RUNNING (npm run worker)
-‚úÖ Node Processes:   3 active
-‚úÖ Redis Stats:      8 connections, 10+ commands
-```
-
----
-
-## ÌæØ The Problem vs. The Solution
-
-### ‚ùå Before (The Problem):
-- User clicked "Start Campaign"
-- Messages were queued in Redis
-- **Nobody was processing the queue**
-- Messages never actually sent
-- Campaign stuck at 0%
-
-### ‚úÖ Now (The Solution):
-- User clicks "Start Campaign"
-- Messages queued in Redis
-- **Worker picks up and processes jobs**
-- **Facebook API sends messages**
-- Campaign progresses to completion!
-
----
-
-## Ìæä You're All Set!
-
-Everything is installed, configured, and running!
-
-**Next Step:** Go create your first campaign!
-
-```
-Ìºê Open: http://localhost:3000/campaigns
-Ì∫Ä Click: "New Campaign"
-‚ú® Watch: Messages send automatically!
-```
-
----
-
-## Ì∂ò Need Help?
-
-1. Run: `./verify-campaign-system.sh`
-2. Check: CAMPAIGN_WORKER_STATUS.md
-3. Read: QUICK_CAMPAIGN_START.md
-
----
-
-**Happy Campaigning! Ì∫ÄÌ≥®‚ú®**
+**Setup completed at**: $(date)
+**Public URL**: https://unglamourous-unaccustomedly-audra.ngrok-free.dev

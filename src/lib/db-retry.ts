@@ -22,7 +22,10 @@ export async function withRetry<T>(
       'connection pool',
       'P2024', // Prisma connection pool timeout
       'P1001', // Can't reach database
+      'P2034', // Database deadlock detected
       'timeout',
+      'deadlock', // Deadlock errors (case-insensitive)
+      'Deadlock',
     ],
   } = options;
 
@@ -38,8 +41,12 @@ export async function withRetry<T>(
       
       // Check if error is retryable
       const isRetryable = retryableErrors.some(pattern => 
-        errorMessage.includes(pattern) || errorCode === pattern
+        errorMessage.toLowerCase().includes(pattern.toLowerCase()) || errorCode === pattern
       );
+      
+      // Check if it's a deadlock - use shorter backoff for deadlocks
+      const isDeadlock = errorCode === 'P2034' || 
+                        errorMessage.toLowerCase().includes('deadlock');
       
       // If not retryable or last attempt, throw immediately
       if (!isRetryable || attempt === maxRetries) {
@@ -47,9 +54,15 @@ export async function withRetry<T>(
       }
       
       // Calculate delay with exponential backoff + jitter to prevent thundering herd
-      const baseDelay = Math.min(initialDelay * Math.pow(2, attempt - 1), maxDelay);
-      // Add random jitter (0-500ms) to prevent all retries happening at once
-      const jitter = Math.random() * 500;
+      // Deadlocks use shorter delays (50-200ms) since they're usually resolved quickly
+      let baseDelay: number;
+      if (isDeadlock) {
+        baseDelay = Math.min(50 * Math.pow(2, attempt - 1), 200);
+      } else {
+        baseDelay = Math.min(initialDelay * Math.pow(2, attempt - 1), maxDelay);
+      }
+      // Add random jitter (0-500ms for normal errors, 0-50ms for deadlocks) to prevent all retries happening at once
+      const jitter = isDeadlock ? Math.random() * 50 : Math.random() * 500;
       const delay = baseDelay + jitter;
       
       console.warn(

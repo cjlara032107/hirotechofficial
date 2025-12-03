@@ -1,7 +1,8 @@
 import OpenAI from 'openai';
 import apiKeyManager from './api-key-manager';
 
-const MODEL = 'google/gemini-2.0-flash-exp:free';
+// Use the same model as the main AI service for consistency and availability
+const MODEL = process.env.AI_PRIMARY_MODEL || 'openai/gpt-oss-120b';
 
 // Helper function to create OpenAI client configured for NVIDIA API
 function createNvidiaClient(apiKey: string): OpenAI {

@@ -68,19 +68,28 @@ export class MultiDatabaseRouter {
 
       if (!dbUrl) {
         // Should not happen since we only iterate configured ones, but safety check
-        console.warn(`[Multi-DB Router] ⚠️ DATABASE_URL_${i} is not set, skipping`);
+        console.warn(`[DB Pool] ⚠️ DATABASE_URL_${i} is not set, skipping`);
         continue;
       }
 
       // Validate connection string format
       if (!dbUrl.startsWith('postgresql://') && !dbUrl.startsWith('postgres://')) {
-        console.error(`[Multi-DB Router] ❌ Invalid DATABASE_URL_${i} format (must start with postgresql:// or postgres://)`);
+        console.error(`[DB Pool] ❌ Invalid DATABASE_URL_${i} format (must start with postgresql:// or postgres://)`);
         continue; // Skip invalid URLs
       }
 
       try {
         // Enhance URL with connection pool settings
         const enhancedUrl = this.enhanceConnectionUrl(dbUrl, connectionLimit);
+        
+        // Extract host for logging (mask credentials)
+        let dbHost = 'unknown';
+        try {
+          const urlMatch = enhancedUrl.match(/postgresql:\/\/[^@]*@([^\/]+)/);
+          dbHost = urlMatch ? urlMatch[1] : 'unknown';
+        } catch {
+          // Ignore
+        }
 
         // Suppress Prisma connection errors during initialization
         // They will be caught by health checks instead
@@ -112,10 +121,10 @@ export class MultiDatabaseRouter {
               success: true,
             });
 
-            // Log slow queries
+            // Log slow queries with DB index
             if (process.env.NODE_ENV === 'development' && duration > 2000) {
               console.warn(
-                `[Multi-DB Router] ⚠️ Slow query on DB${i} (${duration}ms):`,
+                `[DB Pool] ⚠️ Slow query (DB index: ${i}, ${duration}ms):`,
                 query.substring(0, 150) || 'N/A'
               );
             }
@@ -134,11 +143,16 @@ export class MultiDatabaseRouter {
           connectionCount: 0,
         });
 
-        console.log(`[Multi-DB Router] ✅ Initialized database ${i + 1}/${dbCount}`);
+        console.log(
+          `[DB Pool] ✅ Initialized database ${i + 1}/${dbCount}`,
+          `\n  - DB index: ${i}`,
+          `\n  - Host: ${dbHost}`,
+          `\n  - Connection limit: ${connectionLimit}`
+        );
       } catch (error: any) {
         // Log error but continue with other databases
         console.error(
-          `[Multi-DB Router] ❌ Failed to initialize database ${i}:`,
+          `[DB Pool] ❌ Failed to initialize database ${i}:`,
           error?.message || String(error)
         );
         // Don't add this database to the list - it will be skipped
@@ -162,9 +176,8 @@ export class MultiDatabaseRouter {
       // Increase timeouts for Vercel serverless (cold starts, network latency)
       // pool_timeout: how long to wait for a connection from the pool
       // connect_timeout: how long to wait for initial connection
-      // Reduced timeouts to fail faster and prevent hanging
-      const poolTimeout = isVercel ? 30 : 20; // 30s for Vercel (reduced from 60s), 20s for traditional
-      const connectTimeout = isVercel ? 30 : 20; // 30s for Vercel (reduced from 60s), 20s for traditional
+      const poolTimeout = isVercel ? 60 : 30; // 60s for Vercel, 30s for traditional
+      const connectTimeout = isVercel ? 60 : 30; // 60s for Vercel, 30s for traditional
       return `${url}${separator}connection_limit=${connectionLimit}&pool_timeout=${poolTimeout}&connect_timeout=${connectTimeout}&statement_cache_size=0`;
     }
     return url;
@@ -191,33 +204,91 @@ export class MultiDatabaseRouter {
     // Use healthy databases if available, otherwise use all (they might work despite health check)
     const databasesToUse = healthyDatabases.length > 0 ? healthyDatabases : allDatabases;
 
+    // Dev-only: Log routing decision
+    if (process.env.NODE_ENV === 'development') {
+      console.log('[Multi-DB Router] getClient called:', {
+        routingStrategy: this.routingStrategy,
+        key: key?.substring(0, 12) + '...',
+        totalDatabases: allDatabases.length,
+        healthyDatabases: healthyDatabases.length,
+        usingDatabases: databasesToUse.length,
+      });
+    }
+
     // Use routing strategy - always try to use all configured databases
     // Health checks are advisory - databases might work even if health check fails
+    let chosenClient: PrismaClient;
+    let chosenDbIndex = -1;
+    
     switch (this.routingStrategy) {
       case 'round-robin':
-        return this.getClientRoundRobin(databasesToUse);
+        chosenClient = this.getClientRoundRobin(databasesToUse);
+        break;
       case 'hash':
         if (!key) {
           console.warn('[Multi-DB Router] ⚠️ Hash routing requires key, falling back to round-robin');
-          return this.getClientRoundRobin(databasesToUse);
+          chosenClient = this.getClientRoundRobin(databasesToUse);
+        } else {
+          chosenClient = this.getClientHash(key, databasesToUse);
         }
-        return this.getClientHash(key, databasesToUse);
+        break;
       case 'load-aware':
-        return this.getClientLoadAware(databasesToUse);
+        chosenClient = this.getClientLoadAware(databasesToUse);
+        break;
       default:
-        return this.getClientRoundRobin(databasesToUse);
+        chosenClient = this.getClientRoundRobin(databasesToUse);
     }
+    
+    // Dev-only: Log chosen database
+    if (process.env.NODE_ENV === 'development') {
+      const chosenConfig = this.databases.find(db => db.client === chosenClient);
+      if (chosenConfig) {
+        chosenDbIndex = chosenConfig.index;
+        // Extract host from URL (mask credentials)
+        let dbHost = 'unknown';
+        try {
+          const urlMatch = chosenConfig.url.match(/postgresql:\/\/[^@]*@([^\/]+)/);
+          dbHost = urlMatch ? urlMatch[1] : 'unknown';
+        } catch {
+          // Ignore
+        }
+        
+        console.log('[Multi-DB Router] Chose database:', {
+          dbIndex: chosenDbIndex,
+          dbHost,
+          health: chosenConfig.health,
+        });
+      }
+    }
+    
+    return chosenClient;
   }
 
   private getClientRoundRobin(healthy: DatabaseConfig[]): PrismaClient {
     const db = healthy[this.roundRobinIndex % healthy.length];
+    const selectedIndex = this.roundRobinIndex % healthy.length;
     this.roundRobinIndex = (this.roundRobinIndex + 1) % healthy.length;
+    
+    if (process.env.NODE_ENV === 'development') {
+      console.log('[Multi-DB Router] Round-robin selected DB index:', selectedIndex, 'of', healthy.length);
+    }
+    
     return db.client;
   }
 
   private getClientHash(key: string, healthy: DatabaseConfig[]): PrismaClient {
     const hash = this.hashString(key);
     const index = hash % healthy.length;
+    
+    if (process.env.NODE_ENV === 'development') {
+      console.log('[Multi-DB Router] Hash routing:', {
+        key: key.substring(0, 12) + '...',
+        hash,
+        selectedIndex: index,
+        totalDatabases: healthy.length,
+      });
+    }
+    
     return healthy[index].client;
   }
 
@@ -264,14 +335,24 @@ export class MultiDatabaseRouter {
    */
   private async startHealthChecks() {
     const isVercel = process.env.VERCEL === '1' || process.env.NEXT_PUBLIC_VERCEL_ENV;
-    // Use much shorter timeout for health checks to fail fast and not block
-    const healthCheckTimeout = isVercel ? 5000 : 3000; // 5s for Vercel, 3s for traditional (reduced from 15s/8s)
+    // Match the connect_timeout in connection URL (60s for Vercel, 30s for traditional)
+    // But use shorter timeout for health checks to fail fast
+    const healthCheckTimeout = isVercel ? 15000 : 8000; // 15s for Vercel, 8s for traditional
     
-    const checkHealth = async (db: DatabaseConfig, retries = 1, silent = false) => {
+    const checkHealth = async (db: DatabaseConfig, retries = 2, silent = false) => {
+      // Extract host for logging
+      let dbHost = 'unknown';
+      try {
+        const urlMatch = db.url.match(/postgresql:\/\/[^@]*@([^\/]+)/);
+        dbHost = urlMatch ? urlMatch[1] : 'unknown';
+      } catch {
+        // Ignore
+      }
+      
       for (let attempt = 0; attempt <= retries; attempt++) {
         try {
           const startTime = Date.now();
-          // Use a timeout to prevent hanging - fail fast
+          // Use a timeout to prevent hanging - longer for serverless
           const queryPromise = db.client.$queryRaw`SELECT 1`;
           const timeoutPromise = new Promise((_, reject) => 
             setTimeout(() => reject(new Error('Health check timeout')), healthCheckTimeout)
@@ -280,19 +361,29 @@ export class MultiDatabaseRouter {
           await Promise.race([queryPromise, timeoutPromise]);
           const duration = Date.now() - startTime;
 
-          // Increase slow threshold to 5s (was 2s) to reduce false positives
-          if (duration > 5000) {
+          if (duration > 2000) {
             const wasHealthy = db.health === 'healthy';
             db.health = 'degraded';
             if (!silent) {
-              console.warn(`[Multi-DB Router] ⚠️ Database ${db.index} is slow (${duration}ms)`);
+              console.warn(
+                `[DB Pool] ⚠️ Health check slow`,
+                `\n  - DB index: ${db.index}`,
+                `\n  - Host: ${dbHost}`,
+                `\n  - Duration: ${duration}ms`,
+                `\n  - Status: degraded`
+              );
             }
           } else {
             const wasUnhealthy = db.health === 'degraded' || db.health === 'down';
             db.health = 'healthy';
             // Only log success if it was previously unhealthy
             if (wasUnhealthy && !silent) {
-              console.log(`[Multi-DB Router] ✅ Database ${db.index} is now healthy`);
+              console.log(
+                `[DB Pool] ✅ Health check recovered`,
+                `\n  - DB index: ${db.index}`,
+                `\n  - Host: ${dbHost}`,
+                `\n  - Status: healthy`
+              );
             }
           }
           db.lastHealthCheck = Date.now();
@@ -300,10 +391,11 @@ export class MultiDatabaseRouter {
         } catch (error: any) {
           const isConnectionError = 
             error?.code === 'P1001' ||
+            error?.code === 'P2024' ||
             error?.message?.includes("Can't reach database") ||
+            error?.message?.includes('pool') ||
             error?.message?.includes('timeout') ||
-            error?.message?.includes('Health check timeout') ||
-            error?.message?.includes('Unable to check out process from the pool');
+            error?.message?.includes('Health check timeout');
           
           if (attempt === retries) {
             // Final attempt failed - mark as degraded (not down) so it's still used
@@ -315,58 +407,54 @@ export class MultiDatabaseRouter {
             // Only log if it was previously healthy (to avoid spam)
             if (!silent && wasHealthy) {
               console.warn(
-                `[Multi-DB Router] ⚠️ Database ${db.index} health check failed. ` +
-                `Marking as degraded but will still be used. Will retry on next health check.`
+                `[DB Pool] ⚠️ Health check failed`,
+                `\n  - DB index: ${db.index}`,
+                `\n  - Host: ${dbHost}`,
+                `\n  - Error code: ${error?.code || 'N/A'}`,
+                `\n  - Error: ${error?.message || String(error)}`,
+                `\n  - Status: degraded (still usable)`,
+                `\n  - Will retry on next health check`
               );
             }
           } else {
-            // Wait before retry (shorter delay)
-            await new Promise(resolve => setTimeout(resolve, 200 * (attempt + 1)));
+            // Wait before retry (exponential backoff)
+            await new Promise(resolve => setTimeout(resolve, 500 * (attempt + 1)));
           }
         }
       }
     };
 
     // Initial health check with delay to allow connections to establish
-    // Use shorter delay for serverless to start faster
-    const initialDelay = isVercel ? 2000 : 1000; // 2 seconds for Vercel, 1 for local (reduced)
+    // Use longer delay for serverless environments (cold starts)
+    const initialDelay = isVercel ? 5000 : 2000; // 5 seconds for Vercel, 2 for local
     
-    // Run initial health check asynchronously (non-blocking)
     setTimeout(async () => {
-      // Run health checks in parallel but don't wait for all
-      const healthCheckPromises = this.databases.map(db => 
-        checkHealth(db, 1, true).catch(() => {
-          // Silently fail - health checks are advisory
-        })
-      );
+      for (const db of this.databases) {
+        await checkHealth(db, 2, true); // More retries, silent initial check
+      }
       
-      // Don't await - let them run in background
-      Promise.all(healthCheckPromises).then(() => {
-        const healthy = this.databases.filter(d => d.health === 'healthy').length;
-        const degraded = this.databases.filter(d => d.health === 'degraded').length;
-        
-        if (healthy > 0) {
-          console.log(`[Multi-DB Router] ✅ Health check complete: ${healthy} healthy, ${degraded} degraded`);
-        } else if (this.databases.length > 0) {
-          console.warn(`[Multi-DB Router] ⚠️ No healthy databases found. Using all databases (health checks are advisory).`);
-        }
-      });
+      // Log summary after initial check
+      const healthy = this.databases.filter(d => d.health === 'healthy').length;
+      const degraded = this.databases.filter(d => d.health === 'degraded').length;
+      const down = this.databases.filter(d => d.health === 'down').length;
+      
+      if (healthy > 0) {
+        console.log(`[Multi-DB Router] ✅ Health check complete: ${healthy} healthy, ${degraded} degraded, ${down} unavailable`);
+      } else if (this.databases.length > 0) {
+        console.warn(`[Multi-DB Router] ⚠️ No healthy databases found. Using all databases (health checks are advisory).`);
+      }
     }, initialDelay);
 
-    // Periodic health checks every 60 seconds (increased from 30s to reduce load)
+    // Periodic health checks every 30 seconds
     // Check all databases to detect recovery
     this.healthCheckInterval = setInterval(async () => {
-      // Run health checks in parallel but don't block
-      const healthCheckPromises = this.databases.map(db => {
+      for (const db of this.databases) {
+        // Check all databases periodically to detect recovery
+        // Use silent mode for degraded databases to reduce noise
         const isSilent = db.health === 'degraded';
-        return checkHealth(db, 1, isSilent).catch(() => {
-          // Silently fail - health checks are advisory
-        });
-      });
-      
-      // Don't await - let them run in background
-      Promise.all(healthCheckPromises);
-    }, 60000); // Check every 60 seconds (reduced frequency)
+        await checkHealth(db, 1, isSilent);
+      }
+    }, 30000); // Check every 30 seconds
   }
 
   /**
@@ -495,32 +583,59 @@ export async function connectPrisma(maxRetries = 5, retryDelay = 1000) {
     : (healthy.length > 0 ? healthy : routerDatabases);
 
   // Increase timeout for serverless (cold starts, network latency)
-  // Match the connect_timeout in connection URL (30s for Vercel, 20s for traditional)
-  const connectionTimeout = isVercel ? 30000 : 20000; // 30s for Vercel (reduced from 60s), 20s for traditional
+  // Match the connect_timeout in connection URL (60s for Vercel, 30s for traditional)
+  const connectionTimeout = isVercel ? 60000 : 30000; // 60s for Vercel, 30s for traditional
 
   for (let attempt = 0; attempt < maxRetries; attempt++) {
     for (const db of databasesToTry) {
       // Check if client exists before trying to use it
       if (!db || !db.client) {
-        console.warn(`[Multi-DB Router] ⚠️ Database ${db?.index ?? 'unknown'} client is undefined - skipping`);
+        console.warn(`[DB Pool] ⚠️ Database ${db?.index ?? 'unknown'} client is undefined - skipping`);
         continue;
+      }
+      
+      // Extract host for logging
+      let dbHost = 'unknown';
+      try {
+        const urlMatch = db.url.match(/postgresql:\/\/[^@]*@([^\/]+)/);
+        dbHost = urlMatch ? urlMatch[1] : 'unknown';
+      } catch {
+        // Ignore
       }
       
       try {
         // Use timeout for connection test in serverless
+        const startTime = Date.now();
         const queryPromise = db.client.$queryRaw`SELECT 1`;
         const timeoutPromise = new Promise((_, reject) => 
           setTimeout(() => reject(new Error('Connection test timeout')), connectionTimeout)
         );
         
         await Promise.race([queryPromise, timeoutPromise]);
-        console.log(`[Multi-DB Router] ✅ Connection verified to database ${db.index}`);
+        const duration = Date.now() - startTime;
+        
+        console.log(
+          `[DB Pool] ✅ Connection verified`,
+          `\n  - DB index: ${db.index}`,
+          `\n  - Host: ${dbHost}`,
+          `\n  - Duration: ${duration}ms`,
+          `\n  - Attempt: ${attempt + 1}/${maxRetries}`
+        );
         return; // Success - at least one database is working
       } catch (error) {
-        const errorMsg = error instanceof Error ? error.message : String(error);
+        const errorObj = error as { code?: string; message?: string };
+        const errorMsg = errorObj?.message || String(error);
+        const errorCode = errorObj?.code;
+        
         // Only log on first attempt to reduce noise
         if (attempt === 0) {
-          console.warn(`[Multi-DB Router] ⚠️ Database ${db.index} connection test failed: ${errorMsg}`);
+          console.warn(
+            `[DB Pool] ⚠️ Connection test failed`,
+            `\n  - DB index: ${db.index}`,
+            `\n  - Host: ${dbHost}`,
+            `\n  - Error code: ${errorCode || 'N/A'}`,
+            `\n  - Error: ${errorMsg}`
+          );
         }
         // Continue to next database
       }
@@ -529,7 +644,11 @@ export async function connectPrisma(maxRetries = 5, retryDelay = 1000) {
     // If all databases failed and we have retries left, wait and retry
     if (attempt < maxRetries - 1) {
       const delay = retryDelay * Math.pow(2, attempt);
-      console.log(`[Multi-DB Router] ⏳ All databases failed, retrying in ${delay}ms... (attempt ${attempt + 1}/${maxRetries})`);
+      console.log(
+        `[DB Pool] ⏳ All databases failed, retrying in ${delay}ms...`,
+        `\n  - Attempt: ${attempt + 1}/${maxRetries}`,
+        `\n  - Databases tried: ${databasesToTry.length}`
+      );
       await new Promise(resolve => setTimeout(resolve, delay));
     }
   }
@@ -537,13 +656,23 @@ export async function connectPrisma(maxRetries = 5, retryDelay = 1000) {
   // If we get here, all databases failed after all retries
   // In serverless, this might be a temporary issue - log but don't throw if we have databases configured
   if (isVercel && routerDatabases.length > 0) {
-    console.error('[Multi-DB Router] ⚠️ All databases failed connection test, but will continue (serverless cold start may resolve)');
+    console.error(
+      `[DB Pool] ⚠️ All databases failed connection test`,
+      `\n  - Environment: Vercel/serverless`,
+      `\n  - Total databases: ${routerDatabases.length}`,
+      `\n  - Continuing (cold start may resolve)`
+    );
     // Don't throw - let the application try to use databases anyway
     // They might work even if the connection test failed
     return;
   }
   
-  console.error('[Multi-DB Router] ❌ All databases failed to connect after retries');
-  throw new Error('[Multi-DB Router] No databases available after retries. Check database connections.');
+  console.error(
+    `[DB Pool] ❌ All databases failed to connect after retries`,
+    `\n  - Total databases: ${routerDatabases.length}`,
+    `\n  - Max retries: ${maxRetries}`,
+    `\n  - Recommendation: Check database connections and Supabase pooler URLs`
+  );
+  throw new Error('[DB Pool] No databases available after retries. Check database connections.');
 }
 

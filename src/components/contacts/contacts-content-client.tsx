@@ -6,7 +6,8 @@ import { ContactsPagination } from '@/components/contacts/contacts-pagination';
 import { EmptyState } from '@/components/ui/empty-state';
 import { Users } from 'lucide-react';
 import { LoadingSpinner } from '@/components/ui/loading-spinner';
-import { useSearchParams } from 'next/navigation';
+import { useSearchParams, useRouter } from 'next/navigation';
+import { useEffect } from 'react';
 
 interface Contact {
   id: string;
@@ -69,12 +70,35 @@ export function ContactsContentClient({
   hasFilters,
 }: ContactsContentClientProps) {
   const searchParams = useSearchParams();
+  const router = useRouter();
   const currentPage = parseInt(searchParams.get('page') || '1');
   
   const { data, isLoading, isFetching, prefetchPage } = useContacts({
     initialData,
     enabled: true,
   });
+
+  // Listen for sync completion events to refresh the UI
+  useEffect(() => {
+    const handleSyncComplete = () => {
+      console.log('[Contacts Content] Sync completed, refreshing page...');
+      router.refresh();
+    };
+
+    // Listen for sync completion events from the integrations page
+    if (typeof window !== 'undefined') {
+      window.addEventListener('syncCompleted', handleSyncComplete);
+      // Also listen for the custom event that might be dispatched
+      window.addEventListener('contactsSynced', handleSyncComplete);
+    }
+
+    return () => {
+      if (typeof window !== 'undefined') {
+        window.removeEventListener('syncCompleted', handleSyncComplete);
+        window.removeEventListener('contactsSynced', handleSyncComplete);
+      }
+    };
+  }, [router]);
 
   const contacts = data?.contacts || [];
   
@@ -92,6 +116,7 @@ export function ContactsContentClient({
     );
   }
 
+  // Handle empty state: 0 contacts
   if (contacts.length === 0 && !hasFilters) {
     return (
       <EmptyState
@@ -127,7 +152,9 @@ export function ContactsContentClient({
         isLoading={isFetching && !isLoading}
       />
 
-      {pagination.pages > 1 && (
+      {/* Only show pagination if there's more than 1 page OR more than 1 contact */}
+      {/* This handles: 1 contact (minimum case) - no pagination needed */}
+      {pagination.pages > 1 && pagination.total > 1 && (
         <ContactsPagination
           currentPage={pagination.page}
           totalPages={pagination.pages}

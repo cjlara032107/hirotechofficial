@@ -3,7 +3,7 @@
  * This ensures cron jobs don't compete for the single connection in serverless
  */
 
-let connectionQueue: Array<{
+const connectionQueue: Array<{
   resolve: () => void;
   timestamp: number;
 }> = [];

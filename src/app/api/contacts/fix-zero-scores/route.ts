@@ -22,7 +22,8 @@ export async function POST(request: NextRequest) {
     console.log(`[Fix Zero Scores] Finding contacts with scores ${minScore}-${maxScore}...`);
 
     // Find contacts with low/zero scores
-    const whereClause: any = {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const whereClause: Record<string, any> = {
       organizationId: session.user.organizationId,
       leadScore: {
         gte: minScore,
@@ -107,6 +108,7 @@ export async function POST(request: NextRequest) {
           where: { id: contactId },
           data: {
             leadScore: result.analysis.leadScore,
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
             leadStatus: result.analysis.leadStatus as any,
             aiContext: result.analysis.summary,
             aiContextUpdatedAt: new Date()
@@ -171,7 +173,8 @@ export async function GET(request: NextRequest) {
     const minScore = parseInt(searchParams.get('minScore') || '0');
     const maxScore = parseInt(searchParams.get('maxScore') || '15');
 
-    const whereClause: any = {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const whereClause: Record<string, any> = {
       organizationId: session.user.organizationId,
       leadScore: {
         gte: minScore,

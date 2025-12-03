@@ -43,9 +43,12 @@ import {
   AlertCircle,
   Sparkles,
   Plus,
+  RefreshCw,
+  MessageSquare,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { useQueryState } from 'nuqs';
+import { BulkMessageDialog } from './bulk-message-dialog';
 import { useRouter } from 'next/navigation';
 
 interface Contact {
@@ -69,6 +72,10 @@ interface Contact {
     instagramUsername: string | null;
   };
   createdAt: Date | string;
+  conversionProbability?: number | null;
+  buyerIntent?: string | null;
+  sentiment?: string | null;
+  nextBestAction?: string | null;
 }
 
 interface Tag {
@@ -92,6 +99,111 @@ interface ContactsTableProps {
   tags: Tag[];
   pipelines: Pipeline[];
   isLoading?: boolean;
+}
+
+// Component for updating best contact times from dropdown menu
+function UpdateBestTimesMenuItem({ contactId }: { contactId: string }) {
+  const [isUpdating, setIsUpdating] = useState(false);
+  const router = useRouter();
+  const queryClient = useQueryClient();
+
+  const handleUpdate = async (e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    
+    setIsUpdating(true);
+    try {
+      console.log(`[UpdateBestTimesMenuItem] Starting update for contact ${contactId}`);
+      const response = await fetch(`/api/contacts/${contactId}/update-best-times`, {
+        method: 'POST',
+      });
+
+      console.log(`[UpdateBestTimesMenuItem] Response status: ${response.status}`);
+      
+      const contentType = response.headers.get('content-type');
+      let data;
+      
+      if (contentType?.includes('application/json')) {
+        data = await response.json();
+      } else {
+        const text = await response.text();
+        console.error('[UpdateBestTimesMenuItem] Non-JSON response:', text);
+        throw new Error(`Server returned non-JSON response: ${text.substring(0, 200)}`);
+      }
+
+      console.log('[UpdateBestTimesMenuItem] Response data:', data);
+
+      if (!response.ok) {
+        // Safely extract error message
+        const errorMessage = data?.error || data?.message || `HTTP ${response.status}: Failed to update best contact times`;
+        
+        // Log error details - use JSON.stringify to ensure proper serialization
+        console.error('[UpdateBestTimesMenuItem] Error response:', JSON.stringify({
+          status: response.status,
+          statusText: response.statusText,
+          error: errorMessage,
+          hasError: !!data?.error,
+          hasMessage: !!data?.message,
+          hasGuidance: !!data?.guidance,
+          messageCount: data?.messageCount,
+          hasDataIntegrityIssue: data?.hasDataIntegrityIssue,
+          messagesViaConversations: data?.messagesViaConversations,
+          fullResponse: data,
+        }, null, 2));
+        
+        // If there's guidance, include it in the error message for better UX
+        if (data?.guidance) {
+          throw new Error(`${errorMessage}\n\n${data.guidance}`);
+        }
+        
+        throw new Error(errorMessage);
+      }
+
+      // Show appropriate success message based on whether times were borrowed or computed
+      if (data.isBorrowed) {
+        toast.success(data.message || 'Best contact times applied from similar contact', {
+          description: data.guidance,
+          duration: 6000,
+        });
+      } else {
+        toast.success('Best contact times updated successfully');
+      }
+      
+      // Invalidate contacts query to refresh data
+      queryClient.invalidateQueries({ queryKey: ['contacts'] });
+      
+      // Also refresh the page
+      router.refresh();
+    } catch (error) {
+      console.error('[UpdateBestTimesMenuItem] Full error:', error);
+      if (error instanceof Error) {
+        console.error('[UpdateBestTimesMenuItem] Error message:', error.message);
+        console.error('[UpdateBestTimesMenuItem] Error stack:', error.stack);
+        
+        // Split multi-line error messages for better toast display
+        const errorMessage = error.message;
+        const lines = errorMessage.split('\n\n');
+        const title = lines[0];
+        const description = lines.length > 1 ? lines.slice(1).join('\n') : undefined;
+        
+        toast.error(title, {
+          description,
+          duration: 8000,
+        });
+      } else {
+        toast.error('Failed to update best contact times');
+      }
+    } finally {
+      setIsUpdating(false);
+    }
+  };
+
+  return (
+    <DropdownMenuItem onClick={handleUpdate} disabled={isUpdating}>
+      <RefreshCw className={`mr-2 h-4 w-4 ${isUpdating ? 'animate-spin' : ''}`} />
+      {isUpdating ? 'Updating...' : 'Update Best Times'}
+    </DropdownMenuItem>
+  );
 }
 
 // Memoized contact row component to prevent unnecessary re-renders
@@ -213,6 +325,8 @@ const ContactRow = memo(function ContactRow({
               <Link href={`/contacts/${contact.id}`}>View details</Link>
             </DropdownMenuItem>
             <DropdownMenuSeparator />
+            <UpdateBestTimesMenuItem contactId={contact.id} />
+            <DropdownMenuSeparator />
             <DropdownMenuItem
               className="text-destructive"
               onClick={() => onDelete(contact.id)}
@@ -226,7 +340,7 @@ const ContactRow = memo(function ContactRow({
   );
 });
 
-export function ContactsTable({ contacts, tags, pipelines, isLoading }: ContactsTableProps) {
+export function ContactsTable({ contacts, tags, pipelines }: ContactsTableProps) {
   const router = useRouter();
   const searchParams = useSearchParams();
   const queryClient = useQueryClient();
@@ -238,6 +352,7 @@ export function ContactsTable({ contacts, tags, pipelines, isLoading }: Contacts
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [bulkActionLoading, setBulkActionLoading] = useState(false);
   const [loadingAllIds, setLoadingAllIds] = useState(false);
+  const [bulkMessageOpen, setBulkMessageOpen] = useState(false);
   
   // CRITICAL: Use ref to track current selection to avoid stale closures
   const selectedIdsRef = useRef<Set<string>>(new Set());
@@ -257,13 +372,17 @@ export function ContactsTable({ contacts, tags, pipelines, isLoading }: Contacts
     shallow: true,
   });
 
-  function handleSort(column: 'name' | 'score' | 'date') {
+  function handleSort(column: 'name' | 'score' | 'date' | 'priority') {
     startTransition(() => {
       if (sortBy === column) {
+        // Priority is always descending, don't toggle
+        if (column === 'priority') {
+          return;
+        }
         setSortOrder(sortOrder === 'asc' ? 'desc' : 'asc');
       } else {
         setSortBy(column);
-        setSortOrder('asc');
+        setSortOrder(column === 'priority' ? 'desc' : 'asc');
       }
     });
   }
@@ -463,6 +582,18 @@ export function ContactsTable({ contacts, tags, pipelines, isLoading }: Contacts
                 );
               }
             }
+        } else {
+          // For delete action, show detailed results if available
+          if (action === 'delete' && result.deleted !== undefined) {
+            const deleted = result.deleted || 0;
+            const failed = result.failed || 0;
+            if (deleted > 0 && failed === 0) {
+              toast.success(`Successfully deleted ${deleted} contact(s)`);
+            } else if (deleted > 0 && failed > 0) {
+              toast.warning(`Deleted ${deleted} contact(s), ${failed} failed`);
+            } else {
+              toast.error(`Failed to delete contacts`);
+            }
           } else {
             toast.success(
               `Successfully ${action === 'delete' ? 'deleted' : 'updated'} ${
@@ -470,11 +601,39 @@ export function ContactsTable({ contacts, tags, pipelines, isLoading }: Contacts
               } contact(s)`
             );
           }
-          setSelectedIds(new Set());
-          queryClient.invalidateQueries({ queryKey: ['contacts'] });
-        } else {
-          toast.error(result.error || 'Failed to perform action');
         }
+        setSelectedIds(new Set());
+        queryClient.invalidateQueries({ queryKey: ['contacts'] });
+      } else {
+        // Extract detailed error information
+        const errorMessage = result.error || 'Failed to perform action';
+        const errorDetails = result.details || '';
+        const found = result.found;
+        const requested = result.requested;
+        const missing = result.missing;
+        
+        console.error('[Bulk Action] API error:', {
+          status: response.status,
+          error: errorMessage,
+          details: errorDetails,
+          found,
+          requested,
+          missing,
+        });
+        
+        // Show detailed error message
+        if (action === 'delete' && found !== undefined && requested !== undefined) {
+          toast.error(
+            `${errorMessage}${errorDetails ? ` ${errorDetails}` : ''}`,
+            {
+              description: `Found ${found} of ${requested} contacts. ${missing || 0} contact(s) could not be found or are unauthorized.`,
+              duration: 5000,
+            }
+          );
+        } else {
+          toast.error(errorMessage + (errorDetails ? `: ${errorDetails}` : ''));
+        }
+      }
       } catch (error) {
         console.error('Bulk action error:', error);
         toast.error(error instanceof Error ? error.message : 'Failed to perform bulk action');
@@ -675,21 +834,76 @@ export function ContactsTable({ contacts, tags, pipelines, isLoading }: Contacts
             }
           }
         } else {
-          toast.success(
-            `Successfully ${action === 'delete' ? 'deleted' : 'updated'} ${
-              selectedIds.size
-            } contact(s)`
-          );
+          // For delete action, show detailed results if available
+          if (action === 'delete' && result.deleted !== undefined) {
+            const deleted = result.deleted || 0;
+            const failed = result.failed || 0;
+            if (deleted > 0 && failed === 0) {
+              toast.success(`Successfully deleted ${deleted} contact(s)`);
+            } else if (deleted > 0 && failed > 0) {
+              toast.warning(`Deleted ${deleted} contact(s), ${failed} failed`);
+            } else {
+              toast.error(`Failed to delete contacts`);
+            }
+          } else {
+            toast.success(
+              `Successfully ${action === 'delete' ? 'deleted' : 'updated'} ${
+                selectedIds.size
+              } contact(s)`
+            );
+          }
         }
         setSelectedIds(new Set());
         // Invalidate contacts queries to refetch data
         queryClient.invalidateQueries({ queryKey: ['contacts'] });
       } else {
-        toast.error(result.error || 'Failed to perform action');
+        // Extract detailed error information
+        const errorMessage = result.error || 'Failed to perform action';
+        const errorDetails = result.details || '';
+        const found = result.found;
+        const requested = result.requested;
+        const missing = result.missing;
+        
+        console.error('[Bulk Action] API error:', {
+          status: response.status,
+          error: errorMessage,
+          details: errorDetails,
+          found,
+          requested,
+          missing,
+        });
+        
+        // Show detailed error message
+        if (action === 'delete' && found !== undefined && requested !== undefined) {
+          toast.error(
+            `${errorMessage}${errorDetails ? ` ${errorDetails}` : ''}`,
+            {
+              description: `Found ${found} of ${requested} contacts. ${missing || 0} contact(s) could not be found or are unauthorized.`,
+              duration: 5000,
+            }
+          );
+        } else {
+          toast.error(errorMessage + (errorDetails ? `: ${errorDetails}` : ''));
+        }
       }
     } catch (error) {
-      console.error('Bulk action error:', error);
-      toast.error(error instanceof Error ? error.message : 'Failed to perform bulk action');
+      // Improved error logging with proper serialization
+      const errorDetails = error instanceof Error 
+        ? {
+            message: error.message,
+            name: error.name,
+            stack: error.stack,
+          }
+        : { error: String(error) };
+      
+      console.error('[Bulk Action] Error:', JSON.stringify(errorDetails, null, 2));
+      console.error('[Bulk Action] Raw error:', error);
+      
+      toast.error(
+        error instanceof Error 
+          ? error.message 
+          : 'Failed to perform bulk action. Please check the console for details.'
+      );
     } finally {
       setBulkActionLoading(false);
     }
@@ -702,15 +916,35 @@ export function ContactsTable({ contacts, tags, pipelines, isLoading }: Contacts
       const response = await fetch(`/api/contacts/${contactId}`, {
         method: 'DELETE',
       });
+      
       if (response.ok) {
         toast.success('Contact deleted');
         // Invalidate contacts queries to refetch data
         queryClient.invalidateQueries({ queryKey: ['contacts'] });
       } else {
-        toast.error('Failed to delete contact');
+        let errorMessage = 'Failed to delete contact';
+        try {
+          const data = await response.json();
+          errorMessage = data.error || errorMessage;
+        } catch {
+          // If JSON parsing fails, use default message
+        }
+        
+        console.error('[Delete Contact] API error:', {
+          status: response.status,
+          statusText: response.statusText,
+          error: errorMessage,
+          contactId,
+        });
+        
+        toast.error(errorMessage);
       }
     } catch (error) {
-      toast.error('Failed to delete contact');
+      console.error('[Delete Contact] Error:', {
+        error: error instanceof Error ? error.message : String(error),
+        contactId,
+      });
+      toast.error('Failed to delete contact. Please try again.');
     }
   }
 
@@ -1001,6 +1235,51 @@ export function ContactsTable({ contacts, tags, pipelines, isLoading }: Contacts
                 <Sparkles className="h-4 w-4 mr-2" />
                 Analyze
               </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={async () => {
+                  const contactIds = Array.from(selectedIds);
+                  if (contactIds.length === 0) {
+                    toast.error('Please select at least one contact');
+                    return;
+                  }
+                  
+                  setBulkActionLoading(true);
+                  try {
+                    // Update best times for all selected contacts
+                    const results = await Promise.allSettled(
+                      contactIds.map((contactId) =>
+                        fetch(`/api/contacts/${contactId}/update-best-times`, {
+                          method: 'POST',
+                        }).then((res) => res.json())
+                      )
+                    );
+                    
+                    const successful = results.filter((r) => r.status === 'fulfilled' && r.value.success).length;
+                    const failed = results.length - successful;
+                    
+                    if (successful > 0) {
+                      toast.success(
+                        `Updated best times for ${successful} contact(s)${failed > 0 ? ` (${failed} failed)` : ''}`
+                      );
+                      queryClient.invalidateQueries({ queryKey: ['contacts'] });
+                      router.refresh();
+                    } else {
+                      toast.error('Failed to update best times for selected contacts');
+                    }
+                  } catch (error) {
+                    console.error('[UpdateBestTimes] Bulk error:', error);
+                    toast.error('Failed to update best times');
+                  } finally {
+                    setBulkActionLoading(false);
+                  }
+                }}
+                disabled={bulkActionLoading}
+              >
+                <RefreshCw className="h-4 w-4 mr-2" />
+                Update Best Times
+              </Button>
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
                   <Button variant="outline" size="sm" disabled={bulkActionLoading}>
@@ -1059,6 +1338,22 @@ export function ContactsTable({ contacts, tags, pipelines, isLoading }: Contacts
               </DropdownMenu>
 
               <Button
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  if (selectedIds.size === 0) {
+                    toast.error('Please select at least one contact');
+                    return;
+                  }
+                  setBulkMessageOpen(true);
+                }}
+                disabled={bulkActionLoading}
+              >
+                <MessageSquare className="h-4 w-4 mr-2" />
+                Send Message
+              </Button>
+
+              <Button
                 variant="destructive"
                 size="sm"
                 onClick={() => setDeleteDialogOpen(true)}
@@ -1082,6 +1377,7 @@ export function ContactsTable({ contacts, tags, pipelines, isLoading }: Contacts
                   checked={allSelected}
                   onCheckedChange={handleSelectAll}
                   aria-label="Select all"
+                  // eslint-disable-next-line @typescript-eslint/no-explicit-any
                   ref={(el: any) => {
                     if (el) {
                       el.indeterminate = someSelected;
@@ -1170,6 +1466,16 @@ export function ContactsTable({ contacts, tags, pipelines, isLoading }: Contacts
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      <BulkMessageDialog
+        open={bulkMessageOpen}
+        onOpenChange={setBulkMessageOpen}
+        contactIds={Array.from(selectedIds)}
+        onSuccess={() => {
+          setSelectedIds(new Set());
+          queryClient.invalidateQueries({ queryKey: ['contacts'] });
+        }}
+      />
     </>
   );
 }

@@ -16,7 +16,8 @@ export async function GET(
     const { searchParams } = new URL(request.url);
     const search = searchParams.get('search');
     const page = parseInt(searchParams.get('page') || '1');
-    const limit = parseInt(searchParams.get('limit') || '50');
+    // Reduced default page size for better performance
+    const limit = parseInt(searchParams.get('limit') || '25');
 
     // Verify stage belongs to user's organization
     const stage = await prisma.pipelineStage.findFirst({
@@ -47,6 +48,7 @@ export async function GET(
     const sortOrder = searchParams.get('order') || 'desc';
 
     // Determine orderBy based on sort parameter
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     let orderBy: any;
     switch (sortBy) {
       case 'leadScore':

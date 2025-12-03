@@ -1,5 +1,6 @@
-import { prisma, connectPrisma } from '@/lib/db';
-import { Prisma, Platform, MessageStatus } from '@prisma/client';
+import { prisma as defaultPrisma, connectPrisma } from '@/lib/db';
+import { getPrismaForOrg } from '@/lib/db/get-prisma-for-org';
+import { Prisma, Platform, MessageStatus, PrismaClient } from '@prisma/client';
 import { FacebookClient, FacebookApiError } from './client';
 import { startBackgroundAnalysis } from './background-analysis';
 import { startPipelineAnalysis } from './pipeline-analyzer';
@@ -83,7 +84,8 @@ class ConcurrencyLimiter {
 /**
  * Check if a sync job has been cancelled
  */
-async function isJobCancelled(jobId: string): Promise<boolean> {
+async function isJobCancelled(jobId: string, prismaClient?: PrismaClient): Promise<boolean> {
+  const prisma = prismaClient || defaultPrisma;
   const job = await prisma.syncJob.findUnique({
     where: { id: jobId },
     select: { status: true },
@@ -94,12 +96,34 @@ async function isJobCancelled(jobId: string): Promise<boolean> {
 /**
  * Executes the actual instant sync operation
  */
-async function executeInstantSync(jobId: string, facebookPageId: string, userId: string): Promise<void> {
+async function executeInstantSync(
+  jobId: string, 
+  facebookPageId: string, 
+  userId: string,
+  prismaClient?: PrismaClient // Optional: Use routed prisma client for multi-DB support
+): Promise<void> {
   const startTime = Date.now();
   
   try {
     // CRITICAL: Ensure database connection is established (required for Vercel serverless)
     await connectPrisma();
+    
+    // If prismaClient is not provided, get it from the page's organizationId
+    let prisma = prismaClient;
+    if (!prisma) {
+      // First, get the page to find organizationId
+      const page = await defaultPrisma.facebookPage.findUnique({
+        where: { id: facebookPageId },
+        select: { organizationId: true },
+      });
+      
+      if (!page) {
+        throw new Error('Facebook page not found');
+      }
+      
+      // Use getPrismaForOrg for multi-DB routing support
+      prisma = getPrismaForOrg(page.organizationId);
+    }
     
     // CRITICAL: Update job status to IN_PROGRESS BEFORE checking if job is active
     // We must wait for this update to complete, otherwise the job status check will fail
@@ -527,8 +551,8 @@ async function executeInstantSync(jobId: string, facebookPageId: string, userId:
             const conversationId = participantId ? conversationIdMap.get(participantId) : undefined;
             
             if (conversationId && participantId) {
-              // Fetch messages in background without blocking
-              client.getRecentMessagesForConversation(conversationId, 200)
+              // Fetch ALL messages in background without blocking (paginated, up to 50 pages = 5000 messages)
+              client.getAllMessagesForConversation(conversationId, 50)
                 .then(async (messages) => {
                   if (messages && messages.length > 0) {
                     try {
@@ -713,8 +737,8 @@ async function executeInstantSync(jobId: string, facebookPageId: string, userId:
 
                 // Fetch and save messages for this contact (non-blocking, runs in background)
                 if (info.conversationId) {
-                  // Fetch messages in background without blocking contact storage
-                  client.getRecentMessagesForConversation(info.conversationId, 200)
+                  // Fetch ALL messages in background without blocking contact storage (paginated, up to 50 pages = 5000 messages)
+                  client.getAllMessagesForConversation(info.conversationId, 50)
                     .then(async (messages) => {
                       if (messages && messages.length > 0) {
                         try {
@@ -954,16 +978,22 @@ async function executeInstantSync(jobId: string, facebookPageId: string, userId:
             const batchPromise = batchProcessor.execute(async () => {
               const batchCount = await processContactBatch(batchToProcess, 'Messenger');
               
-              // OPTIMIZATION: Batch progress updates - only update every N batches to reduce overhead
-              // Progress updates are fire-and-forget and don't block processing
-              if (platformBatchPromises.length % 3 === 0) {
-                prisma.syncJob.update({
+              // Update progress after each batch for better UI feedback
+              // Progress updates are fire-and-forget but we await to ensure they complete
+              try {
+                // Calculate accurate progress: use batchCount (just processed) + running totals
+                // Note: messengerContactsStored might not be updated yet since batches run in parallel
+                // So we use batchCount as the increment
+                await prisma.syncJob.update({
                   where: { id: jobId },
                   data: {
-                    syncedContacts: messengerContactsStored + instagramContactsStored + batchCount,
-                    totalContacts: messengerContactsStored + instagramContactsStored + batchCount + remainingCount,
+                    syncedContacts: { increment: batchCount }, // Atomic increment for accuracy
+                    lastProgressAt: new Date(), // Update timestamp for UI polling
                   },
-                }).catch(() => {});
+                });
+              } catch (updateError) {
+                // Log but don't fail - progress update failures shouldn't stop sync
+                console.warn(`[Instant Sync ${jobId}] Failed to update progress (non-critical):`, updateError);
               }
               
               return batchCount;
@@ -979,13 +1009,20 @@ async function executeInstantSync(jobId: string, facebookPageId: string, userId:
             batchPromises.push(batchPromise);
             lastProgressUpdate = Date.now();
           } else if (conversationCount % PROGRESS_UPDATE_INTERVAL === 0 || Date.now() - lastProgressUpdate > 5000) {
-            prisma.syncJob.update({
-              where: { id: jobId },
-              data: {
-                syncedContacts: messengerContactsStored + instagramContactsStored,
-                totalContacts: messengerContactsStored + instagramContactsStored + participantMap.size,
-              },
-            }).catch(() => {});
+            // Update progress more frequently for better UI feedback
+            try {
+              await prisma.syncJob.update({
+                where: { id: jobId },
+                data: {
+                  syncedContacts: messengerContactsStored + instagramContactsStored,
+                  totalContacts: messengerContactsStored + instagramContactsStored + participantMap.size,
+                  lastProgressAt: new Date(), // Update timestamp for UI polling
+                },
+              });
+            } catch (updateError) {
+              // Log but don't fail - progress update failures shouldn't stop sync
+              console.warn(`[Instant Sync ${jobId}] Failed to update progress (non-critical):`, updateError);
+            }
             lastProgressUpdate = Date.now();
           }
         }
@@ -1098,16 +1135,22 @@ async function executeInstantSync(jobId: string, facebookPageId: string, userId:
             const batchPromise = batchProcessor.execute(async () => {
               const batchCount = await processContactBatch(batchToProcess, 'Instagram');
               
-              // OPTIMIZATION: Batch progress updates - only update every N batches to reduce overhead
-              // Progress updates are fire-and-forget and don't block processing
-              if (platformBatchPromises.length % 3 === 0) {
-                prisma.syncJob.update({
+              // Update progress after each batch for better UI feedback
+              // Progress updates are fire-and-forget but we await to ensure they complete
+              try {
+                // Calculate accurate progress: use batchCount (just processed) + running totals
+                // Note: messengerContactsStored might not be updated yet since batches run in parallel
+                // So we use batchCount as the increment
+                await prisma.syncJob.update({
                   where: { id: jobId },
                   data: {
-                    syncedContacts: messengerContactsStored + instagramContactsStored + batchCount,
-                    totalContacts: messengerContactsStored + instagramContactsStored + batchCount + remainingCount,
+                    syncedContacts: { increment: batchCount }, // Atomic increment for accuracy
+                    lastProgressAt: new Date(), // Update timestamp for UI polling
                   },
-                }).catch(() => {});
+                });
+              } catch (updateError) {
+                // Log but don't fail - progress update failures shouldn't stop sync
+                console.warn(`[Instant Sync ${jobId}] Failed to update progress (non-critical):`, updateError);
               }
               
               return batchCount;
@@ -1122,16 +1165,21 @@ async function executeInstantSync(jobId: string, facebookPageId: string, userId:
             platformBatchPromises.push(batchPromise);
             batchPromises.push(batchPromise);
             lastIgProgressUpdate = Date.now();
-          } else if (igConversationCount % IG_PROGRESS_UPDATE_INTERVAL === 0 || Date.now() - lastIgProgressUpdate > 10000) {
-            // OPTIMIZATION: Reduced progress update frequency (every 10s instead of 5s)
-            // Progress updates are non-blocking but still add overhead
-            prisma.syncJob.update({
-              where: { id: jobId },
-              data: {
-                syncedContacts: messengerContactsStored + instagramContactsStored,
-                totalContacts: messengerContactsStored + instagramContactsStored + igParticipantMap.size,
-              },
-            }).catch(() => {});
+          } else if (igConversationCount % IG_PROGRESS_UPDATE_INTERVAL === 0 || Date.now() - lastIgProgressUpdate > 5000) {
+            // Update progress more frequently for better UI feedback (every 5s instead of 10s)
+            try {
+              await prisma.syncJob.update({
+                where: { id: jobId },
+                data: {
+                  syncedContacts: messengerContactsStored + instagramContactsStored,
+                  totalContacts: messengerContactsStored + instagramContactsStored + igParticipantMap.size,
+                  lastProgressAt: new Date(), // Update timestamp for UI polling
+                },
+              });
+            } catch (updateError) {
+              // Log but don't fail - progress update failures shouldn't stop sync
+              console.warn(`[Instant Sync ${jobId}] Failed to update progress (non-critical):`, updateError);
+            }
             lastIgProgressUpdate = Date.now();
           }
         }
@@ -1293,7 +1341,7 @@ async function executeInstantSync(jobId: string, facebookPageId: string, userId:
     console.error(`[Instant Sync ${jobId}] ❌ Failed:`, error);
     // Mark job as failed in database
     try {
-      await prisma.syncJob.update({
+      await defaultPrisma.syncJob.update({
         where: { id: jobId },
         data: {
           status: 'FAILED',
@@ -1315,11 +1363,29 @@ async function executeInstantSync(jobId: string, facebookPageId: string, userId:
 
 export async function startInstantSync(
   facebookPageId: string,
-  userId: string
+  userId: string,
+  prismaClient?: PrismaClient // Optional: Use routed prisma client for multi-DB support
 ): Promise<InstantSyncResult> {
   try {
     // CRITICAL: Ensure database connection is established (required for Vercel serverless)
     await connectPrisma();
+    
+    // If prismaClient is not provided, get it from the page's organizationId
+    let prisma = prismaClient;
+    if (!prisma) {
+      // First, get the page to find organizationId
+      const page = await defaultPrisma.facebookPage.findUnique({
+        where: { id: facebookPageId },
+        select: { organizationId: true },
+      });
+      
+      if (!page) {
+        throw new Error('Facebook page not found');
+      }
+      
+      // Use getPrismaForOrg for multi-DB routing support
+      prisma = getPrismaForOrg(page.organizationId);
+    }
     
     // Use PostgreSQL advisory lock to prevent concurrent job creation for the same page
     // This ensures only one job can be created per page at a time, even with concurrent requests
@@ -1394,8 +1460,8 @@ export async function startInstantSync(
         await new Promise(resolve => setTimeout(resolve, 0)); // Yield to event loop
         console.log(`[Instant Sync ${syncJob.id}] ✅ Promise is executing, starting sync...`);
         
-        // Now call the actual sync function
-        await executeInstantSync(syncJob.id, facebookPageId, userId);
+        // Now call the actual sync function (pass the prisma client to ensure correct database routing)
+        await executeInstantSync(syncJob.id, facebookPageId, userId, prisma);
         console.log(`[Instant Sync ${syncJob.id}] ✅ Background execution completed`);
       } catch (error) {
         console.error(`[Instant Sync ${syncJob.id}] ❌ CRITICAL ERROR:`, error);

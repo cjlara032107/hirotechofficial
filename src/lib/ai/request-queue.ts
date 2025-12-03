@@ -25,12 +25,33 @@ export interface QueuedRequest<T> {
 export class RequestQueue {
   private queue: QueuedRequest<unknown>[] = [];
   private processing = false;
-  private maxConcurrent: number;
+  private _maxConcurrent: number;
   private currentConcurrent = 0;
   private processingInterval: NodeJS.Timeout | null = null;
 
   constructor(maxConcurrent: number = 5) {
-    this.maxConcurrent = maxConcurrent;
+    this._maxConcurrent = maxConcurrent;
+  }
+  
+  /**
+   * Get max concurrent (read-only access)
+   */
+  get maxConcurrent(): number {
+    return this._maxConcurrent;
+  }
+  
+  /**
+   * Update max concurrent (useful for dynamic scaling)
+   */
+  updateMaxConcurrent(newMax: number): void {
+    if (newMax > 0) {
+      this._maxConcurrent = newMax;
+      console.log(`[RequestQueue] Updated max concurrency to ${newMax}`);
+      // Trigger processing if we have capacity and queued items
+      if (this.queue.length > 0 && this.currentConcurrent < this._maxConcurrent) {
+        this.processQueue();
+      }
+    }
   }
 
   /**
@@ -240,8 +261,48 @@ export class RequestQueue {
   }
 }
 
+/**
+ * Initialize RequestQueue with dynamic concurrency based on available API keys
+ * This scales automatically as more keys are added
+ */
+function getInitialConcurrency(): number {
+  // Check if we should use dynamic concurrency
+  const useDynamic = process.env.AI_USE_DYNAMIC_CONCURRENCY === 'true';
+  
+  if (useDynamic) {
+    // Try to get dynamic concurrency synchronously (will be updated async if needed)
+    // For now, use environment variable with a good default
+    const envConcurrency = parseInt(
+      process.env.AI_REQUEST_QUEUE_MAX_CONCURRENT || '50',
+      10
+    );
+    return envConcurrency;
+  }
+  
+  // Fallback to environment variable or default
+  return parseInt(
+    process.env.AI_REQUEST_QUEUE_MAX_CONCURRENT || '5',
+    10
+  );
+}
+
 // Singleton instance
-export const requestQueue = new RequestQueue(
-  parseInt(process.env.AI_REQUEST_QUEUE_MAX_CONCURRENT || '5', 10)
-);
+export const requestQueue = new RequestQueue(getInitialConcurrency());
+
+// Update concurrency dynamically if enabled (runs in background)
+if (process.env.AI_USE_DYNAMIC_CONCURRENCY === 'true') {
+  // Update concurrency asynchronously based on available keys
+  import('./dynamic-concurrency')
+    .then(({ getDynamicConcurrencyLimits }) => getDynamicConcurrencyLimits())
+    .then((limits) => {
+      const dynamicConcurrency = limits.analysisConcurrency || 50;
+      if (dynamicConcurrency > requestQueue.maxConcurrent) {
+        requestQueue.updateMaxConcurrent(dynamicConcurrency);
+        console.log(`[RequestQueue] ✅ Updated to dynamic concurrency: ${dynamicConcurrency} (based on ${limits.keyCount} API keys)`);
+      }
+    })
+    .catch((error) => {
+      console.warn('[RequestQueue] ⚠️ Could not update to dynamic concurrency, using default:', error instanceof Error ? error.message : String(error));
+    });
+}
 

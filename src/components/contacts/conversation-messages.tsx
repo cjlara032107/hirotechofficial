@@ -63,18 +63,23 @@ export function ConversationMessages({
   const [hasMore, setHasMore] = useState(true)
   const [nextCursor, setNextCursor] = useState<string | null>(null)
   const [page, setPage] = useState(1)
+  const [chunkIndex, setChunkIndex] = useState(0)
+  const [isStreaming, setIsStreaming] = useState(false)
+  const [totalMessageCount, setTotalMessageCount] = useState<number | undefined>(undefined)
+  const [maxMessages, setMaxMessages] = useState<number | undefined>(undefined)
 
   const scrollAreaRef = useRef<HTMLDivElement>(null)
   const bottomRef = useRef<HTMLDivElement>(null)
   const observerRef = useRef<IntersectionObserver | null>(null)
   const topSentinelRef = useRef<HTMLDivElement>(null)
 
-  // Fetch initial messages
-  const fetchMessages = useCallback(async (cursor?: string) => {
+  // Fetch initial messages (chunked)
+  const fetchMessages = useCallback(async (cursor?: string, chunkIndex?: number) => {
     try {
       const params = new URLSearchParams({
         limit: '50',
         ...(cursor && { cursor }),
+        ...(chunkIndex !== undefined && { chunkIndex: String(chunkIndex) }),
         ...(platform && { platform })
       })
 
@@ -83,15 +88,31 @@ export function ConversationMessages({
 
       const data = await response.json()
       
+      // Track total message count and max messages limit for very large conversations
+      if (data.totalMessageCount !== undefined) {
+        setTotalMessageCount(data.totalMessageCount)
+      }
+      if (data.maxMessages !== undefined) {
+        setMaxMessages(data.maxMessages)
+      }
+      
       if (cursor) {
         // Append for infinite scroll
-        setMessages(prev => [...prev, ...data.messages])
+        setMessages(prev => {
+          const newMessages = [...prev, ...data.messages]
+          // Check if we've reached the max messages limit
+          const reachedMax = data.maxMessages && newMessages.length >= data.maxMessages
+          setHasMore(data.hasMore && !reachedMax)
+          return newMessages
+        })
       } else {
         // Initial load
         setMessages(data.messages)
+        // Check if we've reached the max messages limit
+        const reachedMax = data.maxMessages && data.messages.length >= data.maxMessages
+        setHasMore(data.hasMore && !reachedMax)
       }
 
-      setHasMore(data.hasMore)
       setNextCursor(data.nextCursor)
       setPage(data.page || 1)
     } catch (error) {
@@ -105,9 +126,78 @@ export function ConversationMessages({
     if (!hasMore || loadingMore || !nextCursor) return
 
     setLoadingMore(true)
-    await fetchMessages(nextCursor)
+    const nextChunkIndex = chunkIndex + 1
+    setChunkIndex(nextChunkIndex)
+    await fetchMessages(nextCursor, nextChunkIndex)
     setLoadingMore(false)
-  }, [hasMore, loadingMore, nextCursor, fetchMessages])
+  }, [hasMore, loadingMore, nextCursor, fetchMessages, chunkIndex])
+
+  // Stream messages using Server-Sent Events (optional)
+  const streamMessages = useCallback(async () => {
+    if (isStreaming) return
+
+    setIsStreaming(true)
+    setLoading(true)
+    setMessages([]) // Clear existing messages
+
+    try {
+      const params = new URLSearchParams({
+        ...(platform && { platform })
+      })
+
+      const response = await fetch(`/api/contacts/${contactId}/messages/stream?${params}`)
+      if (!response.ok) throw new Error('Failed to stream messages')
+
+      const reader = response.body?.getReader()
+      const decoder = new TextDecoder()
+
+      if (!reader) {
+        throw new Error('Stream not available')
+      }
+
+      let buffer = ''
+      let totalFetched = 0
+
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+
+        buffer += decoder.decode(value, { stream: true })
+        const lines = buffer.split('\n')
+        buffer = lines.pop() || ''
+
+        for (const line of lines) {
+          if (line.startsWith('data: ')) {
+            const data = JSON.parse(line.slice(6))
+
+            if (data.type === 'metadata') {
+              // Initial metadata received
+              setHasMore(data.total > 0)
+            } else if (data.type === 'chunk') {
+              // Append chunk of messages
+              setMessages(prev => [...prev, ...data.messages])
+              totalFetched += data.messages.length
+              setHasMore(data.hasMore)
+            } else if (data.type === 'complete') {
+              // Streaming complete
+              setHasMore(false)
+              toast.success(`Loaded ${totalFetched} messages`)
+            } else if (data.type === 'error') {
+              throw new Error(data.error || 'Streaming error')
+            }
+          }
+        }
+      }
+    } catch (error) {
+      console.error('Error streaming messages:', error)
+      toast.error('Failed to stream messages')
+      // Fallback to regular fetch
+      await fetchMessages()
+    } finally {
+      setIsStreaming(false)
+      setLoading(false)
+    }
+  }, [contactId, platform, isStreaming, fetchMessages])
 
   // Initial load
   useEffect(() => {
@@ -230,6 +320,24 @@ export function ConversationMessages({
         {/* Messages Area */}
         <ScrollArea ref={scrollAreaRef} className="flex-1 px-6">
           <div className="space-y-4 py-4">
+            {/* Notification for very large conversations (10,000+ messages) */}
+            {totalMessageCount !== undefined && maxMessages !== undefined && totalMessageCount > maxMessages && (
+              <div className="bg-amber-50 dark:bg-amber-950 border border-amber-200 dark:border-amber-800 rounded-lg p-3 mb-4">
+                <div className="flex items-start gap-2">
+                  <AlertCircle className="h-4 w-4 text-amber-600 dark:text-amber-400 mt-0.5 flex-shrink-0" />
+                  <div className="flex-1 text-sm">
+                    <p className="font-medium text-amber-900 dark:text-amber-100">
+                      Large conversation detected
+                    </p>
+                    <p className="text-amber-700 dark:text-amber-300 mt-1">
+                      Showing the most recent {maxMessages} of {totalMessageCount.toLocaleString()} messages. 
+                      Scroll up to load older messages.
+                    </p>
+                  </div>
+                </div>
+              </div>
+            )}
+
             {/* Load More Sentinel */}
             {hasMore && (
               <div ref={topSentinelRef} className="flex justify-center py-2">

@@ -143,7 +143,7 @@ async function createDeveloperAccount() {
 
     // Create user profile in database
     console.log('👤 Creating user profile in database...');
-    const user = await prisma.user.create({
+    await prisma.user.create({
       data: {
         id: userId,
         email,
@@ -183,6 +183,10 @@ async function createDeveloperAccount() {
 }
 
 createDeveloperAccount();
+
+
+
+
 
 
 

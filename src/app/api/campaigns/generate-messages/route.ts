@@ -89,7 +89,10 @@ export async function POST(request: NextRequest) {
       }
     }
     
-    const messageGenerationLimiter = new ConcurrencyLimiter(50); // Increased to 50 to utilize all 20 API keys
+    // Dynamic concurrency based on number of API keys
+    const { getCachedConcurrencyLimits } = await import('@/lib/ai/dynamic-concurrency');
+    const concurrencyLimits = await getCachedConcurrencyLimits();
+    const messageGenerationLimiter = new ConcurrencyLimiter(concurrencyLimits.messageGenerationConcurrency);
 
     // Process all contacts in parallel with concurrency limit
     await Promise.all(

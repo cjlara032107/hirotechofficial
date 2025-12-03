@@ -57,7 +57,7 @@ async function comprehensiveSystemCheck() {
       console.log('   ℹ️  Redis check requires runtime connection');
       console.log('   Note: Used for background job processing');
     }
-  } catch (error) {
+  } catch {
     console.log('⚠️  Redis check skipped');
   }
 
@@ -79,7 +79,7 @@ async function comprehensiveSystemCheck() {
       console.log('⚠️  Dev Server responding with errors');
       console.log(`   Status Code: ${response.status}`);
     }
-  } catch (error) {
+  } catch {
     console.log('❌ Dev Server Not Running');
     console.log('   Start with: npm run dev');
   }

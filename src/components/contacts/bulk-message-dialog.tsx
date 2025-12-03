@@ -40,7 +40,7 @@ export function BulkMessageDialog({
   const [sending, setSending] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB (reduced for Vercel)
+  const MAX_FILE_SIZE = 25 * 1024 * 1024; // 25MB
 
   async function handleFileSelect(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
@@ -48,7 +48,7 @@ export function BulkMessageDialog({
 
     // Validate file size
     if (file.size > MAX_FILE_SIZE) {
-      toast.error(`File size must be less than 10MB. Current size: ${(file.size / 1024 / 1024).toFixed(2)}MB`);
+      toast.error(`File size must be less than 25MB. Current size: ${(file.size / 1024 / 1024).toFixed(2)}MB`);
       return;
     }
 
@@ -75,13 +75,6 @@ export function BulkMessageDialog({
         body: formData,
       });
 
-      // Check if response is JSON
-      const contentType = response.headers.get('content-type');
-      if (!contentType?.includes('application/json')) {
-        const text = await response.text();
-        throw new Error(text || 'Server returned non-JSON response');
-      }
-
       const data = await response.json();
 
       if (!response.ok) {
@@ -91,16 +84,10 @@ export function BulkMessageDialog({
       setMediaUrl(data.mediaUrl);
       toast.success('File uploaded successfully');
     } catch (error: unknown) {
-      let errorMessage = 'Failed to upload file';
-      if (error instanceof Error) {
-        errorMessage = error.message;
-      } else if (typeof error === 'string') {
-        errorMessage = error;
-      }
+      const errorMessage = error instanceof Error ? error.message : 'Failed to upload file';
       toast.error(errorMessage);
       setSelectedFile(null);
       setMediaType(null);
-      setMediaUrl(null);
     } finally {
       setUploading(false);
     }

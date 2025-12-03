@@ -15,7 +15,8 @@ export async function GET(request: NextRequest) {
 
     const { searchParams } = new URL(request.url);
     const page = parseInt(searchParams.get('page') || '1');
-    const limit = parseInt(searchParams.get('limit') || '50');
+    // Reduced default page size for better performance
+    const limit = parseInt(searchParams.get('limit') || '25');
     const skip = (page - 1) * limit;
 
     // Get pending contacts for user's organization
@@ -157,4 +158,3 @@ export async function POST(request: NextRequest) {
     );
   }
 }
-

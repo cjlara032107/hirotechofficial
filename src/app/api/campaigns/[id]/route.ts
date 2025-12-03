@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { auth } from '@/auth';
 import { prisma } from '@/lib/db';
+import { getPrismaForOrg } from '@/lib/db/get-prisma-for-org';
 import { safePrismaOperation, handlePrismaError } from '@/lib/prisma-error-handler';
 
 export async function GET(
@@ -15,8 +16,38 @@ export async function GET(
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
+    const multiDbEnabled = process.env.ENABLE_MULTI_DB === 'true';
+    console.log('[Campaign API GET by ID] Start', {
+      campaignId: id,
+      orgId: session.user.organizationId,
+      multiDb: multiDbEnabled,
+      strategy: process.env.DB_ROUTING_STRATEGY || 'hash',
+    });
+
+    // Use multi-DB routing
+    const db = getPrismaForOrg(session.user.organizationId);
+
+    // Log routed database details
+    if (multiDbEnabled) {
+      try {
+        const { getDatabaseRouter } = await import('@/lib/db/multi-db-router');
+        const router = getDatabaseRouter();
+        const client = router.getClient(session.user.organizationId);
+        const dbConfig = router.getAllDatabaseConfigs().find(c => c.client === client);
+        console.log('[Campaign API GET by ID] Routed DB', {
+          campaignId: id,
+          organizationId: session.user.organizationId,
+          dbIndex: dbConfig?.index,
+          dbUrlHost: dbConfig ? new URL(dbConfig.url).hostname : 'unknown',
+          dbHealth: dbConfig?.health,
+        });
+      } catch (err) {
+        console.warn('[Campaign API GET by ID] Could not log DB routing details:', err);
+      }
+    }
+
     const campaign = await safePrismaOperation(
-      () => prisma.campaign.findUnique({
+      () => db.campaign.findUnique({
         where: { 
           id,
           organizationId: session.user.organizationId,
@@ -38,13 +69,20 @@ export async function GET(
     );
 
     if (!campaign) {
-      return NextResponse.json({ error: 'Campaign not found' }, { status: 404 });
+      console.error('[Campaign API GET by ID] Campaign not found', {
+        campaignId: id,
+        orgId: session.user.organizationId,
+        dbIndex: multiDbEnabled ? 'routed' : 'default',
+      });
+      return NextResponse.json({ 
+        error: 'Campaign not found in routed database. Check multi-DB connectivity and ensure data exists in correct database.' 
+      }, { status: 404 });
     }
 
     // Recalculate metrics from actual message counts for accuracy
     // This ensures metrics are always accurate even if webhooks haven't updated yet
     const messageCounts = await safePrismaOperation(
-      () => prisma.message.groupBy({
+      () => db.message.groupBy({
         by: ['status'],
         where: {
           campaignId: id,
@@ -85,7 +123,7 @@ export async function GET(
       campaign.readCount !== actualReadCount ||
       campaign.failedCount !== actualFailedCount
     ) {
-      prisma.campaign.update({
+      db.campaign.update({
         where: { id },
         data: {
           sentCount: actualSentCount,
@@ -126,9 +164,37 @@ export async function DELETE(
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
+    const multiDbEnabled = process.env.ENABLE_MULTI_DB === 'true';
+    console.log('[Campaign API DELETE] Start', {
+      campaignId: id,
+      orgId: session.user.organizationId,
+      multiDb: multiDbEnabled,
+    });
+
+    // Use multi-DB routing
+    const db = getPrismaForOrg(session.user.organizationId);
+
+    // Log routed database details
+    if (multiDbEnabled) {
+      try {
+        const { getDatabaseRouter } = await import('@/lib/db/multi-db-router');
+        const router = getDatabaseRouter();
+        const client = router.getClient(session.user.organizationId);
+        const dbConfig = router.getAllDatabaseConfigs().find(c => c.client === client);
+        console.log('[Campaign API DELETE] Routed DB', {
+          campaignId: id,
+          organizationId: session.user.organizationId,
+          dbIndex: dbConfig?.index,
+          dbUrlHost: dbConfig ? new URL(dbConfig.url).hostname : 'unknown',
+        });
+      } catch (err) {
+        console.warn('[Campaign API DELETE] Could not log DB routing details:', err);
+      }
+    }
+
     // Delete the campaign (messages will be cascade deleted)
     await safePrismaOperation(
-      () => prisma.campaign.delete({
+      () => db.campaign.delete({
         where: { 
           id,
           organizationId: session.user.organizationId,

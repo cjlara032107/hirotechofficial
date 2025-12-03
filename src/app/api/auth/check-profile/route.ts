@@ -1,10 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/db';
 import { createClient } from '@/lib/supabase/server';
+import { logger } from '@/lib/utils/logger';
 
 export async function POST(request: NextRequest) {
   try {
-    console.log('[Check Profile] Starting profile check...');
+    logger.debug('Starting profile check');
     
     const body = await request.json();
     const { userId } = body;
@@ -35,7 +36,7 @@ export async function POST(request: NextRequest) {
 
     // If profile doesn't exist, create it
     if (!profile) {
-      console.log('[Check Profile] Creating missing profile...');
+      logger.info('Creating missing profile', { userId });
       
       const name = user.user_metadata?.name || user.email?.split('@')[0] || 'User';
       const organizationName = user.user_metadata?.organization_name || `${name}'s Organization`;
@@ -78,9 +79,9 @@ export async function POST(request: NextRequest) {
         });
       });
 
-      console.log('[Check Profile] ✅ Profile created successfully');
+      logger.info('Profile created successfully', { userId });
     } else {
-      console.log('[Check Profile] ✅ Profile already exists');
+      logger.debug('Profile already exists', { userId });
     }
 
     return NextResponse.json({
@@ -94,7 +95,7 @@ export async function POST(request: NextRequest) {
       },
     });
   } catch (error) {
-    console.error('[Check Profile] Error:', error);
+    logger.error('Check profile error', error instanceof Error ? error : new Error(String(error)));
     return NextResponse.json(
       { 
         error: 'Failed to check profile',

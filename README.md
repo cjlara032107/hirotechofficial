@@ -37,29 +37,71 @@ A comprehensive bulk messaging platform for Facebook Messenger and Instagram bus
 
 Create a `.env.local` file with the following variables:
 
-```env
-# Database
-DATABASE_URL="postgresql://user:password@localhost:5432/messenger_bulk"
+#### Required Variables
 
-# Supabase
+```env
+# Database (REQUIRED)
+DATABASE_URL="postgresql://user:password@localhost:5432/messenger_bulk"
+DIRECT_URL="postgresql://user:password@localhost:5432/messenger_bulk"
+
+# Supabase (REQUIRED)
 NEXT_PUBLIC_SUPABASE_URL="https://your-project.supabase.co"
 NEXT_PUBLIC_SUPABASE_ANON_KEY="your-anon-key"
 
-# Facebook App
-FACEBOOK_APP_ID="your-facebook-app-id"
-FACEBOOK_APP_SECRET="your-facebook-app-secret"
-FACEBOOK_WEBHOOK_VERIFY_TOKEN="random-secure-token-123"
-
-# NextAuth
+# NextAuth (REQUIRED)
 NEXTAUTH_URL="http://localhost:3000"
 NEXTAUTH_SECRET="your-nextauth-secret-min-32-characters"
 
-# Redis (for BullMQ)
+# Facebook App (REQUIRED)
+FACEBOOK_APP_ID="your-facebook-app-id"
+FACEBOOK_APP_SECRET="your-facebook-app-secret"
+FACEBOOK_WEBHOOK_VERIFY_TOKEN="random-secure-token-123"
+NEXT_PUBLIC_APP_URL="http://localhost:3000"
+```
+
+#### Optional Variables
+
+```env
+# Redis (OPTIONAL - for background jobs and campaigns)
 REDIS_URL="redis://localhost:6379"
 
-# Socket.io
+# AI/ML Services (OPTIONAL)
+GOOGLE_AI_API_KEY="your-google-ai-api-key"
+# Can use multiple keys: GOOGLE_AI_API_KEY_2, GOOGLE_AI_API_KEY_3, etc. (up to 8)
+NVIDIA_API_KEY="your-nvidia-api-key"
+AI_PRIMARY_MODEL="openai/gpt-oss-120b"
+AI_FAST_MODEL="openai/gpt-oss-20b"
+
+# Encryption (OPTIONAL)
+ENCRYPTION_KEY="your-32-byte-hex-encryption-key"
+
+# Cron Jobs (OPTIONAL)
+CRON_SECRET="your-cron-secret-token"
+
+# Logging (OPTIONAL)
+LOG_LEVEL="info"  # debug, info, warn, error
+
+# Performance Tuning (OPTIONAL)
+MAX_CONCURRENT_API_CALLS="50"
+MAX_CONCURRENT_DB_QUERIES="30"
+MAX_CONCURRENT_DB_WRITES="20"
+MAX_CONCURRENT_AI_REQUESTS="50"
+MAX_CONCURRENT_FACEBOOK_API="30"
+MAX_CONCURRENT_FILE_IO="10"
+MAX_CONCURRENT_NETWORK="50"
+
+# Memory Management (OPTIONAL)
+MEMORY_WARNING_THRESHOLD="70"
+MEMORY_CRITICAL_THRESHOLD="85"
+MEMORY_MAX_HEAP_MB=""
+MEMORY_CHECK_INTERVAL="5000"
+GC_INTERVAL="100"
+
+# Socket.io (OPTIONAL)
 NEXT_PUBLIC_SOCKET_URL="http://localhost:3000"
 ```
+
+**Note**: For a complete list of all environment variables with descriptions, see the `.env.example` file (if available) or check the codebase for `process.env.*` references.
 
 ### Installation
 
@@ -246,10 +288,41 @@ git push origin main
 - [ ] Webhook URL configured and verified
 - [ ] BullMQ worker running
 - [ ] Domain SSL configured
-- [ ] Error monitoring set up (optional: Sentry)
+- [ ] Error monitoring set up (✅ Built-in monitoring available)
 - [ ] Backup strategy configured
 - [ ] Rate limiting tested
 - [ ] Load testing completed
+
+## Monitoring & Observability
+
+The platform includes comprehensive monitoring capabilities:
+
+- **Error Rate Monitoring**: Track errors by type, code, and time window
+- **Performance Metrics**: Database queries, memory, CPU, and network usage
+- **User Feedback**: Aggregate and analyze user feedback with sentiment analysis
+- **Resource Usage**: Monitor CPU, memory, network, and disk usage
+- **Production Issues**: Document and track production incidents
+
+See [Monitoring Guide](./docs/MONITORING_GUIDE.md) for detailed documentation.
+
+### Quick Start
+
+```bash
+# Get system metrics
+GET /api/monitoring/metrics
+
+# Get error rates
+GET /api/monitoring/error-rates?timeWindow=24h
+
+# Get user feedback
+GET /api/monitoring/user-feedback?timeWindow=30d
+
+# Get resource usage
+GET /api/monitoring/resource-usage
+
+# List production issues
+GET /api/monitoring/production-issues
+```
 
 ## Development
 
@@ -295,7 +368,9 @@ See: [HOW_TO_FIX_500_ERROR.md](./HOW_TO_FIX_500_ERROR.md)
 
 ### 📚 Comprehensive Guides
 
-- **[TROUBLESHOOTING.md](./TROUBLESHOOTING.md)** - Complete troubleshooting guide
+- **[TROUBLESHOOTING.md](./TROUBLESHOOTING.md)** - Complete troubleshooting guide with solutions for common issues
+- **[PERFORMANCE_EXPECTATIONS.md](./PERFORMANCE_EXPECTATIONS.md)** - Performance benchmarks and expected behavior
+- **[LIMITATIONS_AND_KNOWN_ISSUES.md](./LIMITATIONS_AND_KNOWN_ISSUES.md)** - Platform limitations and known issues
 - **[FIX_INTERNAL_SERVER_ERROR.md](./FIX_INTERNAL_SERVER_ERROR.md)** - Detailed fix instructions
 - **[DIAGNOSIS_SUMMARY.md](./DIAGNOSIS_SUMMARY.md)** - Root cause analysis
 

@@ -45,6 +45,8 @@ export async function POST(request: NextRequest) {
       useAiPersonalization,
       aiCustomInstructions,
       templateContent,
+      mediaUrl,
+      mediaType,
     } = body;
 
     // Determine campaign status based on scheduling
@@ -83,8 +85,26 @@ export async function POST(request: NextRequest) {
         ...(excludeTags && { excludeTags }),
         ...(useAiPersonalization !== undefined && { useAiPersonalization }),
         ...(aiCustomInstructions && { aiCustomInstructions }),
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       } as any,
     });
+
+    // Update campaign with media if provided (after creation to avoid migration issues)
+    if (mediaUrl || mediaType) {
+      try {
+        await prisma.campaign.update({
+          where: { id: campaign.id },
+          data: {
+            ...(mediaUrl && { mediaUrl }),
+            ...(mediaType && { mediaType }),
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          } as any,
+        });
+      } catch (updateError) {
+        // If update fails (e.g., columns don't exist yet), log but don't fail the request
+        console.warn('Failed to update campaign with media (columns may not exist yet):', updateError);
+      }
+    }
 
     // Return response immediately - don't wait for background jobs
     const response = NextResponse.json({
@@ -180,7 +200,10 @@ async function generateAIMessagesInBackground(
       }
     }
     
-    const messageGenerationLimiter = new ConcurrencyLimiter(50); // Increased to 50 to utilize all 20 API keys
+    // Dynamic concurrency based on number of API keys
+    const { getCachedConcurrencyLimits } = await import('@/lib/ai/dynamic-concurrency');
+    const concurrencyLimits = await getCachedConcurrencyLimits();
+    const messageGenerationLimiter = new ConcurrencyLimiter(concurrencyLimits.messageGenerationConcurrency);
 
     // Process all contacts in parallel with concurrency limit
     await Promise.all(
@@ -228,6 +251,7 @@ async function generateAIMessagesInBackground(
     // Update campaign with generated messages
     await prisma.campaign.update({
       where: { id: campaignId },
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       data: { aiMessagesMap: aiMessagesMap as any },
     });
 

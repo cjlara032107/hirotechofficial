@@ -4,15 +4,14 @@ import { useEffect } from 'react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 
-export default function Error({
-  error,
-  reset,
-}: {
+interface ErrorProps {
   error: Error & { digest?: string };
   reset: () => void;
-}) {
+}
+
+export default function Error({ error, reset }: ErrorProps) {
   useEffect(() => {
-    console.error(error);
+    console.error('Error component rendered:', error);
   }, [error]);
 
   return (
@@ -25,6 +24,11 @@ export default function Error({
           <p className="text-muted-foreground">
             An error occurred while processing your request.
           </p>
+          {process.env.NODE_ENV === 'development' && error.message && (
+            <p className="text-sm text-destructive font-mono">
+              {error.message}
+            </p>
+          )}
           <Button onClick={() => reset()} className="w-full">
             Try again
           </Button>

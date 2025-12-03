@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { auth } from '@/auth';
 import { prisma } from '@/lib/db';
+import { logger } from '@/lib/utils/logger';
 
 /**
  * GET /api/ai-assistant/chats
@@ -32,7 +33,7 @@ export async function GET(request: NextRequest) {
 
     return NextResponse.json(chats);
   } catch (error) {
-    console.error('Get chats error:', error);
+    logger.error('Get chats error', error instanceof Error ? error : new Error(String(error)));
     return NextResponse.json(
       { error: 'Failed to fetch chats' },
       { status: 500 }
@@ -64,13 +65,17 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json(chat);
   } catch (error) {
-    console.error('Create chat error:', error);
+    logger.error('Create chat error', error instanceof Error ? error : new Error(String(error)));
     return NextResponse.json(
       { error: 'Failed to create chat' },
       { status: 500 }
     );
   }
 }
+
+
+
+
 
 
 

@@ -106,17 +106,17 @@ export default function CampaignDetailPage() {
         // 1. AI personalization is enabled
         // 2. Campaign has target contacts
         // 3. aiMessagesMap is null or empty
-        const useAiPersonalization = (data as any).useAiPersonalization;
-        const aiMessagesMap = (data as any).aiMessagesMap;
-        const campaignData = data as any;
+        const useAiPersonalization = 'useAiPersonalization' in data ? (data as Campaign & { useAiPersonalization?: boolean }).useAiPersonalization : false;
+        const aiMessagesMap = 'aiMessagesMap' in data ? (data as Campaign & { aiMessagesMap?: Record<string, string> }).aiMessagesMap : null;
+        const campaignData = data as Campaign & { targetContactIds?: string[]; targetTags?: string[]; targetingType?: string };
         const hasTargetContacts = (campaignData.targetContactIds && campaignData.targetContactIds.length > 0) || 
                                   (campaignData.targetTags && campaignData.targetTags.length > 0) ||
                                   campaignData.targetingType === 'ALL_CONTACTS';
         
-        const generating = useAiPersonalization && 
+        const generating: boolean = !!(useAiPersonalization && 
                           hasTargetContacts && 
                           (!aiMessagesMap || Object.keys(aiMessagesMap || {}).length === 0) &&
-                          data.status === 'DRAFT'; // Only show for draft campaigns
+                          data.status === 'DRAFT'); // Only show for draft campaigns
         
         // Detect transition from generating to complete
         const wasGenerating = wasGeneratingRef.current;
@@ -157,13 +157,20 @@ export default function CampaignDetailPage() {
     const interval = setInterval(() => {
       const currentCampaign = campaignRef.current;
       const currentStatus = currentCampaign?.status;
-      const useAiPersonalization = (currentCampaign as any)?.useAiPersonalization;
-      const aiMessagesMap = (currentCampaign as any)?.aiMessagesMap;
-      const campaignData = currentCampaign as any;
+      const extendedCampaign = currentCampaign as Campaign & { 
+        useAiPersonalization?: boolean; 
+        aiMessagesMap?: Record<string, string>; 
+        targetContactIds?: string[]; 
+        targetTags?: string[]; 
+        targetingType?: string;
+        completedAt?: string;
+      };
+      const useAiPersonalization = extendedCampaign?.useAiPersonalization;
+      const aiMessagesMap = extendedCampaign?.aiMessagesMap;
       const hasTargetContacts = currentCampaign && (
-        (campaignData.targetContactIds && campaignData.targetContactIds.length > 0) || 
-        (campaignData.targetTags && campaignData.targetTags.length > 0) ||
-        campaignData.targetingType === 'ALL_CONTACTS'
+        (extendedCampaign.targetContactIds && extendedCampaign.targetContactIds.length > 0) || 
+        (extendedCampaign.targetTags && extendedCampaign.targetTags.length > 0) ||
+        extendedCampaign.targetingType === 'ALL_CONTACTS'
       );
       
       const isGenerating = useAiPersonalization && 
@@ -174,7 +181,7 @@ export default function CampaignDetailPage() {
       // Poll if sending, generating messages, or recently completed
       if (currentStatus === 'SENDING' || 
           isGenerating || 
-          (currentStatus === 'COMPLETED' && currentCampaign && !(currentCampaign as any).completedAt)) {
+          (currentStatus === 'COMPLETED' && currentCampaign && !extendedCampaign.completedAt)) {
         fetchCampaign();
       }
     }, 2000); // Poll every 2 seconds for real-time updates

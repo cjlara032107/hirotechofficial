@@ -8,6 +8,7 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { logger } from '@/lib/utils/logger';
 
 export default function LoginPage() {
   const router = useRouter();
@@ -22,8 +23,7 @@ export default function LoginPage() {
     setIsLoading(true);
 
     try {
-      console.log('[Login] === Starting Supabase Login ===');
-      console.log('[Login] Email:', email);
+      logger.debug('Starting Supabase login');
       
       const supabase = createClient();
       
@@ -32,14 +32,13 @@ export default function LoginPage() {
         password,
       });
 
-      console.log('[Login] Supabase response:', {
+      logger.debug('Supabase login response', {
         hasUser: !!data?.user,
         hasSession: !!data?.session,
-        error: signInError?.message,
       });
 
       if (signInError) {
-        console.error('[Login] ❌ Error:', signInError);
+        logger.error('Login error', signInError instanceof Error ? signInError : new Error(String(signInError)));
         
         // Provide user-friendly error messages
         if (signInError.message.includes('Invalid login credentials')) {
@@ -55,11 +54,11 @@ export default function LoginPage() {
       }
 
       if (data?.user) {
-        console.log('[Login] ✅ Success! User:', data.user.email);
+        logger.info('Login successful', { userId: data.user.id });
         
         // Ensure user profile exists in database
         try {
-          console.log('[Login] 🔍 Checking user profile in database...');
+          logger.debug('Checking user profile in database');
           const checkResponse = await fetch('/api/auth/check-profile', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -67,25 +66,25 @@ export default function LoginPage() {
           });
 
           if (!checkResponse.ok) {
-            console.warn('[Login] ⚠️ Profile check failed, but continuing...');
+            logger.warn('Profile check failed, but continuing');
           } else {
-            console.log('[Login] ✅ Profile verified');
+            logger.debug('Profile verified');
           }
         } catch (profileError) {
-          console.warn('[Login] ⚠️ Profile check error:', profileError);
+          logger.warn('Profile check error', { error: profileError });
           // Continue anyway - the auth-helpers will create the profile
         }
         
-        console.log('[Login] ✅ Redirecting to dashboard...');
+        logger.debug('Redirecting to dashboard');
         router.push('/dashboard');
         router.refresh();
       } else {
-        console.error('[Login] ❌ No user returned');
+        logger.error('No user returned from login');
         setError('Login failed. Please try again.');
         setIsLoading(false);
       }
     } catch (error) {
-      console.error('[Login] 💥 Exception:', error);
+      logger.error('Login exception', error instanceof Error ? error : new Error(String(error)));
       setError('An unexpected error occurred. Please try again or contact support.');
       setIsLoading(false);
     }

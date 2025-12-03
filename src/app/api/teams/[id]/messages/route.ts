@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { auth } from '@/auth'
 import { prisma } from '@/lib/db'
 import { logActivity } from '@/lib/teams/activity'
+import { sanitizeForStorage, sanitizeStringArray } from '@/lib/security/sanitize'
 
 // Note: Real-time updates are now handled automatically by Supabase Realtime
 // No need to manually emit events - database changes are automatically broadcast
@@ -28,7 +29,8 @@ export async function GET(
     const { searchParams } = new URL(request.url)
     const threadId = searchParams.get('threadId')
     const messageId = searchParams.get('messageId')
-    const limit = parseInt(searchParams.get('limit') || '50')
+    // Reduced default page size for better performance
+    const limit = parseInt(searchParams.get('limit') || '25')
     const offset = parseInt(searchParams.get('offset') || '0')
 
     // Check if user is a member
@@ -158,14 +160,22 @@ export async function POST(
       )
     }
 
+    // Sanitize user input to prevent XSS
+    const sanitizedContent = sanitizeForStorage(content)
+    const sanitizedMentions = mentions ? sanitizeStringArray(mentions) : []
+    
+    // Validate threadId and replyToId are valid UUIDs (if provided)
+    const validatedThreadId = threadId && typeof threadId === 'string' ? threadId.trim() : null
+    const validatedReplyToId = replyToId && typeof replyToId === 'string' ? replyToId.trim() : null
+
     const message = await prisma.teamMessage.create({
       data: {
         teamId: id,
         senderId: member.id,
-        content: content.trim(),
-        threadId: threadId || null,
-        replyToId: replyToId || null,
-        mentions: mentions || [],
+        content: sanitizedContent,
+        threadId: validatedThreadId,
+        replyToId: validatedReplyToId,
+        mentions: sanitizedMentions,
         attachments: attachments || null
       },
       include: {

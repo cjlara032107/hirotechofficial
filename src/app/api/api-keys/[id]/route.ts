@@ -42,7 +42,8 @@ export async function PATCH(
     }
 
     // Build update data
-    const updateData: any = {};
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const updateData: Record<string, any> = {};
     if (name !== undefined) updateData.name = name || null;
     if (status !== undefined) {
       updateData.status = status;
@@ -57,6 +58,12 @@ export async function PATCH(
       where: { id },
       data: updateData,
     });
+
+    // Invalidate concurrency cache if status changed (affects active key count)
+    if (status !== undefined) {
+      const { invalidateConcurrencyCache } = await import('@/lib/ai/dynamic-concurrency');
+      invalidateConcurrencyCache();
+    }
 
     // Return safe version
     return NextResponse.json({
@@ -115,6 +122,10 @@ export async function DELETE(
         status: ApiKeyStatus.DISABLED,
       },
     });
+
+    // Invalidate concurrency cache (key count changed)
+    const { invalidateConcurrencyCache } = await import('@/lib/ai/dynamic-concurrency');
+    invalidateConcurrencyCache();
 
     return NextResponse.json({
       id: apiKey.id,

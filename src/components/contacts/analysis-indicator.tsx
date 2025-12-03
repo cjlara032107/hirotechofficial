@@ -1,7 +1,7 @@
 'use client';
 
-import { useEffect, useState } from 'react';
-import { Sparkles, X, CheckCircle2, AlertCircle, Loader2 } from 'lucide-react';
+import { useEffect, useState, useRef } from 'react';
+import { Sparkles, X, CheckCircle2, AlertCircle, Loader2, RefreshCw } from 'lucide-react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
@@ -16,28 +16,35 @@ interface AnalysisJob {
   failedContacts: number;
   startedAt: Date | null;
   completedAt: Date | null;
+  errors?: Array<{ id?: string; error?: string; platform?: string; code?: number } | string>;
 }
 
-interface AnalysisIndicatorProps {
+export interface AnalysisIndicatorProps {
   jobId: string;
   onComplete?: () => void;
+  onError?: (error: Error) => void;
   onDismiss?: () => void;
 }
 
-export function AnalysisIndicator({ jobId, onComplete, onDismiss }: AnalysisIndicatorProps) {
+export function AnalysisIndicator({ jobId, onComplete, onError, onDismiss }: AnalysisIndicatorProps) {
   const [job, setJob] = useState<AnalysisJob | null>(null);
   const [isPolling, setIsPolling] = useState(true);
   const [dismissed, setDismissed] = useState(false);
+  const [isReanalyzing, setIsReanalyzing] = useState(false);
+  const shouldPollRef = useRef(true);
 
   useEffect(() => {
     if (!jobId || dismissed) return;
 
-    let pollInterval: NodeJS.Timeout | undefined;
+    shouldPollRef.current = true;
 
     const pollStatus = async () => {
+      // Check ref before polling
+      if (!shouldPollRef.current) return;
+
       try {
         const response = await fetch(`/api/contacts/analysis-status/${jobId}`);
-        if (!response.ok) {
+        if (!response || !response.ok) {
           throw new Error('Failed to fetch status');
         }
 
@@ -46,6 +53,7 @@ export function AnalysisIndicator({ jobId, onComplete, onDismiss }: AnalysisIndi
 
         // Check if job is complete
         if (data.status === 'COMPLETED' || data.status === 'FAILED' || data.status === 'CANCELLED') {
+          shouldPollRef.current = false;
           setIsPolling(false);
           
           if (data.status === 'COMPLETED') {
@@ -79,6 +87,9 @@ export function AnalysisIndicator({ jobId, onComplete, onDismiss }: AnalysisIndi
         }
       } catch (error) {
         console.error('Error polling analysis status:', error);
+        if (onError && error instanceof Error) {
+          onError(error);
+        }
       }
     };
 
@@ -86,15 +97,15 @@ export function AnalysisIndicator({ jobId, onComplete, onDismiss }: AnalysisIndi
     pollStatus();
 
     // Set up polling interval (every 2 seconds)
-    pollInterval = setInterval(() => {
-      if (isPolling && !document.hidden) {
+    const pollInterval = setInterval(() => {
+      if (shouldPollRef.current && !document.hidden) {
         pollStatus();
       }
     }, 2000);
 
     // Check page visibility and resume polling when visible
     const handleVisibilityChange = () => {
-      if (!document.hidden && isPolling) {
+      if (!document.hidden && shouldPollRef.current) {
         pollStatus();
       }
     };
@@ -103,16 +114,57 @@ export function AnalysisIndicator({ jobId, onComplete, onDismiss }: AnalysisIndi
 
     // Cleanup
     return () => {
+      shouldPollRef.current = false;
       if (pollInterval) clearInterval(pollInterval);
       document.removeEventListener('visibilitychange', handleVisibilityChange);
     };
-  }, [jobId, isPolling, dismissed, onComplete]);
+  }, [jobId, dismissed, onComplete, onError]);
 
   const handleDismiss = () => {
+    shouldPollRef.current = false;
     setDismissed(true);
     setIsPolling(false);
     if (onDismiss) {
       onDismiss();
+    }
+  };
+
+  const handleReanalyzeFailed = async () => {
+    if (!job || job.failedContacts === 0) return;
+
+    setIsReanalyzing(true);
+    try {
+      const response = await fetch(`/api/facebook/analyze-pipeline/reanalyze-failed/${jobId}`, {
+        method: 'POST',
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || 'Failed to reanalyze contacts');
+      }
+
+      toast.success(
+        `Reanalysis started! ${data.reanalyzed} contact(s) reanalyzed successfully${data.failed > 0 ? ` (${data.failed} still failed)` : ''}`,
+        { duration: 5000 }
+      );
+
+      // Refresh job status to show updated counts
+      if (shouldPollRef.current) {
+        const statusResponse = await fetch(`/api/contacts/analysis-status/${jobId}`);
+        if (statusResponse.ok) {
+          const updatedJob = await statusResponse.json();
+          setJob(updatedJob);
+        }
+      }
+    } catch (error) {
+      console.error('Error reanalyzing failed contacts:', error);
+      toast.error(
+        error instanceof Error ? error.message : 'Failed to reanalyze contacts',
+        { duration: 5000 }
+      );
+    } finally {
+      setIsReanalyzing(false);
     }
   };
 
@@ -126,6 +178,8 @@ export function AnalysisIndicator({ jobId, onComplete, onDismiss }: AnalysisIndi
 
   const isComplete = job.status === 'COMPLETED' || job.status === 'FAILED' || job.status === 'CANCELLED';
   const isInProgress = job.status === 'IN_PROGRESS' || job.status === 'PENDING';
+  const hasFailedContacts = job.failedContacts > 0;
+  const canReanalyze = isComplete && hasFailedContacts && (job.status === 'COMPLETED' || job.status === 'FAILED');
 
   return (
     <Card className={cn(
@@ -171,16 +225,63 @@ export function AnalysisIndicator({ jobId, onComplete, onDismiss }: AnalysisIndi
               )}
 
               {isComplete && job.status === 'COMPLETED' && (
-                <p className="text-xs text-muted-foreground">
-                  Successfully analyzed {job.analyzedContacts} contact(s)
-                  {job.failedContacts > 0 && ` • ${job.failedContacts} failed`}
-                </p>
+                <>
+                  <p className="text-xs text-muted-foreground mb-2">
+                    Successfully analyzed {job.analyzedContacts} contact(s)
+                    {hasFailedContacts && ` • ${job.failedContacts} failed`}
+                  </p>
+                  {canReanalyze && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="w-full mt-2"
+                      onClick={handleReanalyzeFailed}
+                      disabled={isReanalyzing}
+                    >
+                      {isReanalyzing ? (
+                        <>
+                          <Loader2 className="h-3 w-3 mr-2 animate-spin" />
+                          Reanalyzing...
+                        </>
+                      ) : (
+                        <>
+                          <RefreshCw className="h-3 w-3 mr-2" />
+                          Reanalyze Failed ({job.failedContacts})
+                        </>
+                      )}
+                    </Button>
+                  )}
+                </>
               )}
 
               {isComplete && job.status === 'FAILED' && (
-                <p className="text-xs text-muted-foreground">
-                  Analysis encountered an error. Please try again.
-                </p>
+                <>
+                  <p className="text-xs text-muted-foreground mb-2">
+                    Analysis encountered an error. Please try again.
+                    {hasFailedContacts && ` ${job.failedContacts} contact(s) failed.`}
+                  </p>
+                  {canReanalyze && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="w-full mt-2"
+                      onClick={handleReanalyzeFailed}
+                      disabled={isReanalyzing}
+                    >
+                      {isReanalyzing ? (
+                        <>
+                          <Loader2 className="h-3 w-3 mr-2 animate-spin" />
+                          Reanalyzing...
+                        </>
+                      ) : (
+                        <>
+                          <RefreshCw className="h-3 w-3 mr-2" />
+                          Reanalyze Failed ({job.failedContacts})
+                        </>
+                      )}
+                    </Button>
+                  )}
+                </>
               )}
             </div>
           </div>
@@ -198,4 +299,3 @@ export function AnalysisIndicator({ jobId, onComplete, onDismiss }: AnalysisIndi
     </Card>
   );
 }
-

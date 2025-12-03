@@ -92,7 +92,7 @@ async function checkSystemServices() {
     } else {
       console.log('   ⚠️  Dev server responded but not healthy');
     }
-  } catch (error) {
+  } catch {
     console.log('   ⚠️  Next.js Dev Server: NOT DETECTED');
     console.log('   💡 Start with: npm run dev');
   }

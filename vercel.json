@@ -21,6 +21,18 @@
     {
       "path": "/api/cron/recover-stuck-syncs",
       "schedule": "*/10 * * * *"
+    },
+    {
+      "path": "/api/cron/pipeline-updates",
+      "schedule": "*/5 * * * *"
+    },
+    {
+      "path": "/api/cron/monitoring",
+      "schedule": "*/5 * * * *"
+    },
+    {
+      "path": "/api/cron/auto-sync",
+      "schedule": "0 16 * * *"
     }
   ]
 }

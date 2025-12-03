@@ -11,7 +11,19 @@ export async function getAuthUser() {
   
   const {
     data: { user },
+    error: authError,
   } = await supabase.auth.getUser();
+
+  // Handle token expiration or invalid token errors
+  if (authError) {
+    console.error('[getAuthUser] Auth error:', authError.message);
+    // If token is expired or invalid, return null to trigger re-authentication
+    if (authError.message.includes('expired') || authError.message.includes('invalid')) {
+      return null;
+    }
+    // For other errors, also return null to be safe
+    return null;
+  }
 
   if (!user) {
     return null;
