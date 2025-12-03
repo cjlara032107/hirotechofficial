@@ -1,5 +1,6 @@
 import { prisma as defaultPrisma, connectPrisma } from '@/lib/db';
 import { getPrismaForOrg } from '@/lib/db/get-prisma-for-org';
+import { getDbIndexForOrg } from '@/lib/db/get-db-index';
 import { Prisma, Platform, MessageStatus, PrismaClient } from '@prisma/client';
 import { FacebookClient, FacebookApiError } from './client';
 import { startBackgroundAnalysis } from './background-analysis';
@@ -1416,13 +1417,19 @@ export async function startInstantSync(
         };
       }
 
+      // Determine dbIndex for multi-DB routing metadata
+      const dbIndex = getDbIndexForOrg(page.organizationId);
+      
       // Create a new sync job (within locked transaction to prevent duplicates)
       const syncJob = await tx.syncJob.create({
         data: {
           facebookPageId,
           status: 'PENDING',
+          dbIndex, // Store for fast routing
         },
       });
+      
+      console.log(`[Instant Sync] Created sync job ${syncJob.id} with dbIndex: ${dbIndex} (org: ${page.organizationId})`);
 
       return {
         existing: false,

@@ -1,4 +1,5 @@
 import { prisma, connectPrisma } from '@/lib/db';
+import { getDbIndexForOrg } from '@/lib/db/get-db-index';
 import { Prisma, Platform, MessageStatus } from '@prisma/client';
 import { FacebookClient, FacebookApiError } from './client';
 import { analyzeWithFallback } from '@/lib/ai/enhanced-analysis';
@@ -71,6 +72,16 @@ class ConcurrencyLimiter {
  */
 export async function startBackgroundSync(facebookPageId: string): Promise<BackgroundSyncResult> {
   try {
+    // Fetch page to get organizationId for dbIndex
+    const page = await prisma.facebookPage.findUnique({
+      where: { id: facebookPageId },
+      select: { organizationId: true },
+    });
+    
+    if (!page) {
+      throw new Error('Facebook page not found');
+    }
+    
     // Check if there's already an active sync job for this page
     const existingJob = await prisma.syncJob.findFirst({
       where: {
@@ -92,13 +103,19 @@ export async function startBackgroundSync(facebookPageId: string): Promise<Backg
       };
     }
 
+    // Determine dbIndex for multi-DB routing metadata
+    const dbIndex = getDbIndexForOrg(page.organizationId);
+    
     // Create a new sync job
     const syncJob = await prisma.syncJob.create({
       data: {
         facebookPageId,
         status: 'PENDING',
+        dbIndex, // Store for fast routing
       },
     });
+    
+    console.log(`[Background Sync] Created sync job ${syncJob.id} with dbIndex: ${dbIndex} (org: ${page.organizationId})`);
 
     // Start the sync process asynchronously (don't await)
     // For Vercel serverless, we need to ensure the promise chain starts before response
