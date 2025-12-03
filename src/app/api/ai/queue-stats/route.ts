@@ -93,9 +93,16 @@ export async function GET() {
     const response: QueueStatsResponse = {
       enabled: true,
       stats: {
-        ...stats,
+        currentQueueSize: stats.currentQueueSize,
+        processing: stats.currentProcessing || 0,
+        completed: stats.totalProcessed || 0,
+        failed: stats.totalFailed || 0,
         queueUtilization: Math.round(queueUtilization * 100),
         health,
+        // Additional stats
+        averageWaitTime: stats.averageWaitTime,
+        averageProcessTime: stats.averageProcessTime,
+        totalQueued: stats.totalQueued,
       },
       config: {
         maxConcurrent: parseInt(process.env.AI_ANALYSIS_QUEUE_CONCURRENCY || '10', 10),
