@@ -1882,8 +1882,6 @@ IMPORTANT:
     }
     
     // Check for 401/403 authentication/authorization errors
-    const errorStatus = (error as any)?.status || (error as any)?.response?.status || 
-                       (errorMessage?.match(/(\d{3})\s+status/i)?.[1]);
     const statusCode = errorStatus || 
                       (errorMessage?.includes('403') ? 403 : errorMessage?.includes('401') ? 401 : null);
     
