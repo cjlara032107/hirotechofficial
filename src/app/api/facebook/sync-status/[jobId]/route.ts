@@ -217,18 +217,16 @@ export async function GET(
       
       try {
         // Quick check in default DB for metadata only
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const jobMetadata = await defaultPrisma.syncJob.findUnique({
           where: { id: jobId },
           select: { 
-            // @ts-expect-error - dbIndex field added in schema but types not yet regenerated
             dbIndex: true, 
             facebookPage: { select: { organizationId: true } } 
-          },
-        });
+          } as any,
+        }) as { dbIndex: number | null; facebookPage: { organizationId: string } } | null;
         
-        // @ts-expect-error - dbIndex field added in schema but types not yet regenerated
         if (jobMetadata?.dbIndex !== null && jobMetadata?.dbIndex !== undefined && multiDbEnabled) {
-          // @ts-expect-error - dbIndex field added in schema but types not yet regenerated
           jobDbIndexFromMetadata = jobMetadata.dbIndex as number;
           
           console.log('[Sync Status API] ============================================');
