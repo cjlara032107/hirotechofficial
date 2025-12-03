@@ -109,7 +109,7 @@ export async function analyzeWithFallback(
 
     let retryCount = 0;
     let lastError: Error | null = null;
-    const errorLog: Array<{ attempt: number; error: string; stack?: string }> = [];
+    const errorLog: Array<{ attempt: number; error: string; stack?: string; duration?: number }> = [];
 
     // Log analysis start with detailed context
     const analysisStartTime = Date.now();
@@ -297,7 +297,8 @@ export async function analyzeWithFallback(
       }
       console.error(`[Enhanced Analysis ${analysisId}] - Full Error Log:`);
       errorLog.forEach((err, idx) => {
-        console.error(`[Enhanced Analysis ${analysisId}]   Attempt ${err.attempt}: ${err.error} (${err.duration}ms)`);
+        const durationStr = err.duration !== undefined ? ` (${err.duration}ms)` : '';
+        console.error(`[Enhanced Analysis ${analysisId}]   Attempt ${err.attempt}: ${err.error}${durationStr}`);
       });
     } else {
       console.error(`[Enhanced Analysis ${analysisId}] - No error captured - all attempts returned null`);

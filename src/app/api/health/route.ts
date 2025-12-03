@@ -95,12 +95,9 @@ export async function GET(request: NextRequest) {
     status: checks.status === 'healthy' ? 200 : 503,
   });
 
-    try {
-      logResponse(request, httpResponse, startTime);
-    } catch (logError) {
-      // Non-critical - continue even if logging fails
-      console.warn('[Health] Log response failed:', logError);
-    }
+    // Log response time for monitoring
+    const duration = Date.now() - startTime;
+    console.log(`[Health Check ${requestId}] Completed in ${duration}ms - Status: ${checks.status}`);
     
     return httpResponse;
   } catch (error) {
