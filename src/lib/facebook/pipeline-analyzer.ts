@@ -1,4 +1,5 @@
 import { prisma } from '@/lib/db';
+import { getDbIndexForOrg } from '@/lib/db/get-db-index';
 import { Prisma, LeadStatus } from '@prisma/client';
 import { FacebookClient, FacebookApiError } from './client';
 import { analyzeWithFallback } from '@/lib/ai/enhanced-analysis';
@@ -75,6 +76,16 @@ class ConcurrencyLimiter {
  */
 export async function startPipelineAnalysis(facebookPageId: string): Promise<PipelineAnalysisResult> {
   try {
+    // Fetch page to get organizationId for dbIndex
+    const page = await prisma.facebookPage.findUnique({
+      where: { id: facebookPageId },
+      select: { organizationId: true },
+    });
+    
+    if (!page) {
+      throw new Error('Facebook page not found');
+    }
+    
     // Check if there's already an active analysis job for this page
     const existingJob = await prisma.syncJob.findFirst({
       where: {
@@ -96,13 +107,19 @@ export async function startPipelineAnalysis(facebookPageId: string): Promise<Pip
       };
     }
 
+    // Determine dbIndex for multi-DB routing metadata
+    const dbIndex = getDbIndexForOrg(page.organizationId);
+    
     // Create a new sync job for analysis
     const syncJob = await prisma.syncJob.create({
       data: {
         facebookPageId,
         status: 'PENDING',
+        dbIndex, // Store for fast routing
       },
     });
+    
+    console.log(`[Pipeline Analyzer] Created sync job ${syncJob.id} with dbIndex: ${dbIndex} (org: ${page.organizationId})`);
 
     // Start the analysis process asynchronously (don't await)
     executePipelineAnalysis(syncJob.id, facebookPageId).catch((error) => {
