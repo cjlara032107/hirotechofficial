@@ -120,15 +120,6 @@ export async function POST(req: NextRequest) {
     if (metrics.peakMemoryMB) {
       console.log(`[API ${requestId}] - Peak Memory: ${metrics.peakMemoryMB.toFixed(2)}MB`);
     }
-    if (result.errors && result.errors.length > 0) {
-      console.log(`[API ${requestId}] - Errors Encountered: ${result.errors.length}`);
-      result.errors.slice(0, 3).forEach((err, idx) => {
-        console.error(`[API ${requestId}]   ${idx + 1}. ${err}`);
-      });
-      if (result.errors.length > 3) {
-        console.error(`[API ${requestId}]   ... and ${result.errors.length - 3} more errors`);
-      }
-    }
     console.log(`[API ${requestId}] ============================================`);
 
     return NextResponse.json({

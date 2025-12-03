@@ -1,5 +1,6 @@
 import { connectPrisma } from '@/lib/db';
 import { getPrismaForOrg } from '@/lib/db/get-prisma-for-org';
+import { getDbIndexForOrg } from '@/lib/db/get-db-index';
 import { Prisma, ApprovalStatus } from '@prisma/client';
 import { FacebookClient, FacebookApiError } from './client';
 import { calculateRiskScore, detectSuspiciousPatterns, requiresApproval } from '@/lib/risk-scoring';
