@@ -178,7 +178,6 @@ export async function GET(
     const { id: ruleId } = await params;
     logger.error('[Automation API] Get executions error', error instanceof Error ? error : new Error(String(error)), {
       ruleId,
-      userId: session?.user?.id,
       multiDbEnabled: process.env.ENABLE_MULTI_DB === 'true',
     });
     
